@@ -1,0 +1,54 @@
+name: build-plugin
+on: [push, workflow_dispatch]
+
+env:
+  # Check https://developer.x-plane.com/sdk/plugin-sdk-downloads/ for the current 4.2.x link and adjust if needed.
+  SDK_URL: https://developer.x-plane.com/wp-content/plugins/code-sample-generation/sdk_zip_files/XPSDK420.zip
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch X-Plane SDK
+        shell: bash
+        run: |
+          curl -fsSL "$SDK_URL" -o sdk.zip
+          unzip -q sdk.zip -d sdk
+          echo "SDK_DIR=$(find "$PWD/sdk" -type d -name CHeaders -exec dirname {} \; | head -1)" >> "$GITHUB_ENV"
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Windows deps
+        if: runner.os == 'Windows'
+        run: vcpkg install curl:x64-windows-static
+      - name: Configure (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build -DXPLANE_SDK="$SDK_DIR"
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cmake -S . -B build -DXPLANE_SDK="$SDK_DIR" -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WeatherFix-${{ runner.os }}
+          path: build/package/WeatherFix   # contains lin_x64 / mac_x64 / win_x64
+
+  bundle:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: parts }
+      - name: Merge platforms
+        run: |
+          mkdir -p out/WeatherFix
+          cp -r parts/*/* out/WeatherFix/
+          find out -type f
+      - uses: actions/upload-artifact@v4
+        with: { name: WeatherFix, path: out }
