@@ -364,22 +364,6 @@ int main() {
         auto w = wrapText("aaaa bbbb cccc dddd eeee ffff", 10);
         CHECK(w.size() == 3 && w[0] == "aaaa bbbb");
         CHECK(wrapText("", 10).size() == 1);
-        {   // map airport labels
-            Station st; st.icao = "KDEN"; st.rawMetar = "KDEN 301653Z 27015G25KT 3SM BR OVC008 10/09 A2992";
-            parseReport(st.rawMetar, st.report);
-            CHECK(flightCategory(st) == "IFR");
-            auto one = mapStationLines(st, false);
-            CHECK(one.size() == 1 && one[0] == "KDEN IFR 270" "15G25KT");
-            st.hasAtis = true; st.atisLetter = "B"; st.atisText = "DEN ARR INFO B 1653Z. WIND 27015G25. VISIBILITY 3. SKY CONDITION OVERCAST 800. LANDING RWY 16R AND 16L.";
-            CHECK(mapStationLines(st, false)[0].find("ATIS B") != std::string::npos);
-            auto det = mapStationLines(st, true, 40, 3);
-            CHECK(det.size() >= 4 && det[0].find("KDEN") == 0);
-            CHECK(det[1].find("KDEN 301653Z") != std::string::npos);
-            Station clr; clr.icao = "KXXX"; clr.rawMetar = "KXXX 301653Z 00000KT 10SM CLR 20/10 A3000"; parseReport(clr.rawMetar, clr.report);
-            CHECK(flightCategory(clr) == "VFR");
-            Station none; none.icao = "KNON";
-            CHECK(flightCategory(none) == "");
-        }
     }
 
     // --- NOAA winds / temps aloft (FD winds)

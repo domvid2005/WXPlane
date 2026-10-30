@@ -112,46 +112,4 @@ std::vector<std::string> wrapText(const std::string& s, size_t maxChars) {
     return out;
 }
 
-std::string flightCategory(const Station& st) {
-    const Report& r = st.report;
-    if (st.rawMetar.empty() && !r.hasVis && r.clouds.empty() && !r.cavok) return "";
-    double visSm = r.cavok || !r.hasVis ? 99.0 : r.visM / 1609.344;
-    double ceilFt = 1e9;
-    for (const auto& c : r.clouds)
-        if (c.cover >= CloudGroup::BKN) ceilFt = std::min(ceilFt, (double)c.baseFtAgl);
-    if (visSm < 1.0 || ceilFt < 500) return "LIFR";
-    if (visSm < 3.0 || ceilFt < 1000) return "IFR";
-    if (visSm <= 5.0 || ceilFt <= 3000) return "MVFR";
-    return "VFR";
-}
-
-std::vector<std::string> mapStationLines(const Station& st, bool detailed, size_t wrapChars, size_t maxAtisLines) {
-    std::vector<std::string> out;
-    std::string cat = flightCategory(st);
-    if (!detailed) {
-        std::string t = st.icao;
-        if (!cat.empty()) t += " " + cat;
-        const Report& r = st.report;
-        if (r.hasWind) {
-            char b[48];
-            char dir[8];
-            if (r.windVariable) std::snprintf(dir, sizeof dir, "VRB"); else std::snprintf(dir, sizeof dir, "%03d", r.windDir);
-            if (r.windKt < 1) std::snprintf(b, sizeof b, " calm");
-            else if (r.gustKt > 0) std::snprintf(b, sizeof b, " %s%.0fG%.0fKT", dir, r.windKt, r.gustKt);
-            else std::snprintf(b, sizeof b, " %s%.0fKT", dir, r.windKt);
-            t += b;
-        }
-        if (st.hasAtis) t += " ATIS " + (st.atisLetter.empty() ? std::string("?") : st.atisLetter);
-        out.push_back(t);
-        return out;
-    }
-    out.push_back(st.icao + (cat.empty() ? "" : "  " + cat) + (st.hasAtis ? "  ATIS " + (st.atisLetter.empty() ? std::string("?") : st.atisLetter) : ""));
-    for (auto& l : wrapText(st.rawMetar.empty() ? std::string("(no METAR text)") : st.rawMetar, wrapChars)) out.push_back(l);
-    if (st.hasAtis) {
-        auto a = wrapText("ATIS " + st.atisText, wrapChars);
-        for (size_t i = 0; i < a.size() && i < maxAtisLines; ++i) out.push_back(i + 1 == maxAtisLines && a.size() > maxAtisLines ? a[i] + " ..." : a[i]);
-    }
-    return out;
-}
-
 } // namespace wx

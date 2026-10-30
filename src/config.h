@@ -38,7 +38,6 @@ struct Config {
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoverageMax = 0.7;  // densest storm cloud (1.0 makes solid slabs; lower looks like separate towers)
     double stormTopJitterM = 1500;  // random-looking (but stable) top variation per block, breaks up flat tops
-    bool mapAirportWx = true;     // label airports on X-Plane's map with category/wind/ATIS letter, full METAR+ATIS when zoomed in
     bool radarMapTops = true;     // label storm tops (FLxxx) on X-Plane's map
     bool applyImmediately = false; // true forces X-Plane to rebuild clouds at once (a visible stall); false lets it fade in over 1-2 min
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better

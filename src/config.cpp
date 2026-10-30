@@ -60,7 +60,6 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
         else if (k == "storm_top_jitter_m") c.stormTopJitterM = d < 0 ? 0 : (d > 3000 ? 3000 : d);
-        else if (k == "map_airport_wx") c.mapAirportWx = toBool(v);
         else if (k == "radar_map_tops") c.radarMapTops = toBool(v);
         else if (k == "apply_immediately") c.applyImmediately = toBool(v);
         else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 1000 ? 1000 : d));
@@ -112,7 +111,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_top_jitter_m = " << c.stormTopJitterM << "\n"
-      << "map_airport_wx = " << (c.mapAirportWx ? 1 : 0) << "\n"
       << "radar_map_tops = " << (c.radarMapTops ? 1 : 0) << "\n"
       << "apply_immediately = " << (c.applyImmediately ? 1 : 0) << "\n"
       << "apply_per_tick = " << c.applyPerTick << "\n"

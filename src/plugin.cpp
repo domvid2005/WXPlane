@@ -65,6 +65,7 @@ bool g_checkPending = false;
 Clock::time_point g_checkAt{};
 int g_calIter = 0;
 int g_checkTries = 0;
+float g_prevReadVis = 0;
 bool g_manualRefresh = false;
 bool g_eraseRequested = false;
 bool g_firstApplyDone = false;
@@ -346,6 +347,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_lastRes = res;
     g_haveLast = true;
     ++g_viewVersion;
+    g_prevReadVis = 0;
     if (fromFetch) { g_calIter = 0; g_checkTries = 0; }
     g_checkPending = g_cfg.visAutocal && !res.stations.empty();
     g_checkAt = Clock::now() + std::chrono::seconds(res.immediate ? std::min(15, g_cfg.visCheckS) : g_cfg.visCheckS);
@@ -410,25 +412,21 @@ void visibilityCheck() {
              info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].coverage > 0 ? "coverage>0" : "none");
     if (!g_cfg.visAutocal || x.visM >= 20000.0f || info.visibility < 100.0f || g_calIter >= 2) return;
-    // X-Plane fades new weather in over 1-2 minutes (longer while it is busy loading), so right after an update the
-    // read-back still shows the OLD weather. Only calibrate once the clouds we set are actually there; otherwise the
-    // correction chases a number that is not going to change and drives our visibility far too low.
+    // X-Plane fades new weather in over minutes (longer while it is busy loading), so right after an update the read-back
+    // still shows the OLD weather. Calibrating against it drives our visibility far too low. Wait until the value has
+    // stopped moving (under 4% change between two checks a minute apart) before trusting it.
     {
-        int want = 0, found = 0;
-        for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
-            if (x.clouds[i].coverage <= 0) continue;
-            ++want;
-            for (int k = 0; k < XPLM_NUM_CLOUD_LAYERS; ++k)
-                if (info.cloud_layers[k].coverage > 0 && std::fabs(info.cloud_layers[k].alt_base - x.clouds[i].baseM) < 150.0f) { ++found; break; }
-        }
-        if (want > 0 && found < want) {
-            if (g_checkTries < 4) {
+        const float v = info.visibility;
+        const bool stable = g_prevReadVis > 0 && std::fabs(v - g_prevReadVis) <= 0.04f * v;
+        g_prevReadVis = v;
+        if (!stable) {
+            if (g_checkTries < 6) {
                 ++g_checkTries;
                 g_checkPending = true;
-                g_checkAt = Clock::now() + std::chrono::seconds(60);
-                logf("visibility check skipped: X-Plane is still fading our weather in (%d of %d cloud layers visible), trying again in 60 s", found, want);
+                g_checkAt = Clock::now() + std::chrono::seconds(std::min(60, std::max(1, g_cfg.visCheckS)));
+                logf("visibility check: X-Plane's value is still changing (%.0f m), checking again in 60 s", v);
             } else {
-                logf("visibility check skipped: our cloud layers never showed up in the read-back, leaving visibility as sent");
+                logf("visibility check: X-Plane's value never settled, leaving visibility as sent");
             }
             return;
         }
@@ -447,32 +445,7 @@ void visibilityCheck() {
 XPLMMapLayerID g_mapLayer = nullptr;
 bool g_mapHookRegistered = false;
 
-void mapAirportLabels(XPLMMapLayerID layer, const float* bounds, XPLMMapProjectionID proj) {
-    // X-Plane's own airport box cannot be extended or clicked by plugins, so the airports themselves are labelled instead:
-    // a compact line for every station in view, and the full METAR + ATIS for the station nearest the middle of the map
-    // once only a few airports are in view (zoom in on an airport to read it).
-    struct Item { const wx::Station* st; float x, y, d2; };
-    std::vector<Item> inView;
-    const float cx = (bounds[0] + bounds[2]) * 0.5f, cy = (bounds[1] + bounds[3]) * 0.5f;
-    for (const auto& st : g_lastRes.stations) {
-        float x = 0, y = 0;
-        XPLMMapProject(proj, st.lat, st.lon, &x, &y);
-        if (x < bounds[0] || x > bounds[2] || y > bounds[1] || y < bounds[3]) continue;
-        inView.push_back({&st, x, y, (x - cx) * (x - cx) + (y - cy) * (y - cy)});
-    }
-    if (inView.empty()) return;
-    std::sort(inView.begin(), inView.end(), [](const Item& a, const Item& b) { return a.d2 < b.d2; });
-    const float line = (bounds[1] - bounds[3]) * 0.024f;   // about one text line in map units
-    for (size_t i = 0; i < inView.size() && i < 60; ++i) {
-        const bool detailed = i == 0 && inView.size() <= 6;
-        auto lines = wx::mapStationLines(*inView[i].st, detailed);
-        for (size_t k = 0; k < lines.size(); ++k)
-            XPLMDrawMapLabel(layer, lines[k].c_str(), inView[i].x, inView[i].y - line * (1.0f + (float)k), xplm_MapOrientation_UI, 0.0f);
-    }
-}
-
 void mapLabels(XPLMMapLayerID layer, const float* bounds, float zoom, float, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
-    if (g_cfg.mapAirportWx && g_haveLast) mapAirportLabels(layer, bounds, proj);
     if (!g_cfg.radar || !g_cfg.radarMapTops || !g_haveLast || !g_lastRes.radar.ok) return;
     // bounds: left, top, right, bottom in map units. Stronger storms first; fewer labels when zoomed out.
     const float minDbz = zoom >= 2.0f ? 30.0f : 40.0f;
@@ -505,7 +478,7 @@ void createMapLayer(const char* mapId, void*) {
     p.iconCallback = nullptr;
     p.labelCallback = mapLabels;
     p.showUiToggle = 1;
-    p.layerName = "WXPlane weather";
+    p.layerName = "WXPlane storm tops";
     p.refcon = nullptr;
     g_mapLayer = XPLMCreateMapLayer(&p);
 }
