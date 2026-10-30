@@ -235,6 +235,9 @@ int main() {
         for (auto& c : rr.cells) { maxD = std::max(maxD, c.dbz); maxTop = std::max(maxTop, c.topM); if (c.dbz < 30) { ++weak; CHECK(!c.topKnown && c.topM > 3000); } CHECK(c.rateMmH > 0 && !c.key.empty()); }
         CHECK(nr(maxD, 50, 0.01) && nr(maxTop, 12000, 1) && weak >= 1);
         CHECK(rr.cells[0].dbz > 40);                                 // strong and close sorts first
+        for (auto& c : rr.cells) {
+            CHECK(std::fmod(c.dbz, 5.0f) == 0 && std::fmod(c.topM, 500.0f) == 0 && std::fmod(c.frac * 4.0f, 1.0f) == 0);
+        }
         // keys are tied to the block grid, not to the aircraft position
         RadarResult rr2 = buildRadarCells(refl, &tops, 38.1, -98.1, rc);
         std::string k1, k2; for (auto& c : rr.cells) if (c.dbz > 40) k1 += c.key + ";"; for (auto& c : rr2.cells) if (c.dbz > 40) k2 += c.key + ";";
@@ -246,6 +249,17 @@ int main() {
         rc.radarRangeNm = 100; rc.radarMinDbz = 40; RadarResult rr5 = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
         for (auto& c : rr5.cells) CHECK(c.dbz >= 40);
 
+        // hysteresis: an 18 dBZ patch is ignored when new, but kept if it was a storm cell before
+        {
+            GribField r2 = refl;
+            for (int j = 5; j < 15; ++j) for (int i = 5; i < 15; ++i) r2.v[(size_t)j * 100 + i] = 18.0f;
+            Config hc; hc.radarCellNm = 10; hc.radarRangeNm = 100; hc.radarMaxCells = 100; hc.radarMinDbz = 20;
+            RadarResult fresh = buildRadarCells(r2, nullptr, 38.0, -98.0, hc, nullptr);
+            std::set<std::string> prevKeys; for (auto& c : rr.cells) prevKeys.insert(c.key);
+            RadarResult kept = buildRadarCells(r2, nullptr, 38.0, -98.0, hc, &prevKeys);
+            CHECK(kept.cells.size() == fresh.cells.size() + 1);
+        }
+
         // storm applied on a clear station
         Station cs; cs.elevM = 400;
         parseReport("KCCC 301553Z 18010KT 10SM FEW040 BKN090 25/10 A3010", cs.report);
@@ -254,10 +268,27 @@ int main() {
         RadarCell cell; cell.lat = 38; cell.lon = -98; cell.dbz = 52; cell.frac = 1; cell.topKnown = true; cell.topM = 13000; cell.rateMmH = rateFromDbz(52);
         XpWx st = base;
         applyStorm(st, cell, sc, 400, 38);
-        CHECK(st.clouds[2].coverage > 0.95f && st.clouds[2].type == 3.0f && nr(st.clouds[2].topM, 13000, 1) && st.clouds[2].baseM < 1500);
-        CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= 13000 / 0.3048 - 1);
+        CHECK(st.clouds[2].coverage > 0.6f && st.clouds[2].coverage <= 0.85f && st.clouds[2].type == 3.0f && st.clouds[2].topM > 11000 && st.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1 && st.clouds[2].baseM < 1500);
+        CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= st.clouds[2].topM / 0.3048 - 1);
         CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
         CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
+        {   // no flat mesas: neighbouring blocks with identical radar get different (but repeatable) tops
+            std::set<int> tops;
+            for (int k = 0; k < 8; ++k) {
+                RadarCell cc = cell; cc.key = "R300:" + std::to_string(380 + k); cc.topM = 10000; cc.topKnown = true;
+                XpWx a = base, b = base;
+                applyStorm(a, cc, sc, 400, 38); applyStorm(b, cc, sc, 400, 38);
+                CHECK(a.clouds[2].topM == b.clouds[2].topM);
+                tops.insert((int)(a.clouds[2].topM / 100));
+            }
+            CHECK(tops.size() >= 5);
+            XpWx lo = base, hi = base; RadarCell e = cell; e.key = "R1:1"; e.topM = 12000; e.topKnown = true;
+            e.dbz = 28; e.frac = 0.25f; applyStorm(lo, e, sc, 400, 38);
+            e.dbz = 55; e.frac = 1.0f; applyStorm(hi, e, sc, 400, 38);
+            CHECK(lo.clouds[2].topM + 1500 < hi.clouds[2].topM && lo.clouds[2].coverage < hi.clouds[2].coverage);   // weak edge cells are lower and thinner
+            sc.stormCoverageMax = 1.0; XpWx full = base; applyStorm(full, e, sc, 400, 38);
+            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.85;
+        }
         XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
         applyStorm(w2, cell, sc, 400, 38);
         CHECK(w2.clouds[2].type < 1.5f && w2.clouds[2].coverage < 0.7f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
@@ -287,6 +318,8 @@ int main() {
         CHECK(dbzFromRainViewerPixel(22, 18, 95, 255) == 45 && dbzFromRainViewerPixel(198, 221, 250, 255) == 15 && dbzFromRainViewerPixel(0, 255, 0, 255) < -50);
         loadRainViewerPalette("/nonexistent");                         // unreadable file leaves the palette alone
         CHECK(dbzFromRainViewerPixel(22, 18, 95, 255) == 45);
+
+        CHECK(formatFl(11900, true) == "FL390" && formatFl(12000, false) == "~FL390" && formatFl(4700, true) == "FL150" && formatFl(0, true) == "FL000");
 
         // viewer text
         FetchResult fr; fr.fetchedAt = now; fr.radar = rr; fr.radar.source = "NOAA MRMS (CONUS)"; fr.radar.dataTime = now - 240;

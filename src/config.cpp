@@ -58,6 +58,12 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_rain_full_mmh") c.radarRainFullMmH = d < 5 ? 5 : d;
         else if (k == "radar_turbulence") c.radarTurbulence = d < 0 ? 0 : (d > 2 ? 2 : d);
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
+        else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.3 ? 0.3 : (d > 1 ? 1 : d);
+        else if (k == "storm_top_jitter_m") c.stormTopJitterM = d < 0 ? 0 : (d > 3000 ? 3000 : d);
+        else if (k == "radar_map_tops") c.radarMapTops = toBool(v);
+        else if (k == "apply_immediately") c.applyImmediately = toBool(v);
+        else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 100 ? 100 : d));
+        else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
     return true;
 }
@@ -96,7 +102,13 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_min_dbz = " << c.radarMinDbz << "\n"
       << "radar_rain_full_mmh = " << c.radarRainFullMmH << "\n"
       << "radar_turbulence = " << c.radarTurbulence << "\n"
-      << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n";
+      << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
+      << "storm_coverage_max = " << c.stormCoverageMax << "\n"
+      << "storm_top_jitter_m = " << c.stormTopJitterM << "\n"
+      << "radar_map_tops = " << (c.radarMapTops ? 1 : 0) << "\n"
+      << "apply_immediately = " << (c.applyImmediately ? 1 : 0) << "\n"
+      << "apply_per_tick = " << c.applyPerTick << "\n"
+      << "startup_delay_s = " << c.startupDelayS << "\n";
     return true;
 }
 

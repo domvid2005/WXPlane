@@ -12,6 +12,20 @@
 #include "sources.h"
 #include "windsaloft.h"
 
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#elif defined(__APPLE__)
+#  include <pthread.h>
+#else
+#  include <sys/resource.h>
+#endif
+
 namespace wx {
 
 void Fetcher::start() {
@@ -53,7 +67,19 @@ bool Fetcher::take(FetchResult& out) {
     return true;
 }
 
+// Downloads and radar decoding are not urgent; keep them from competing with the sim for CPU (matters most during loading).
+static void lowerThreadPriority() {
+#if defined(_WIN32)
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#else
+    setpriority(PRIO_PROCESS, 0, 10); // on Linux this is per thread
+#endif
+}
+
 void Fetcher::run() {
+    lowerThreadPriority();
     for (;;) {
         FetchRequest r;
         {
@@ -251,7 +277,9 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
         std::string topErr;
         bool haveTops = false;
         if (cfg.radarEchoTops) haveTops = loadMrms(mrmsUrl(region, "EchoTop_18"), win, tops, topErr);
-        out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg);
+        out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg, &radarPrev_);
+        radarPrev_.clear();
+        for (const auto& c : out.cells) radarPrev_.insert(c.key);
         out.source = "NOAA MRMS (" + name + ")";
         out.dataTime = refl.refTime;
         if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
@@ -308,7 +336,9 @@ RadarResult Fetcher::fetchRainViewer(const FetchRequest& rq, std::time_t now) {
     if (!tilesToField(tiles, win, f)) { out.note = "RainViewer tiles unusable: " + f.error; return out; }
     std::string src = out.source;
     std::time_t dt = out.dataTime;
-    out = buildRadarCells(f, nullptr, rq.lat, rq.lon, cfg);
+    out = buildRadarCells(f, nullptr, rq.lat, rq.lon, cfg, &radarPrev_);
+    radarPrev_.clear();
+    for (const auto& c : out.cells) radarPrev_.insert(c.key);
     out.source = src;
     out.dataTime = dt;
     out.note = "colour-decoded image tiles: intensities and tops are approximate";

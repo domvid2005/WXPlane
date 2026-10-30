@@ -2,6 +2,7 @@
 #pragma once
 #include <atomic>
 #include <map>
+#include <set>
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -65,6 +66,7 @@ private:
     std::vector<AloftStation> alCache_;
     std::map<std::string, std::pair<double, double>> coords_; // FD id -> lat/lon
     std::map<std::string, std::time_t> coordsMiss_;
+    std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
 };
 
 } // namespace wx

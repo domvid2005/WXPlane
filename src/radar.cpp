@@ -1,6 +1,7 @@
 #include "radar.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -34,6 +35,14 @@ float estimateTopM(float dbz, double lat) {
     return km * 1000.0f;
 }
 
+std::string formatFl(float topM, bool known) {
+    long fl = std::lround(topM / 0.3048 / 1000.0) * 10;
+    if (fl < 0) fl = 0;
+    char b[24];
+    std::snprintf(b, sizeof b, "%sFL%03ld", known ? "" : "~", fl);
+    return b;
+}
+
 std::vector<std::string> mrmsRegionsFor(double lat, double lon) {
     std::vector<std::string> r;
     if (lat >= 20.0 && lat <= 55.0 && lon >= -130.0 && lon <= -60.0) r.push_back("");          // CONUS
@@ -50,7 +59,8 @@ std::string mrmsUrl(const std::string& region, const std::string& product) {
     return u + product + "/MRMS_" + product + ".latest.grib2.gz";
 }
 
-RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg) {
+RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
+                            const std::set<std::string>* prev) {
     RadarResult res;
     res.attempted = true;
     if (!refl.valid()) { res.note = "no reflectivity grid"; return res; }
@@ -58,6 +68,12 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     struct Acc { float maxDbz = -999; int n = 0; float top = 0; double lat = 0, lon = 0, step = 0; };
     std::map<std::pair<long, long>, Acc> blocks;
     const float minDbz = (float)cfg.radarMinDbz;
+    std::set<std::pair<long, long>> prevBlocks;
+    if (prev)
+        for (const auto& k : *prev) {
+            long a, b;
+            if (std::sscanf(k.c_str(), "R%ld:%ld", &a, &b) == 2) prevBlocks.insert({a, b});
+        }
 
     for (int j = 0; j < refl.nj; ++j) {
         double la = refl.lat0 - j * refl.dLat;
@@ -65,10 +81,12 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         long bj = (long)std::floor((90.0 - la) / blockLat);
         for (int i = 0; i < refl.ni; ++i) {
             float v = refl.v[(size_t)j * (size_t)refl.ni + (size_t)i];
-            if (!(v >= minDbz)) continue;                 // also rejects NaN and MRMS "missing" codes (-99, -999)
+            if (!(v >= minDbz - 5.0f)) continue;          // also rejects NaN and MRMS "missing" codes (-99, -999)
             double lo = refl.lon0 + i * refl.dLon;
-            if (distNm(lat, lon, la, lo) > cfg.radarRangeNm) continue;
             long bi = (long)std::floor((lo + 180.0) / step);
+            const bool wasThere = !prevBlocks.empty() && prevBlocks.count({bj, bi}) > 0;
+            if (v < minDbz && !wasThere) continue;        // blocks already shown stay until they drop 5 dBZ lower
+            if (distNm(lat, lon, la, lo) > cfg.radarRangeNm * (wasThere ? 1.15 : 1.0)) continue;
             Acc& a = blocks[{bj, bi}];
             if (a.n == 0) { a.step = step; a.lat = 90.0 - (bj + 0.5) * blockLat; a.lon = (bi + 0.5) * step - 180.0; }
             ++a.n;
@@ -85,11 +103,12 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         const Acc& a = kv.second;
         RadarCell c;
         c.lat = a.lat; c.lon = a.lon;
-        c.dbz = a.maxDbz;
+        if (a.maxDbz < minDbz - 5.0f) continue;
+        c.dbz = std::max(5.0f, std::round(a.maxDbz / 5.0f) * 5.0f);
         double pxPerBlock = (blockLat / refl.dLat) * (a.step / refl.dLon);
-        c.frac = (float)clampf((float)(a.n / std::max(1.0, pxPerBlock)), 0.05f, 1.0f);
+        c.frac = std::max(0.25f, std::round(clampf((float)(a.n / std::max(1.0, pxPerBlock)), 0.0f, 1.0f) * 4.0f) / 4.0f);
         c.topKnown = a.top > 0;
-        c.topM = c.topKnown ? a.top * 1000.0f : estimateTopM(c.dbz, c.lat);
+        c.topM = c.topKnown ? std::round(a.top * 2.0f) * 500.0f : std::round(estimateTopM(c.dbz, c.lat) / 500.0f) * 500.0f;
         c.rateMmH = rateFromDbz(c.dbz);
         c.distNm = distNm(lat, lon, c.lat, c.lon);
         char key[48];
@@ -99,9 +118,9 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     }
     res.echoBlocks = (int)all.size();
     // Keep the most relevant: close and intense first.
-    std::sort(all.begin(), all.end(), [](const RadarCell& a, const RadarCell& b) {
-        return a.distNm - 2.0 * (a.dbz - 20.0) < b.distNm - 2.0 * (b.dbz - 20.0);
-    });
+    std::set<std::string> prevKeys = prev ? *prev : std::set<std::string>();
+    auto score = [&](const RadarCell& c) { return c.distNm - 2.0 * (c.dbz - 20.0) - (prevKeys.count(c.key) ? 25.0 : 0.0); };
+    std::sort(all.begin(), all.end(), [&](const RadarCell& a, const RadarCell& b) { return score(a) < score(b); });
     if ((int)all.size() > cfg.radarMaxCells) all.resize((size_t)cfg.radarMaxCells);
     res.cells = std::move(all);
     res.ok = true;
@@ -202,16 +221,28 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     x.visM = std::min(x.visM, cap);
 
     // Storm cloud in slot 2 (slot 0 may hold ground fog; slot 1 the station's own cloud).
-    float topM = c.topM > 0 ? c.topM : estimateTopM(dbz, lat);
+    // Real storms are not slabs: tops differ from tower to tower, weaker and edge cells are lower, and the cloud is
+    // not solid. Uniform tops and full coverage in neighbouring blocks merge into a flat-topped mesa.
     float limit = tropopauseKm(lat) * 1000.0f + 2500.0f;
-    topM = std::min(topM, limit);
     float baseM = (float)fieldElevM + (dbz >= 40 ? 900.0f : 600.0f);
     for (int i = 0; i < 3; ++i)    // do not float above the station's own lowest layer
         if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
+    float topM = c.topM > 0 ? c.topM : estimateTopM(dbz, lat);
+    float intensity = clampf((dbz - 20.0f) / 20.0f, 0.0f, 1.0f);              // 20 dBZ -> 0, 40 dBZ and up -> 1
+    float depth = std::max(0.0f, topM - baseM);
+    depth *= (0.45f + 0.55f * intensity) * (0.7f + 0.3f * c.frac);            // weaker and edge cells are shallower
+    topM = baseM + depth;
+    uint32_t h = 2166136261u;                                                  // FNV-1a of the block key: stable between updates
+    for (char ch : c.key) { h ^= (uint8_t)ch; h *= 16777619u; }
+    h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; h *= 3266489917u; h ^= h >> 16;   // avalanche: neighbouring keys differ a lot
+    float j = ((float)(h & 0xFFFFu) / 32767.5f) - 1.0f;                        // -1 .. 1
+    topM += j * (float)cfg.stormTopJitterM * (0.4f + 0.6f * intensity);
+    topM = std::min(topM, limit);
     if (topM < baseM + 1500.0f) topM = baseM + 1500.0f;
     XpCloud& cl = x.clouds[2];
-    cl.type = clampf(1.0f + (dbz - 20.0f) / 10.0f, 1.0f, 3.0f);
-    cl.coverage = clampf(0.45f + (dbz - 20.0f) / 50.0f, 0.45f, 1.0f) * (0.6f + 0.4f * c.frac);
+    cl.type = clampf(1.0f + (dbz - 20.0f) / 12.5f, 1.0f, 3.0f);               // cumulonimbus from about 45 dBZ
+    float t = clampf((dbz - 20.0f) / 35.0f, 0.0f, 1.0f);
+    cl.coverage = (0.35f + ((float)cfg.stormCoverageMax - 0.35f) * t) * (0.7f + 0.3f * c.frac);
     cl.baseM = baseM;
     cl.topM = topM;
     x.cloudCount = 0;

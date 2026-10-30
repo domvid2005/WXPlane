@@ -1,6 +1,7 @@
 // Turns radar reflectivity (and echo tops) into storm cells that are applied through X-Plane's weather API.
 #pragma once
 #include <ctime>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -39,13 +40,19 @@ float tropopauseKm(double lat);
 // Echo top estimate (metres MSL) when no echo-top product is available.
 float estimateTopM(float dbz, double lat);
 
+// Storm top as a flight level label, rounded to the nearest 1000 ft (FL390); "~" prefix when the top is only estimated.
+std::string formatFl(float topM, bool known);
+
 // Which MRMS product regions could cover this position, best first. Directory is "" for CONUS.
 std::vector<std::string> mrmsRegionsFor(double lat, double lon);
 std::string mrmsUrl(const std::string& region, const std::string& product);
 
 // Groups reflectivity pixels into blocks of about cfg.radarCellNm and keeps the most relevant cfg.radarMaxCells.
 // `tops` (km MSL, may be null) supplies echo tops. Values below zero (MRMS "missing" codes) mean no echo.
-RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg);
+// Values are quantized (5 dBZ, 500 m, quarter coverage) so that small radar wobbles do not change the records, and
+// `prev` (keys applied last time) gets hysteresis so storms do not flicker in and out at the thresholds.
+RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
+                            const std::set<std::string>* prev = nullptr);
 
 // RainViewer tiles are only coloured images. `dbzFromColor` is the (approximate) inverse of their scheme.
 float dbzFromRainViewerPixel(int r, int g, int b, int a);

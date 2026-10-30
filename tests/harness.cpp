@@ -12,6 +12,7 @@
 #include "stubs/XPLMMenus.h"
 #include "stubs/XPLMDisplay.h"
 #include "stubs/XPLMGraphics.h"
+#include "stubs/XPLMMap.h"
 #include "stubs/XPLMNavigation.h"
 #include "stubs/XPLMProcessing.h"
 #include "stubs/XPLMUtilities.h"
@@ -75,8 +76,10 @@ void XPLMGetNavAidInfo(XPLMNavRef, XPLMNavType*, float* la, float* lo, float*, i
 }
 static float g_lastSentVis = 0;
 int XPLMGetWeatherAtLocation(double, double, double, XPLMWeatherInfo_t* o) { o->visibility = g_lastSentVis * 2.5f; return 1; }
-void XPLMBeginWeatherUpdate(void) { ++g_begin; }
-void XPLMEndWeatherUpdate(int incr, int imm) { ++g_end; g_lastIncr = incr; g_lastImm = imm; }
+static size_t g_batchStart = 0, g_maxBatch = 0;
+static bool g_sawImmediate = false, g_sawFullWipe = false;
+void XPLMBeginWeatherUpdate(void) { ++g_begin; g_batchStart = g_calls.size(); }
+void XPLMEndWeatherUpdate(int incr, int imm) { ++g_end; g_lastIncr = incr; g_lastImm = imm; g_maxBatch = std::max(g_maxBatch, g_calls.size() - g_batchStart); if (imm && incr) g_sawImmediate = true; if (!incr) g_sawFullWipe = true; }
 static int g_erases = 0;
 void XPLMEraseWeatherAtLocation(double, double) { ++g_erases; }
 void XPLMEraseWeatherAtAirport(const char*) { ++g_erases; }
@@ -102,6 +105,20 @@ void XPLMDrawString(float*, int, int, char* s, int*, XPLMFontID) { g_drawn += s;
 float XPLMMeasureString(XPLMFontID, const char*, int n) { return 6.0f * n; }
 void XPLMGetFontDimensions(XPLMFontID, int* w, int* h, int* d) { if (w) *w = 6; if (h) *h = 10; if (d) *d = 0; }
 void XPLMDrawTranslucentDarkBox(int, int, int, int) {}
+
+// ---------------- mock map ----------------
+static XPLMMapLabelDrawingCallback_f g_mapLabelCb = nullptr;
+static bool g_mapDestroyed = false;
+static std::vector<std::string> g_mapLabels;
+static XPLMMapCreatedCallback_f g_mapHook = nullptr;
+static int g_loadingFlag = 1;
+int XPLMGetDatai(XPLMDataRef) { return g_loadingFlag; }
+XPLMMapLayerID XPLMCreateMapLayer(XPLMCreateMapLayer_t* p) { g_mapLabelCb = p->labelCallback; return (void*)77; }
+int XPLMDestroyMapLayer(XPLMMapLayerID) { g_mapDestroyed = true; return 1; }
+void XPLMRegisterMapCreationHook(XPLMMapCreatedCallback_f f, void*) { g_mapHook = f; }
+int XPLMMapExists(const char*) { return 1; }
+void XPLMDrawMapLabel(XPLMMapLayerID, const char* t, float, float, XPLMMapOrientation, float) { g_mapLabels.push_back(t); }
+void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* y) { *x = (float)lo; *y = (float)la; }
 
 // ---------------- mock libcurl ----------------
 struct Easy { long status = 200; std::string url; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
@@ -198,7 +215,7 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 }
 
 int main() {
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("vis_check_s = 1\nmax_age_hours = 12\nradar = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("vis_check_s = 1\nmax_age_hours = 12\nradar = 0\nstartup_delay_s = 0\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
@@ -207,9 +224,13 @@ int main() {
     char n[256], s[256], d[256];
     CHECK(XPluginStart(n, s, d) == 1);
     CHECK(XPluginEnable() == 1);
+    std::printf("[0] start-up: nothing is downloaded while X-Plane is still loading scenery\n");
+    for (int i = 0; i < 60; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    CHECK(g_netRequests == 0 && g_calls.empty());
+    g_loadingFlag = 0;                                  // scenery finished; 3 quiet seconds are required, so shorten by faking time below
     std::printf("[1] first load: aircraft at FL370 (%.2f, %.2f)\n", g_lat, g_lon);
-    CHECK(pump(4));
-    CHECK(g_begin == 1 && g_end == 1 && g_lastIncr == 0 && g_lastImm == 1);
+    CHECK(pump(4, 9000));
+    CHECK(g_lastIncr == 1 && g_lastImm == 0);                // gradual, no forced rebuild
     CHECK(g_calls.size() == 4);               // KOLD (29th, 33 h old) dropped
     // nearest first: KICT, then KEWK/KFAKE...
     const Call* kict = nullptr; const Call* fake = nullptr;
@@ -337,7 +358,9 @@ int main() {
         g_urls.clear();
         g_menuHandler(nullptr, (void*)(intptr_t)6 /*kRadar -> on, refresh*/);
         CHECK(pump(before + 1, 8000));
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        size_t firstBatch = g_calls.size() - before;
+        for (int i = 0; i < 60; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }   // frames that flush queued storms
+        CHECK(g_calls.size() - before > firstBatch);        // storms trickle in over several frames instead of one burst
         bool gotRefl = false, gotTop = false;
         for (auto& u : g_urls) {
             gotRefl = gotRefl || u.find("https://mrms.ncep.noaa.gov/2D/MergedReflectivityQCComposite/MRMS_MergedReflectivityQCComposite.latest.grib2.gz") != std::string::npos;
@@ -363,10 +386,10 @@ int main() {
         CHECK(storms >= 3 && storms <= 120);
         CHECK(heavy >= 1);
         CHECK(minVis <= 800 && minVis >= 400);
-        CHECK(maxTop > 10500 && maxTop < 12600);       // echo top ~12 km from the mock product
+        CHECK(maxTop > 9500 && maxTop < 13100);       // echo top ~12 km from the mock product
         CHECK(maxPrecip >= 0.99f);
         CHECK(maxTurb > 0.8f);
-        CHECK(radius > 8 && radius < 10);
+        CHECK(radius > 10 && radius < 11.5);
         // the viewer window lists the radar section
         g_menuHandler(nullptr, (void*)(intptr_t)5);
         g_drawn.clear();
@@ -398,9 +421,42 @@ int main() {
         CHECK(g_logAll.find("echo blocks") != std::string::npos);
     }
 
+    std::printf("[9] storm tops on the map\n");
+    {
+        CHECK(g_mapLabelCb != nullptr);
+        g_lat = 37.60; g_lon = -97.40;
+        g_logAll.clear();
+        g_menuHandler(nullptr, (void*)(intptr_t)7 /*global radar off again -> refresh from MRMS*/);
+        for (int i = 0; i < 300 && g_logAll.find("radar: NOAA MRMS") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        float bounds[4] = {-110.0f, 50.0f, -80.0f, 25.0f};
+        g_mapLabels.clear();
+        g_mapLabelCb((void*)77, bounds, 1.0f, 1.0f, 0, (void*)1, nullptr);
+        std::printf("  labels at zoom 1: %zu (first %s)\n", g_mapLabels.size(), g_mapLabels.empty() ? "-" : g_mapLabels[0].c_str());
+        { bool has390 = false; for (auto& l : g_mapLabels) has390 = has390 || l == "FL390"; CHECK(!g_mapLabels.empty() && has390); }
+        size_t zoomedOut = g_mapLabels.size();
+        g_mapLabels.clear();
+        g_mapLabelCb((void*)77, bounds, 3.0f, 1.0f, 0, (void*)1, nullptr);
+        CHECK(g_mapLabels.size() >= zoomedOut);                      // zooming in shows more storms
+        float away[4] = {10.0f, 60.0f, 30.0f, 40.0f};                 // map showing Europe: nothing to draw
+        g_mapLabels.clear();
+        g_mapLabelCb((void*)77, away, 3.0f, 1.0f, 0, (void*)1, nullptr);
+        CHECK(g_mapLabels.empty());
+    }
+
+    {   // the immediate option is a menu toggle (kImmediate = 8) and is honoured when on
+        g_menuHandler(nullptr, (void*)(intptr_t)8);
+        g_menuHandler(nullptr, (void*)(intptr_t)2);              // manual refresh -> immediate apply
+        for (int i = 0; i < 400 && !g_sawImmediate; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        CHECK(g_sawImmediate);
+        g_menuHandler(nullptr, (void*)(intptr_t)8);              // back off
+        g_sawImmediate = false;
+    }
+    std::printf("  largest batch handed to X-Plane in one update: %zu records\n", g_maxBatch);
+    CHECK(g_maxBatch <= 4);                                   // never a burst
+    CHECK(!g_sawImmediate);                                   // never forced an immediate rebuild
     XPluginDisable();
     XPluginStop();
-    CHECK(g_winDestroyed);
+    CHECK(g_winDestroyed && g_mapDestroyed);
     std::printf("%s (%d failures)\n", g_fail ? "HARNESS FAILED" : "HARNESS OK", g_fail);
     return g_fail ? 1 : 0;
 }

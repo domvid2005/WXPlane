@@ -30,12 +30,18 @@ struct Config {
     bool radar = true;            // turn radar echoes into storm cells
     bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
     double radarRangeNm = 150;    // storms within this distance of the aircraft
-    double radarCellNm = 10;      // block size one storm record represents
-    int radarMaxCells = 120;      // cap on storm records handed to X-Plane
+    double radarCellNm = 12;      // block size one storm record represents
+    int radarMaxCells = 60;       // cap on storm records handed to X-Plane
     double radarMinDbz = 20;      // ignore weaker echoes
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
+    double stormCoverageMax = 0.85; // densest storm cloud (1.0 makes solid slabs; lower looks like separate towers)
+    double stormTopJitterM = 1200;  // random-looking (but stable) top variation per block, breaks up flat tops
+    bool radarMapTops = true;     // label storm tops (FLxxx) on X-Plane's map
+    bool applyImmediately = false; // true forces X-Plane to rebuild clouds at once (a visible stall); false lets it fade in over 1-2 min
+    int applyPerTick = 4;         // weather records handed to X-Plane per 0.25 s
+    int startupDelayS = 20;       // wait this long after the plugin loads (and for scenery loading to finish) before the first download
 };
 
 bool loadConfig(const std::string& path, Config& cfg);
