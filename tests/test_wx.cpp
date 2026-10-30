@@ -14,6 +14,14 @@ static int g_fail = 0, g_pass = 0;
 
 using namespace wx;
 
+static void utc(std::time_t t, std::tm* out) {
+#ifdef _WIN32
+    gmtime_s(out, &t);
+#else
+    gmtime_r(&t, out);
+#endif
+}
+
 int main() {
     Report r;
 
@@ -71,11 +79,11 @@ int main() {
     {
         std::time_t now = std::time(nullptr);
         std::tm g;
-        gmtime_r(&now, &g);
+        utc(now, &g);
         char buf[96];
         std::tm past = g;
         std::time_t t30 = now - 30 * 60;
-        gmtime_r(&t30, &past);
+        utc(t30, &past);
         std::snprintf(buf, sizeof buf, "KJFK %02d%02d%02dZ 00000KT 10SM CLR 20/10 A3000", past.tm_mday, past.tm_hour, past.tm_min);
         parseReport(buf, r);
         NEAR(reportAgeSeconds(r, now), 1800, 61);

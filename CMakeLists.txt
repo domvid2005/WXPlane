@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")  # static CRT, matches vcpkg x64-windows-static
 project(WeatherFix LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -38,7 +40,6 @@ if(WIN32)
   set(WX_PLATFORM_DIR win_x64)
   target_compile_definitions(WeatherFix PRIVATE IBM=1 NOMINMAX=1 WIN32_LEAN_AND_MEAN=1)
   target_link_libraries(WeatherFix PRIVATE "${XPLANE_SDK}/Libraries/Win/XPLM_64.lib")
-  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 elseif(APPLE)
   set(WX_PLATFORM_DIR mac_x64)
   set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
