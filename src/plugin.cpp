@@ -1,9 +1,10 @@
-// Weather Fix - X-Plane 12 plugin entry point (XPLM SDK 4.2.0 / X-Plane 12.3+).
+// WXPlane - X-Plane 12 plugin entry point (XPLM SDK 4.2.0 / X-Plane 12.3+).
 //
 // Flow: flight loop (1 Hz, before flight model) -> asks the worker thread for NOAA METAR/ATIS data around the
 // aircraft every N minutes -> applies the result with XPLMBeginWeatherUpdate/XPLMSetWeatherAt*/XPLMEndWeatherUpdate.
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
@@ -31,19 +32,27 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kCruise };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxAtis = -1, g_idxCruise = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
-XPLMDataRef g_drLat = nullptr, g_drLon = nullptr;
+XPLMDataRef g_drLat = nullptr, g_drLon = nullptr, g_drLevels = nullptr;
+float g_levelsM[XPLM_NUM_TEMPERATURE_LAYERS];
+bool g_haveLevels = false;
 
 bool g_pluginEnabled = false;
+wx::FetchResult g_lastRes;      // last applied data, kept so a visibility correction can re-apply without a download
+bool g_haveLast = false;
+float g_visK = 1.0f;            // learned correction between what we send and what X-Plane ends up using
+bool g_checkPending = false;
+Clock::time_point g_checkAt{};
+int g_calIter = 0;
 bool g_manualRefresh = false;
 bool g_eraseRequested = false;
 bool g_firstApplyDone = false;
@@ -59,7 +68,7 @@ void logf(const char* fmt, ...) {
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    std::string line = std::string("[WeatherFix] ") + buf + "\n";
+    std::string line = std::string("[WXPlane] ") + buf + "\n";
     XPLMDebugString(line.c_str());
 }
 
@@ -67,7 +76,7 @@ std::string configPath() {
     char prefs[1024] = {0};
     XPLMGetPrefsPath(prefs);       // .../Output/preferences/X-Plane.prf
     XPLMExtractFileAndPath(prefs); // strips the file name, leaves the directory
-    return std::string(prefs) + XPLMGetDirectorySeparator() + "WeatherFix.cfg";
+    return std::string(prefs) + XPLMGetDirectorySeparator() + "WXPlane.cfg";
 }
 
 void setStatus(const std::string& l1, const std::string& l2) {
@@ -80,7 +89,7 @@ void syncMenu() {
     if (!g_menu) return;
     XPLMCheckMenuItem(g_menu, g_idxEnabled, g_cfg.enabled ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxAtis, g_cfg.useAtis ? xplm_Menu_Checked : xplm_Menu_Unchecked);
-    XPLMCheckMenuItem(g_menu, g_idxCruise, g_cfg.extendToCruise ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
 
 // Removes every record this plugin has set, handing control back to X-Plane's own weather.
@@ -116,16 +125,16 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
 
     for (int i = 0; i < XPLM_NUM_WIND_LAYERS; ++i) {
         info.wind_layers[i].alt_msl = 0.0f;
-        info.wind_layers[i].speed = XPLM_WIND_UNDEFINED_LAYER; // leave winds aloft to X-Plane
+        info.wind_layers[i].speed = XPLM_WIND_UNDEFINED_LAYER; // undefined layers fall back to X-Plane's own data
     }
-    if (x.hasWind) {
-        XPLMWeatherInfoWinds_t& w = info.wind_layers[0];
-        w.alt_msl = x.windAltMsl;
-        w.speed = x.windMs;
-        w.direction = x.windDir;
-        w.gust_speed = x.gustMs;
-        w.shear = x.shearDeg;
-        w.turbulence = x.turbulence;
+    for (size_t i = 0; i < x.winds.size() && i < (size_t)XPLM_NUM_WIND_LAYERS; ++i) {
+        XPLMWeatherInfoWinds_t& w = info.wind_layers[i];
+        w.alt_msl = x.winds[i].altMsl;
+        w.speed = x.winds[i].ms;
+        w.direction = x.winds[i].dir;
+        w.gust_speed = x.winds[i].gustMs;
+        w.shear = x.winds[i].shearDeg;
+        w.turbulence = x.winds[i].turbulence;
     }
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
         // A layer with coverage 0 is removed, which is what we want when the METAR reports clear skies.
@@ -143,28 +152,45 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
         info.temp_layers[i] = kUnset;
         info.dewp_layers[i] = kUnset;
     }
+    if (g_haveLevels && x.tempProfile.size() >= 2) {
+        // Temperatures aloft: sampled at X-Plane's own fixed temperature levels. The surface value is part of the
+        // profile, so the single surface offset is not used as well.
+        for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i)
+            info.temp_layers[i] = wx::profileTemp(x.tempProfile, g_levelsM[i]);
+        info.temperature_alt = kUnset;
+    }
     info.troposphere_alt = 0.0f;   // derive from existing data
     info.troposphere_temp = kUnset;
     info.age = x.ageS;
     info.radius_nm = (float)g_cfg.radiusNm;
-    info.max_altitude_msl_ft = (float)(g_cfg.extendToCruise ? g_cfg.cruiseCeilingFt : g_cfg.normalCeilingFt);
+    info.max_altitude_msl_ft = x.maxAltFt;
 }
 
-void applyResult(const wx::FetchResult& res) {
+void applyResult(const wx::FetchResult& res, bool fromFetch) {
     std::time_t now = std::time(nullptr);
-    int fogCount = 0;
+    int fogCount = 0, aloftCount = 0;
+    g_haveLevels = false;
+    if (g_drLevels && XPLMGetDatavf(g_drLevels, nullptr, 0, 0) == XPLM_NUM_TEMPERATURE_LAYERS)
+        g_haveLevels = XPLMGetDatavf(g_drLevels, g_levelsM, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
     XPLMBeginWeatherUpdate();
     for (const auto& s : res.stations) {
-        wx::XpWx x = wx::buildXp(s, g_cfg, now);
+        wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft);
+        if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
         fillInfo(info, x);
         if (x.fogLayerApplied) ++fogCount;
+        if (x.aloft) ++aloftCount;
         if (airportKnown(s)) XPLMSetWeatherAtAirport(s.icao.c_str(), &info);
         else XPLMSetWeatherAtLocation(s.lat, s.lon, s.elevM, &info);
     }
     // Non-incremental: our previous set is replaced wholesale, so stale stations never linger.
     XPLMEndWeatherUpdate(0, (res.immediate || !g_firstApplyDone) ? 1 : 0);
     g_firstApplyDone = true;
+    g_lastRes = res;
+    g_haveLast = true;
+    if (fromFetch) g_calIter = 0;
+    g_checkPending = g_cfg.visAutocal && !res.stations.empty();
+    g_checkAt = Clock::now() + std::chrono::seconds(res.immediate ? std::min(15, g_cfg.visCheckS) : g_cfg.visCheckS);
 
     char t[16];
     std::tm g;
@@ -178,20 +204,60 @@ void applyResult(const wx::FetchResult& res) {
     char l1[160], l2[160];
     std::string fogNote = fogCount ? ", fog at " + std::to_string(fogCount) : "";
     std::snprintf(l1, sizeof l1, "Updated %s: %d METAR, %d ATIS%s", t, res.metarCount, res.atisCount, fogNote.c_str());
+    std::string aloftNote = g_cfg.useAloft ? (aloftCount ? "Winds aloft: " + std::to_string(res.aloft.size()) + " NOAA stations"
+                                                          : "Winds aloft: " + (res.aloftNote.empty() ? std::string("none") : res.aloftNote))
+                                           : "Winds aloft: off";
     if (!res.stations.empty())
-        std::snprintf(l2, sizeof l2, "Nearest %s %.0f nm", res.stations[0].icao.c_str(), res.stations[0].distNm);
+        std::snprintf(l2, sizeof l2, "%s | nearest %s %.0f nm", aloftNote.c_str(), res.stations[0].icao.c_str(), res.stations[0].distNm);
     else
         std::snprintf(l2, sizeof l2, "No stations in range");
     g_lastGoodStatus = l1;
     setStatus(l1, l2);
-    logf("applied %d stations (%d ATIS, %d fog) around %.2f,%.2f%s", res.metarCount, res.atisCount, fogCount,
-         res.centerLat, res.centerLon, res.immediate ? " [immediate]" : "");
+    logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
+         res.metarCount, res.atisCount, fogCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
+         res.immediate ? " [immediate]" : "");
+    if (g_cfg.useAloft && !res.aloftNote.empty()) logf("%s", res.aloftNote.c_str());
     for (const auto& s : res.stations) {
         if (s.hasAtis) logf("  %s ATIS %s: %s", s.icao.c_str(), s.atisLetter.c_str(), s.atisText.substr(0, 110).c_str());
     }
 }
 
+// Asks X-Plane what visibility it is actually using next to the airport we are at, and compares it with the
+// METAR/ATIS. If the sim does not honour our value (blending with its own data), correct our input and re-apply.
+void visibilityCheck() {
+    if (!g_haveLast || g_lastRes.stations.empty()) return;
+    double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
+    const wx::Station* best = nullptr;
+    double bestD = 1e9;
+    for (const auto& s : g_lastRes.stations) {
+        double d = wx::distNm(lat, lon, s.lat, s.lon);
+        if (d < bestD) { bestD = d; best = &s; }
+    }
+    if (!best || bestD > 15.0) return; // only meaningful close to a station
+    wx::XpWx x = wx::buildXp(*best, g_cfg, std::time(nullptr), &g_lastRes.aloft);
+    XPLMWeatherInfo_t info;
+    std::memset(&info, 0, sizeof info);
+    info.structSize = sizeof info;
+    int detailed = XPLMGetWeatherAtLocation(best->lat, best->lon, best->elevM + 5.0, &info);
+    logf("visibility check %s (%.0f nm away): report says %.0f m, we sent %.0f m, X-Plane is using %.0f m (correction %.2f, detailed=%d)",
+         best->icao.c_str(), bestD, x.visM, std::max(50.0f, x.visM < 20000.0f ? x.visM * g_visK : x.visM), info.visibility, g_visK, detailed);
+    if (!g_cfg.visAutocal || x.visM >= 20000.0f || info.visibility < 100.0f || g_calIter >= 4) return;
+    double ratio = x.visM / info.visibility;
+    if (std::fabs(ratio - 1.0) <= 0.15) return;
+    g_visK = (float)std::min(1.5, std::max(0.15, g_visK * std::pow(ratio, 0.8)));
+    ++g_calIter;
+    logf("visibility off by %.0f%%: correction now %.2f, re-applying (pass %d/4)", (ratio - 1.0) * 100.0, g_visK, g_calIter);
+    wx::FetchResult copy = g_lastRes;
+    copy.immediate = true;
+    applyResult(copy, false);
+}
+
 float flightLoop(float, float, int, void*) {
+    if (g_checkPending && Clock::now() >= g_checkAt) {
+        g_checkPending = false;
+        visibilityCheck();
+    }
+
     // 1) results from the worker thread
     wx::FetchResult res;
     if (g_fetcher.take(res)) {
@@ -200,13 +266,14 @@ float flightLoop(float, float, int, void*) {
             setStatus("Update failed (will retry)", res.error.substr(0, 60));
         } else if (g_cfg.enabled) {
             if (!res.error.empty()) logf("%s", res.error.c_str());
-            applyResult(res);
+            applyResult(res, true);
         }
     }
 
     // 2) switched off from the menu -> hand weather back to X-Plane
     if (g_eraseRequested) {
         g_eraseRequested = false;
+        g_checkPending = false;
         eraseAll();
         g_haveCenter = false;
         setStatus("Disabled - X-Plane weather in control", "");
@@ -253,8 +320,8 @@ void menuHandler(void*, void* item) {
             g_cfg.useAtis = !g_cfg.useAtis;
             if (g_cfg.enabled) g_manualRefresh = true;
             break;
-        case kCruise:
-            g_cfg.extendToCruise = !g_cfg.extendToCruise;
+        case kAloft:
+            g_cfg.useAloft = !g_cfg.useAloft;
             if (g_cfg.enabled) g_manualRefresh = true;
             break;
     }
@@ -265,8 +332,8 @@ void menuHandler(void*, void* item) {
 } // namespace
 
 PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
-    std::strcpy(outName, "Weather Fix");
-    std::strcpy(outSig, "com.weatherfix.xp12.noaa");
+    std::strcpy(outName, "WXPlane");
+    std::strcpy(outSig, "com.wxplane.xp12.noaa");
     std::strcpy(outDesc, "Replaces flawed X-Plane 12 weather with NOAA METAR and ATIS data, refreshed every few minutes.");
 
     g_cfgPath = configPath();
@@ -275,14 +342,15 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
 
     g_drLat = XPLMFindDataRef("sim/flightmodel/position/latitude");
     g_drLon = XPLMFindDataRef("sim/flightmodel/position/longitude");
+    g_drLevels = XPLMFindDataRef("sim/weather/region/atmosphere_alt_levels_m");
 
-    int sub = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "Weather Fix", nullptr, 0);
-    g_menu = XPLMCreateMenu("Weather Fix", XPLMFindPluginsMenu(), sub, menuHandler, nullptr);
+    int sub = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "WXPlane", nullptr, 0);
+    g_menu = XPLMCreateMenu("WXPlane", XPLMFindPluginsMenu(), sub, menuHandler, nullptr);
     g_idxEnabled = XPLMAppendMenuItem(g_menu, "Enabled", (void*)(intptr_t)kEnabled, 0);
     g_idxRefresh = XPLMAppendMenuItem(g_menu, "Refresh Weather Data Now", (void*)(intptr_t)kRefresh, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxAtis = XPLMAppendMenuItem(g_menu, "Use ATIS", (void*)(intptr_t)kAtis, 0);
-    g_idxCruise = XPLMAppendMenuItem(g_menu, "Apply Temp/Pressure at Cruise Altitude", (void*)(intptr_t)kCruise, 0);
+    g_idxAloft = XPLMAppendMenuItem(g_menu, "Use NOAA Winds/Temps Aloft", (void*)(intptr_t)kAloft, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);

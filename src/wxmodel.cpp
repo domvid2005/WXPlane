@@ -37,7 +37,21 @@ void mergeAtis(Station& st, const Report& a, const std::string& text) {
     st.atisText = text;
 }
 
-XpWx buildXp(const Station& st, const Config& cfg, std::time_t now) {
+float profileTemp(const std::vector<std::pair<float, float>>& p, float altM) {
+    if (p.empty()) return 0;
+    if (altM <= p.front().first) return p.front().second;
+    if (altM >= p.back().first) return p.back().second;
+    for (size_t i = 1; i < p.size(); ++i) {
+        if (altM <= p[i].first) {
+            float span = p[i].first - p[i - 1].first;
+            float f = span > 0 ? (altM - p[i - 1].first) / span : 0;
+            return p[i - 1].second + f * (p[i].second - p[i - 1].second);
+        }
+    }
+    return p.back().second;
+}
+
+XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft) {
     const Report& r = st.report;
     XpWx x;
     x.ageS = (float)reportAgeSeconds(r, now);
@@ -63,10 +77,47 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now) {
         x.waveDir = r.windDir;
     }
 
+    if (x.hasWind) {
+        XpWind w;
+        w.altMsl = x.windAltMsl; w.dir = x.windDir; w.ms = x.windMs; w.gustMs = x.gustMs;
+        w.shearDeg = x.shearDeg; w.turbulence = x.turbulence;
+        x.winds.push_back(w);
+    }
+
+    // NOAA winds/temps aloft, blended from the nearest FD stations to this report's location.
+    if (cfg.useAloft && aloft && !aloft->empty()) {
+        std::vector<AloftSample> smp = sampleAloft(*aloft, st.lat, st.lon, cfg.aloftRangeNm, cfg.aloftStations);
+        const double floorM = st.elevM + 300.0; // skip levels at/under the terrain
+        if (x.hasTemp) x.tempProfile.emplace_back((float)st.elevM, (float)r.tempC);
+        for (const auto& a : smp) {
+            float altM = (float)(a.altFt * kFtToM);
+            if (altM <= floorM) continue;
+            if (a.hasWind && x.winds.size() < 13) {
+                XpWind w;
+                w.altMsl = altM; w.dir = (float)a.dirDeg; w.ms = (float)(a.speedKt * kKtToMs); w.gustMs = w.ms;
+                x.winds.push_back(w);
+            }
+            if (a.hasTemp) x.tempProfile.emplace_back(altM, (float)a.tempC);
+        }
+        // Hold the highest NOAA wind up to the ceiling so X-Plane's own winds never take over above the top FD level.
+        if (!x.winds.empty() && x.winds.size() > (x.hasWind ? 1u : 0u) && x.winds.size() < 13) {
+            float ceilM = (float)(cfg.cruiseCeilingFt * kFtToM);
+            if (x.winds.back().altMsl < ceilM - 100.0f) {
+                XpWind top = x.winds.back();
+                top.altMsl = ceilM;
+                x.winds.push_back(top);
+            }
+        }
+        x.aloft = x.winds.size() > (x.hasWind ? 1u : 0u) || x.tempProfile.size() > 1;
+        if (x.tempProfile.size() < 2) x.tempProfile.clear();
+    }
+    x.maxAltFt = (float)(x.aloft ? cfg.cruiseCeilingFt : cfg.normalCeilingFt);
+
     // Visibility
+    // Below 10 SM / 9999 the reported value is used exactly (e.g. 4SM = 6437 m). "10 SM or more" (10SM, 9999, CAVOK)
+    // maps to clear_vis_m because those reports are a floor, not a measurement.
     double vis = r.hasVis ? r.visM : cfg.clearVisM;
-    if (r.hasVis && !r.cavok && vis >= 9999.0) vis = cfg.clearVisM; // "9999" / "10SM+" mean "10 km or more"
-    if (r.cavok) vis = cfg.clearVisM;
+    if (r.cavok || (r.hasVis && vis >= 9999.0)) vis = cfg.clearVisM;
     if (vis < 50) vis = 50;
     x.visM = (float)vis;
     x.precip = (float)r.precip;

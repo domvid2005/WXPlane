@@ -6,6 +6,7 @@
 #include "../src/json_mini.h"
 #include "../src/metar.h"
 #include "../src/sources.h"
+#include "../src/windsaloft.h"
 #include "../src/wxmodel.h"
 
 static int g_fail = 0, g_pass = 0;
@@ -122,7 +123,8 @@ int main() {
     NEAR(x.qnhPa, 3001 / 100.0 * 33.8639 * 100, 30);
     CHECK(x.hasWind && x.windMs == 0);
     XpWx clr = buildXp(st[1], cfg, now);
-    CHECK(clr.cloudCount == 0 && !clr.fogLayerApplied && clr.visM == cfg.clearVisM);
+    CHECK(clr.cloudCount == 0 && !clr.fogLayerApplied);
+    NEAR(clr.visM, cfg.clearVisM, 1); // 10 SM or more -> clear_vis_m (40 km), as before
     NEAR(clr.windMs, 10 * kKtToMs, 0.01);
 
     Station dfw;
@@ -139,6 +141,87 @@ int main() {
     CHECK(s.hasAtis && s.atisLetter == "C" && s.report.windDir == 300 && s.report.gustKt == 20);
     NEAR(s.report.altimHpa, 29.95 * 33.8639, 0.1);
     CHECK(s.report.haze);
+
+
+    // --- visibility: exact below 10 SM, clear_vis_m for "10 SM or more"
+    {
+        Station v; v.elevM = 0;
+        parseReport("KXXX 301500Z 00000KT 10SM CLR 20/10 A3000", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 40000, 1);
+        parseReport("EGLL 301500Z 00000KT 9999 CLR 20/10 Q1013", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 40000, 1);
+        parseReport("LFPG 301500Z 00000KT CAVOK 20/10 Q1013", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 40000, 1);
+        parseReport("KXXX 301500Z 00000KT 6SM HZ CLR 20/10 A3000", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 6 * kSmToM, 1);
+        parseReport("KDEN 301553Z 18008KT 4SM BR FEW008 BKN250 08/07 A3015", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 4 * kSmToM, 1);   // the KDEN case: 4 SM stays 6437 m
+        Report ar; parseReport("KDEN ATIS INFO B 1553Z 18008KT 4SM BR FEW008 BKN250 08/07 A3015 (THREE ZERO ONE FIVE). ILS RWY 16R.", ar, true);
+        CHECK(ar.hasVis && ar.mist);
+        mergeAtis(v, ar, "x");
+        NEAR(buildXp(v, cfg, now).visM, 4 * kSmToM, 1);
+    }
+
+    // --- NOAA winds / temps aloft (FD winds)
+    const std::string fd =
+        "000\nFBUS31 KWNO 301359\nFD1US1\nDATA BASED ON 301200Z\nVALID 301800Z   FOR USE 1400-2100Z. TEMPS NEG ABV 24000\n\n"
+        "FT  3000    6000    9000   12000   18000   24000  30000  34000  39000\n"
+        "ABI 2420    2625+11 2731+06 2834+00 2938-16 3047-30 305945 305552 305157\n"
+        "DEN             9900+05 2215-02 2420-08 2530-20 2640-33 265648 266452 267254\n"
+        "SEA      0314+02 2820+00 3122-04 3227-15 3135-28 303743 304354 761253\n";
+    auto al = parseWindTemp(fd);
+    CHECK(al.size() == 3 && al[0].id == "ABI" && al[0].levels.size() == 9);
+    CHECK(al[0].levels[0].altFt == 3000 && al[0].levels[0].dirDeg == 240 && al[0].levels[0].speedKt == 20 && !al[0].levels[0].hasTemp);
+    CHECK(al[0].levels[1].hasTemp && al[0].levels[1].tempC == 11);
+    CHECK(al[0].levels[4].dirDeg == 290 && al[0].levels[4].speedKt == 38 && al[0].levels[4].tempC == -16);
+    CHECK(al[0].levels[6].altFt == 30000 && al[0].levels[6].speedKt == 59 && al[0].levels[6].tempC == -45); // implied minus
+    CHECK(al[1].levels.size() == 8 && al[1].levels[0].altFt == 6000 && al[1].levels[0].speedKt == 0); // light & variable, 3000 ft under terrain
+    CHECK(al[2].levels.size() == 8 && al[2].levels.back().altFt == 39000);
+    CHECK(al[2].levels.back().dirDeg == 260 && al[2].levels.back().speedKt == 112 && al[2].levels.back().tempC == -53); // >=100 kt coding
+    CHECK(parseWindTemp("garbage\n<html>").empty());
+
+    {   // blending: two stations either side of a point; closer one dominates
+        std::vector<AloftStation> st2(2);
+        st2[0].id = "AAA"; st2[0].lat = 40; st2[0].lon = -100; st2[0].located = true;
+        st2[1].id = "BBB"; st2[1].lat = 40; st2[1].lon = -97;  st2[1].located = true;
+        AloftLevel a; a.altFt = 30000; a.hasWind = a.hasTemp = true; a.dirDeg = 270; a.speedKt = 100; a.tempC = -40;
+        AloftLevel b = a; b.dirDeg = 270; b.speedKt = 50; b.tempC = -50;
+        st2[0].levels = {a}; st2[1].levels = {b};
+        auto nearA = sampleAloft(st2, 40, -99.5, 250);
+        auto nearB = sampleAloft(st2, 40, -97.5, 250);
+        CHECK(nearA.size() == 1 && nearB.size() == 1);
+        CHECK(nearA[0].speedKt > 85 && nearB[0].speedKt < 65 && nearA[0].dirDeg > 269 && nearA[0].dirDeg < 271);
+        CHECK(nearA[0].tempC < -40 && nearA[0].tempC > -45);
+        CHECK(sampleAloft(st2, 10, -50, 250).empty()); // nothing in range -> sim keeps its own data
+        // opposite winds must cancel through the vector blend, not average the compass numbers
+        st2[1].levels[0].dirDeg = 90; st2[1].levels[0].speedKt = 100;
+        auto mid = sampleAloft(st2, 40, -98.5, 250);
+        CHECK(mid.size() == 1 && mid[0].speedKt < 60);
+    }
+
+    {   // model: aloft data lands on the METAR station, surface layer first, temps anchored to the METAR
+        std::vector<AloftStation> st2(1);
+        st2[0] = al[0]; st2[0].lat = 32.4; st2[0].lon = -99.7; st2[0].located = true;
+        Station kabi; kabi.icao = "KABI"; kabi.lat = 32.41; kabi.lon = -99.68; kabi.elevM = 546;
+        parseReport("KABI 301553Z 24012G20KT 10SM CLR 30/10 A2990", kabi.report);
+        XpWx xa = buildXp(kabi, cfg, now, &st2);
+        CHECK(xa.aloft && xa.maxAltFt == 60000 && xa.winds.size() >= 8);
+        NEAR(xa.winds.back().altMsl, 60000 * kFtToM, 1);       // top NOAA wind is held up to FL600
+        NEAR(xa.winds.back().ms, xa.winds[xa.winds.size() - 2].ms, 0.001);
+        CHECK(xa.winds[0].altMsl < 570 && xa.winds[0].gustMs > xa.winds[0].ms);
+        for (size_t i = 1; i < xa.winds.size(); ++i) CHECK(xa.winds[i].altMsl > xa.winds[i - 1].altMsl);
+        CHECK(xa.winds.size() <= 13);
+        CHECK(xa.tempProfile.size() >= 6 && xa.tempProfile[0].second == 30);       // METAR surface temp anchors the profile
+        NEAR(profileTemp(xa.tempProfile, 546), 30, 0.01);
+        NEAR(profileTemp(xa.tempProfile, 9144), -45, 0.5);                           // 30 000 ft
+        CHECK(profileTemp(xa.tempProfile, 20000) == profileTemp(xa.tempProfile, 12000)); // constant above the top level
+        Config off = cfg; off.useAloft = false;
+        XpWx xo = buildXp(kabi, off, now, &st2);
+        CHECK(!xo.aloft && xo.maxAltFt == 10000 && xo.winds.size() == 1);
+    }
+
+    CHECK(windTempUrl("all", "low", 6) == "https://aviationweather.gov/api/data/windtemp?region=all&level=low&fcst=06");
+    { std::string rg; char pf; aloftRegionFor(61.2, -149.9, rg, pf); CHECK(rg == "alaska" && pf == 'P'); aloftRegionFor(21.3, -157.9, rg, pf); CHECK(rg == "hawaii"); aloftRegionFor(40, -100, rg, pf); CHECK(rg == "all" && pf == 'K'); }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

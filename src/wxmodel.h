@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "metar.h"
+#include "windsaloft.h"
 
 namespace wx {
 
@@ -27,6 +28,10 @@ struct XpCloud {
     float topM = 0;      // MSL
 };
 
+struct XpWind {
+    float altMsl = 0, dir = 0, ms = 0, gustMs = 0, shearDeg = 0, turbulence = 0;
+};
+
 struct XpWx {
     bool hasTemp = false, hasDewp = false;
     float tempC = 0, dewpC = 0;
@@ -41,9 +46,17 @@ struct XpWx {
     int cloudCount = 0;
     bool fogLayerApplied = false;
     float ageS = 0;
+    // Winds / temperatures aloft (NOAA FD winds blended at this station)
+    bool aloft = false;
+    std::vector<XpWind> winds;                         // surface layer first, then aloft levels (ascending)
+    std::vector<std::pair<float, float>> tempProfile; // (altitude MSL m, degC), ascending
+    float maxAltFt = 10000;
 };
 
-XpWx buildXp(const Station& st, const Config& cfg, std::time_t now);
+// Temperature from a profile at an altitude (linear between points, constant outside).
+float profileTemp(const std::vector<std::pair<float, float>>& p, float altM);
+
+XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft = nullptr);
 
 // ATIS values override the METAR where the ATIS actually provides them.
 void mergeAtis(Station& st, const Report& atis, const std::string& atisText);

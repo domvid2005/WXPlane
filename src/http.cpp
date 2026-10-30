@@ -26,7 +26,7 @@ bool httpGet(const std::string& url, std::string& body, long& status, std::strin
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, sink);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &body);
     curl_easy_setopt(c, CURLOPT_ERRORBUFFER, errbuf);
-    curl_easy_setopt(c, CURLOPT_USERAGENT, "XPlane12-WeatherFix/1.0 (+x-plane plugin)");
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "XPlane12-WXPlane/1.0 (+x-plane plugin)");
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(c, CURLOPT_MAXREDIRS, 3L);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, timeoutSec);

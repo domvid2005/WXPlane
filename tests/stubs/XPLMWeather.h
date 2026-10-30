@@ -18,3 +18,4 @@ void XPLMBeginWeatherUpdate(void);
 void XPLMEndWeatherUpdate(int, int);
 void XPLMSetWeatherAtLocation(double, double, double, XPLMWeatherInfo_t*);
 void XPLMSetWeatherAtAirport(const char*, XPLMWeatherInfo_t*);
+int XPLMGetWeatherAtLocation(double, double, double, XPLMWeatherInfo_t*);

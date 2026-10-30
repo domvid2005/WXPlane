@@ -6,6 +6,7 @@
 #include "http.h"
 #include "metar.h"
 #include "sources.h"
+#include "windsaloft.h"
 
 namespace wx {
 
@@ -126,10 +127,76 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
         }
     }
 
+    // 3) NOAA winds & temperatures aloft (FD winds), so the cruise levels follow real data too.
+    if (cfg.useAloft) res.aloft = fetchAloft(rq, now, res.aloftNote);
+
     res.stations = std::move(keep);
     res.ok = true;
     if (res.stations.empty()) res.error = "no METARs within search radius";
     return res;
+}
+
+std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_t now, std::string& note) {
+    const Config& cfg = rq.cfg;
+    std::string region;
+    char prefix = 'K';
+    aloftRegionFor(rq.lat, rq.lon, region, prefix);
+
+    if (region != alRegion_ || alCache_.empty() || now - alTime_ > 1800) { // FD products change a few times a day
+        std::vector<AloftStation> all;
+        std::string firstErr;
+        for (const char* level : {"low", "high"}) {
+            std::string body, err;
+            long st = 0;
+            if (!httpGet(windTempUrl(region, level, cfg.aloftFcstHours), body, st, err, 15)) {
+                if (firstErr.empty()) firstErr = err;
+                continue;
+            }
+            mergeAloft(all, parseWindTemp(body));
+        }
+        if (all.empty()) {
+            note = firstErr.empty() ? "NOAA winds aloft: no data parsed" : "NOAA winds aloft: " + firstErr;
+            if (alCache_.empty() || region != alRegion_) return {};
+            all = alCache_; // keep using the previous set rather than dropping to sim winds
+        } else {
+            alCache_ = std::move(all);
+            alRegion_ = region;
+            alTime_ = now;
+        }
+    }
+
+    // FD stations come without coordinates; look them up once through their METAR ("ABI" -> "KABI").
+    std::vector<std::string> need;
+    for (const auto& s : alCache_) {
+        if (coords_.count(s.id)) continue;
+        auto miss = coordsMiss_.find(s.id);
+        if (miss != coordsMiss_.end() && now - miss->second < 6 * 3600) continue;
+        need.push_back(s.id);
+    }
+    for (size_t i = 0; i < need.size(); i += 90) {
+        std::string ids;
+        size_t end = std::min(need.size(), i + 90);
+        for (size_t j = i; j < end; ++j) ids += (j > i ? "," : "") + std::string(1, prefix) + need[j];
+        std::string body, err;
+        long st = 0;
+        if (!httpGet("https://aviationweather.gov/api/data/metar?format=json&ids=" + ids, body, st, err, 15)) break;
+        for (const auto& m : parseAwcMetarJson(body))
+            if (m.icao.size() == 4) coords_[m.icao.substr(1)] = {m.lat, m.lon};
+        for (size_t j = i; j < end; ++j)
+            if (!coords_.count(need[j])) coordsMiss_[need[j]] = now;
+    }
+
+    std::vector<AloftStation> out;
+    for (auto s : alCache_) {
+        auto c = coords_.find(s.id);
+        if (c == coords_.end()) continue;
+        s.lat = c->second.first;
+        s.lon = c->second.second;
+        s.located = true;
+        if (distNm(rq.lat, rq.lon, s.lat, s.lon) <= cfg.aloftRangeNm + cfg.searchNm + 60) out.push_back(std::move(s));
+    }
+    if (out.empty() && note.empty()) note = "no NOAA winds-aloft stations near this position (US/Pacific coverage only)";
+    return out;
 }
 
 } // namespace wx

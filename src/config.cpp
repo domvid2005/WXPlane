@@ -29,7 +29,7 @@ bool loadConfig(const std::string& path, Config& c) {
         double d = std::atof(v.c_str());
         if (k == "enabled") c.enabled = toBool(v);
         else if (k == "use_atis") c.useAtis = toBool(v);
-        else if (k == "extend_to_cruise") c.extendToCruise = toBool(v);
+        else if (k == "use_aloft") c.useAloft = toBool(v);
         else if (k == "update_minutes") c.updateMinutes = (int)(d < 1 ? 1 : d);
         else if (k == "search_nm") c.searchNm = d < 20 ? 20 : (d > 400 ? 400 : d);
         else if (k == "max_stations") c.maxStations = (int)(d < 1 ? 1 : (d > 120 ? 120 : d));
@@ -41,8 +41,13 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "fog_layer") c.fogLayer = toBool(v);
         else if (k == "fog_top_agl_m") c.fogTopAglM = d < 10 ? 10 : d;
         else if (k == "normal_ceiling_ft") c.normalCeilingFt = (int)d;
-        else if (k == "cruise_ceiling_ft") c.cruiseCeilingFt = (int)d;
+        else if (k == "aloft_ceiling_ft") c.cruiseCeilingFt = (int)d;
+        else if (k == "aloft_range_nm") c.aloftRangeNm = d < 50 ? 50 : d;
+        else if (k == "aloft_fcst_hours") c.aloftFcstHours = (int)d;
+        else if (k == "aloft_stations") c.aloftStations = (int)(d < 1 ? 1 : (d > 8 ? 8 : d));
         else if (k == "clear_vis_m") c.clearVisM = d < 10000 ? 10000 : d;
+        else if (k == "vis_autocal") c.visAutocal = toBool(v);
+        else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
     }
     return true;
 }
@@ -50,10 +55,10 @@ bool loadConfig(const std::string& path, Config& c) {
 bool saveConfig(const std::string& path, const Config& c) {
     std::ofstream f(path, std::ios::trunc);
     if (!f) return false;
-    f << "# Weather Fix settings. Edit while X-Plane is closed (menu toggles are saved automatically).\n"
+    f << "# WXPlane settings. Edit while X-Plane is closed (menu toggles are saved automatically).\n"
       << "enabled = " << (c.enabled ? 1 : 0) << "\n"
       << "use_atis = " << (c.useAtis ? 1 : 0) << "\n"
-      << "extend_to_cruise = " << (c.extendToCruise ? 1 : 0) << "\n"
+      << "use_aloft = " << (c.useAloft ? 1 : 0) << "\n"
       << "update_minutes = " << c.updateMinutes << "\n"
       << "search_nm = " << c.searchNm << "\n"
       << "max_stations = " << c.maxStations << "\n"
@@ -65,8 +70,13 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "fog_layer = " << (c.fogLayer ? 1 : 0) << "\n"
       << "fog_top_agl_m = " << c.fogTopAglM << "\n"
       << "normal_ceiling_ft = " << c.normalCeilingFt << "\n"
-      << "cruise_ceiling_ft = " << c.cruiseCeilingFt << "\n"
-      << "clear_vis_m = " << c.clearVisM << "\n";
+      << "aloft_ceiling_ft = " << c.cruiseCeilingFt << "\n"
+      << "aloft_range_nm = " << c.aloftRangeNm << "\n"
+      << "aloft_fcst_hours = " << c.aloftFcstHours << "\n"
+      << "aloft_stations = " << c.aloftStations << "\n"
+      << "clear_vis_m = " << c.clearVisM << "\n"
+      << "vis_autocal = " << (c.visAutocal ? 1 : 0) << "\n"
+      << "vis_check_s = " << c.visCheckS << "\n";
     return true;
 }
 
