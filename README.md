@@ -125,7 +125,7 @@ An update also happens early when you move more than `refetch_move_nm` (40 nm; a
 
 ## Storm tops on the map
 
-A map layer called "WXPlane storm tops" (toggle it in the map's layer list; `radar_map_tops = 0` disables it) labels storm cells with their top as a flight level, rounded to 1000 ft: `FL390`. A leading `~` (`~FL390`) means the top is estimated because no echo-top data was available. Zoomed out only cells of 40 dBZ and up are labelled, zoomed in 30 dBZ and up. X-Plane does not let plugins change the text of its own weather layer, so these labels sit on top of it.
+A map layer called "WXPlane storm tops" (toggle it in the map's layer list; `radar_map_tops = 0` disables it) labels storm cells with their top as a flight level (the storm cloud in the sim is built to exactly that top whenever the radar provides an echo top, capped at tropopause + 2.5 km; estimated tops, marked `~`, are shaped to avoid flat slabs), rounded to 1000 ft: `FL390`. A leading `~` (`~FL390`) means the top is estimated because no echo-top data was available. Zoomed out only cells of 40 dBZ and up are labelled, zoomed in 30 dBZ and up. X-Plane does not let plugins change the text of its own weather layer, so these labels sit on top of it.
 
 ## Weather settings screen
 

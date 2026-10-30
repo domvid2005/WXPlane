@@ -457,7 +457,7 @@ void mapLabels(XPLMMapLayerID layer, const float* bounds, float zoom, float, XPL
         float x = 0, y = 0;
         XPLMMapProject(proj, c->lat, c->lon, &x, &y);
         if (x < bounds[0] || x > bounds[2] || y > bounds[1] || y < bounds[3]) continue;
-        std::string t = wx::formatFl(c->topM, c->topKnown);
+        std::string t = wx::formatFl(wx::stormTopM(*c, g_cfg, 900.0f), c->topKnown);   // same value the cloud is built with
         XPLMDrawMapLabel(layer, t.c_str(), x, y, xplm_MapOrientation_Map, 0.0f);
         if (++drawn >= 150) break;
     }

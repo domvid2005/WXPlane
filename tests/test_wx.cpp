@@ -286,21 +286,29 @@ int main() {
         CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= st.clouds[2].topM / 0.3048 - 1);
         CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
         CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
-        {   // no flat mesas: neighbouring blocks with identical radar get different (but repeatable) tops
+        {   // a measured echo top is used as it is, and the map label shows the same number
+            RadarCell m = cell; m.key = "R5:5"; m.dbz = 48; m.topM = 11277; m.topKnown = true; m.neighbors = 3; m.frac = 0.5f;
+            XpWx a = base; applyStorm(a, m, sc, 400, 38);
+            NEAR(a.clouds[2].topM, 11277, 0.5);
+            NEAR(stormTopM(m, sc, 900.0f), 11277, 0.5);
+            m.topM = 30000; applyStorm(a, m, sc, 400, 38);                     // capped at tropopause + 2.5 km
+            CHECK(a.clouds[2].topM < 22000 && stormTopM(m, sc, 900.0f) == a.clouds[2].topM);
+        }
+        {   // no flat mesas (estimated tops): neighbouring blocks with identical radar get different (but repeatable) tops
             std::set<int> tops;
             for (int k = 0; k < 8; ++k) {
-                RadarCell cc = cell; cc.key = "R300:" + std::to_string(380 + k); cc.topM = 10000; cc.topKnown = true;
+                RadarCell cc = cell; cc.key = "R300:" + std::to_string(380 + k); cc.topM = 10000; cc.topKnown = false;
                 XpWx a = base, b = base;
                 applyStorm(a, cc, sc, 400, 38); applyStorm(b, cc, sc, 400, 38);
                 CHECK(a.clouds[2].topM == b.clouds[2].topM);
                 tops.insert((int)(a.clouds[2].topM / 100));
             }
             CHECK(tops.size() >= 5);
-            XpWx lo = base, hi = base; RadarCell e = cell; e.key = "R1:1"; e.topM = 12000; e.topKnown = true;
+            XpWx lo = base, hi = base; RadarCell e = cell; e.key = "R1:1"; e.topM = 12000; e.topKnown = false;
             e.dbz = 28; e.frac = 0.25f; applyStorm(lo, e, sc, 400, 38);
             e.dbz = 55; e.frac = 1.0f; applyStorm(hi, e, sc, 400, 38);
             CHECK(lo.clouds[2].topM + 1500 < hi.clouds[2].topM && lo.clouds[2].coverage < hi.clouds[2].coverage);   // weak edge cells are lower and thinner
-            XpWx edge = base, core = base; RadarCell ec = cell; ec.key = "R9:9"; ec.topM = 12000; ec.topKnown = true; ec.dbz = 50; ec.frac = 1.0f;
+            XpWx edge = base, core = base; RadarCell ec = cell; ec.key = "R9:9"; ec.topM = 12000; ec.topKnown = false; ec.dbz = 50; ec.frac = 1.0f;
             ec.neighbors = 2; applyStorm(edge, ec, sc, 400, 38); ec.neighbors = 8; applyStorm(core, ec, sc, 400, 38);
             CHECK(edge.clouds[2].topM + 1000 < core.clouds[2].topM);   // dome: storm edges are lower than the core
             sc.stormCoverageMax = 1.0; XpWx full = base; applyStorm(full, e, sc, 400, 38);
