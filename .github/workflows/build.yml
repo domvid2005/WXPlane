@@ -36,8 +36,8 @@ jobs:
       - run: ctest --test-dir build -C Release --output-on-failure
       - uses: actions/upload-artifact@v4
         with:
-          name: WeatherFix-${{ runner.os }}
-          path: build/package/WeatherFix   # contains lin_x64 / mac_x64 / win_x64
+          name: WXPlane-${{ runner.os }}
+          path: build/package/WXPlane   # contains lin_x64 / mac_x64 / win_x64
 
   bundle:
     needs: build
@@ -47,8 +47,8 @@ jobs:
         with: { path: parts }
       - name: Merge platforms
         run: |
-          mkdir -p out/WeatherFix
-          cp -r parts/*/* out/WeatherFix/
+          mkdir -p out/WXPlane
+          cp -r parts/*/* out/WXPlane/
           find out -type f
       - uses: actions/upload-artifact@v4
-        with: { name: WeatherFix, path: out }
+        with: { name: WXPlane, path: out }
