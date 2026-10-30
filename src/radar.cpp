@@ -116,6 +116,21 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         c.key = key;
         all.push_back(c);
     }
+    // Core / edge: blocks with echo all around them are tall, blocks at the edge of an echo area are lower. Gives storms a
+    // dome profile instead of one flat top over the whole area.
+    for (auto& c : all) {
+        long bj = (long)std::floor((90.0 - c.lat) / blockLat);
+        double step = blocks[{bj, (long)std::floor((c.lon + 180.0) / std::max(blockLat, std::round(blockLat / std::max(0.2, std::cos(c.lat * kPi / 180.0)) * 100.0) / 100.0))}].step;
+        int n = 0;
+        for (int dj = -1; dj <= 1; ++dj)
+            for (int di = -1; di <= 1; ++di) {
+                if (!dj && !di) continue;
+                double la2 = c.lat - dj * blockLat;
+                double step2 = std::max(blockLat, std::round(blockLat / std::max(0.2, std::cos(la2 * kPi / 180.0)) * 100.0) / 100.0);
+                if (blocks.count({bj + dj, (long)std::floor((c.lon + di * step + 180.0) / step2)})) ++n;
+            }
+        c.neighbors = n;
+    }
     res.echoBlocks = (int)all.size();
     // Keep the most relevant: close and intense first.
     std::set<std::string> prevKeys = prev ? *prev : std::set<std::string>();
@@ -230,7 +245,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     float topM = c.topM > 0 ? c.topM : estimateTopM(dbz, lat);
     float intensity = clampf((dbz - 20.0f) / 20.0f, 0.0f, 1.0f);              // 20 dBZ -> 0, 40 dBZ and up -> 1
     float depth = std::max(0.0f, topM - baseM);
-    depth *= (0.45f + 0.55f * intensity) * (0.7f + 0.3f * c.frac);            // weaker and edge cells are shallower
+    depth *= (0.6f + 0.4f * intensity) * (0.8f + 0.2f * c.frac);              // weaker and edge cells are somewhat shallower
+    depth *= c.neighbors >= 7 ? 1.0f : (c.neighbors >= 4 ? 0.8f : 0.6f);     // dome profile: core tallest, edges lower
     topM = baseM + depth;
     uint32_t h = 2166136261u;                                                  // FNV-1a of the block key: stable between updates
     for (char ch : c.key) { h ^= (uint8_t)ch; h *= 16777619u; }
@@ -240,9 +256,9 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     topM = std::min(topM, limit);
     if (topM < baseM + 1500.0f) topM = baseM + 1500.0f;
     XpCloud& cl = x.clouds[2];
-    cl.type = clampf(1.0f + (dbz - 20.0f) / 12.5f, 1.0f, 3.0f);               // cumulonimbus from about 45 dBZ
-    float t = clampf((dbz - 20.0f) / 35.0f, 0.0f, 1.0f);
-    cl.coverage = (0.35f + ((float)cfg.stormCoverageMax - 0.35f) * t) * (0.7f + 0.3f * c.frac);
+    cl.type = clampf(1.0f + (dbz - 20.0f) / 10.0f, 1.0f, 3.0f);               // full cumulonimbus (3.0) from 40 dBZ
+    float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
+    cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
     cl.baseM = baseM;
     cl.topM = topM;
     x.cloudCount = 0;

@@ -173,8 +173,12 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         if (g.kind == 1) { c.type = 3.0f; thick = 6000; }
         else if (g.kind == 2) { c.type = 2.6f; thick = 4000; }
         else if (g.baseFtAgl >= 20000) { c.type = 0.0f; thick = 1200; }
-        else if ((g.baseFtAgl < 2000 && g.cover >= CloudGroup::BKN) || (g.cover == CloudGroup::OVC && g.baseFtAgl < 12000)) { c.type = 1.0f; thick = 600; }
-        else { c.type = 2.0f; thick = g.cover >= CloudGroup::BKN ? 1500 : 1000; }
+        else if ((g.baseFtAgl < 2000 && g.cover >= CloudGroup::BKN) || (g.cover == CloudGroup::OVC && g.baseFtAgl < 12000)) {
+            // Thin solid layers render as a black void from below, so overcast gets real depth.
+            c.type = 1.0f;
+            thick = g.cover == CloudGroup::OVC ? 2200 : (g.cover == CloudGroup::BKN ? 1600 : 900);
+        }
+        else { c.type = 2.0f; thick = g.cover == CloudGroup::OVC ? 2200 : (g.cover == CloudGroup::BKN ? 1800 : 1000); }
         c.topM = (float)(c.baseM + thick);
         layers.push_back(c);
     }

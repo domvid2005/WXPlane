@@ -22,4 +22,10 @@ std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, cons
 // Greedy word wrap on a character budget (the window uses real font metrics instead; this is the fallback/test form).
 std::vector<std::string> wrapText(const std::string& s, size_t maxChars);
 
+// Flight category from visibility and lowest BKN/OVC/VV ceiling: "VFR", "MVFR", "IFR", "LIFR" ("" when there is no report).
+std::string flightCategory(const Station& st);
+
+// Text lines for the map: one compact line ("KDEN VFR 27015G25KT 10SM"), or with detailed=true the wrapped METAR and ATIS.
+std::vector<std::string> mapStationLines(const Station& st, bool detailed, size_t wrapChars = 56, size_t maxAtisLines = 5);
+
 } // namespace wx

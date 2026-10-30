@@ -58,11 +58,18 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_rain_full_mmh") c.radarRainFullMmH = d < 5 ? 5 : d;
         else if (k == "radar_turbulence") c.radarTurbulence = d < 0 ? 0 : (d > 2 ? 2 : d);
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
-        else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.3 ? 0.3 : (d > 1 ? 1 : d);
+        else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
         else if (k == "storm_top_jitter_m") c.stormTopJitterM = d < 0 ? 0 : (d > 3000 ? 3000 : d);
+        else if (k == "map_airport_wx") c.mapAirportWx = toBool(v);
         else if (k == "radar_map_tops") c.radarMapTops = toBool(v);
         else if (k == "apply_immediately") c.applyImmediately = toBool(v);
-        else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 100 ? 100 : d));
+        else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 1000 ? 1000 : d));
+        else if (k == "startup_wait_fps") c.startupWaitFps = toBool(v);
+        else if (k == "startup_radar_delay_s") c.startupRadarDelayS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
+        else if (k == "startup_staged") c.startupStaged = toBool(v);
+        else if (k == "startup_wait_scenery") c.startupWaitScenery = toBool(v);
+        else if (k == "transition_s") c.transitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
+        else if (k == "update_transition_s") c.updateTransitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
     return true;
@@ -105,9 +112,16 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_top_jitter_m = " << c.stormTopJitterM << "\n"
+      << "map_airport_wx = " << (c.mapAirportWx ? 1 : 0) << "\n"
       << "radar_map_tops = " << (c.radarMapTops ? 1 : 0) << "\n"
       << "apply_immediately = " << (c.applyImmediately ? 1 : 0) << "\n"
       << "apply_per_tick = " << c.applyPerTick << "\n"
+      << "startup_wait_fps = " << (c.startupWaitFps ? 1 : 0) << "\n"
+      << "startup_radar_delay_s = " << c.startupRadarDelayS << "\n"
+      << "startup_staged = " << (c.startupStaged ? 1 : 0) << "\n"
+      << "startup_wait_scenery = " << (c.startupWaitScenery ? 1 : 0) << "\n"
+      << "transition_s = " << c.transitionS << "\n"
+      << "update_transition_s = " << c.updateTransitionS << "\n"
       << "startup_delay_s = " << c.startupDelayS << "\n";
     return true;
 }

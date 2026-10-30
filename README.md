@@ -65,7 +65,7 @@ No compiler? Push this folder to a GitHub repo; `.github/workflows/build.yml` bu
 
 ## Config keys (`WXPlane.cfg`)
 
-`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_autocal` (1), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.85), `storm_top_jitter_m` (1200), `apply_immediately` (0), `apply_per_tick` (4), `startup_delay_s` (20).
+`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_autocal` (1), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `map_airport_wx` (1), `storm_coverage_max` (0.7), `storm_top_jitter_m` (1500), `apply_immediately` (0), `apply_per_tick` (500), `startup_delay_s` (15), `startup_wait_fps` (1), `startup_staged` (1), `startup_radar_delay_s` (20), `startup_wait_scenery` (0), `transition_s` (0), `update_transition_s` (0).
 
 ## Limits you should know about
 
@@ -93,7 +93,7 @@ Both are gzipped GRIB2 files. WXPlane decodes them itself (no extra libraries) a
 The echoes are grouped into blocks of about `radar_cell_nm`; the strongest and nearest `radar_max_cells` become location records on top of the weather of the nearest METAR station:
 
 * rain rate from reflectivity (Marshall-Palmer), scaled so `radar_rain_full_mmh` is full precipitation;
-* a cloud layer in slot 2 that goes from stratus (about 20 dBZ) to cumulonimbus (about 45 dBZ and up). Its top comes from the real echo top (limited to the tropopause plus 2.5 km) but is shaped so storms do not look like flat slabs: weaker and edge cells are lower, each block gets a stable random-looking top variation (`storm_top_jitter_m`, 1200), and coverage tops out at `storm_coverage_max` (0.85) instead of solid;
+* a cloud layer in slot 2 that goes from stratus (about 20 dBZ) to cumulonimbus (40 dBZ and up). Its top comes from the real echo top (limited to the tropopause plus 2.5 km) but is shaped so storms do not look like flat slabs: weaker and edge cells are lower, each block gets a stable random-looking top variation (`storm_top_jitter_m`, 1500), and coverage tops out at `storm_coverage_max` (0.7) instead of solid; cells with echo all around them are tallest and cells at the edge of an echo area are lower (a dome rather than a plateau), and each record covers 75% of its block so towers keep gaps;
 * lower visibility under heavy rain (800 m at 50 dBZ, 8 km at 25 dBZ);
 * turbulence and gusts from about 30 dBZ upwards, below the storm top.
 
@@ -121,11 +121,11 @@ No free global radar data feed offers raw values. With `radar_global = 1` WXPlan
 
 An update also happens early when you move more than `refetch_move_nm` (40 nm; at most once a minute), and when you press "Refresh Weather Data Now" or toggle a data option. Applying is incremental: only records that changed are sent to X-Plane.
 
-**Start-up.** The first download waits `startup_delay_s` (20 s) after the plugin loads and until X-Plane reports no scenery loading for 3 seconds (never more than about 2.5 minutes), so it does not add to the load. Downloads and radar decoding run on a background thread at lower priority.
+**Start-up.** The first download starts `startup_delay_s` (15 s) after the plugin loads and, with `startup_wait_fps = 1`, only once the frame time has stayed under 50 ms for 4 seconds (so not while the sim is still loading; it gives up waiting after 2.5 minutes). With `startup_staged = 1` the first update contains only METAR, ATIS and winds aloft; the radar storms follow `startup_radar_delay_s` (20 s) later in a second update, once the frame rate is steady again, so the sim never has to rebuild everything at once. Set `startup_wait_scenery = 1` to also wait until X-Plane reports no scenery loading (up to 2.5 minutes); it is off by default. The first weather goes to X-Plane as a single update, which X-Plane then fades in over 1-2 minutes. Every weather update makes X-Plane rebuild, so one update is smoother than many small ones. `transition_s` / `update_transition_s` (both 0) can spread the records over time, but each step is another rebuild and causes repeated hitches, so leave them at 0 unless you are experimenting. Downloads and radar decoding run on a background thread at lower priority.
 
 ## Storm tops on the map
 
-A map layer called "WXPlane storm tops" (toggle it in the map's layer list; `radar_map_tops = 0` disables it) labels storm cells with their top as a flight level, rounded to 1000 ft: `FL390`. A leading `~` (`~FL390`) means the top is estimated because no echo-top data was available. Zoomed out only cells of 40 dBZ and up are labelled, zoomed in 30 dBZ and up. X-Plane does not let plugins change the text of its own weather layer, so these labels sit on top of it.
+A map layer called "WXPlane weather" (toggle it in the map's layer list; `radar_map_tops = 0` disables it) labels storm cells with their top as a flight level, rounded to 1000 ft: `FL390`. A leading `~` (`~FL390`) means the top is estimated because no echo-top data was available. Zoomed out only cells of 40 dBZ and up are labelled, zoomed in 30 dBZ and up. X-Plane does not let plugins change the text of its own weather layer, so these labels sit on top of it.
 
 ## Weather settings screen
 
@@ -137,9 +137,17 @@ Every weather update makes X-Plane rebuild what changed, so WXPlane tries to cha
 
 * Only records whose content changed are sent; unchanged ones are left alone.
 * Storm values are quantized (5 dBZ, 500 m tops, quarter coverage) so small radar wobbles change nothing, and storms already shown stay until they fall 5 dBZ below the threshold (and 15% beyond the range limit).
-* Records (nearest stations first, then storms) are queued and handed to X-Plane `apply_per_tick` (4) at a time, four times a second, and they fade in over 1-2 minutes. Nothing is forced to rebuild at once unless you set `apply_immediately = 1`, so weather appears gradually after loading instead of in one stall. The log shows `weather update took N ms` for any update slower than 20 ms, which tells us if the sim itself is the slow part.
+* All changed records go to X-Plane in one update (up to `apply_per_tick`, 500) and fade in over 1-2 minutes, because every separate weather update is another rebuild. Nothing is forced to rebuild at once unless you turn on `apply_immediately`. The log shows `weather update took N ms` for any update slower than 20 ms, which tells us if the sim itself is the slow part.
 * The fog slot layout stays on for 30 minutes after the last fog report, so the clouds of all stations are not moved around when a fog report appears or disappears.
 * The visibility self-check only runs near the ground, makes at most 2 corrections, and ignores differences under 25%.
 * Everything slow (downloads, unzipping, decoding) runs on a low-priority background thread.
 
 If you still see hitches, set `radar_max_cells` lower (30), or turn radar off from the menu to check whether the storms are the cause, and send me the `[WXPlane]` lines from `Log.txt`.
+
+## Airport weather on the map
+
+X-Plane's SDK does not let a plugin add to or react to clicks on its own airport info box, so WXPlane labels the airports on the map instead (same "WXPlane weather" layer; `map_airport_wx = 0` turns it off). Every station in view gets a one-line label under its position: ICAO, flight category (VFR/MVFR/IFR/LIFR), wind and ATIS letter. Zoom in until only a few airports are in view and the one nearest the middle of the map shows its full METAR and ATIS text. Airports without a METAR station are not labelled.
+
+## Visibility self-check
+
+`vis_autocal` compares the visibility X-Plane reports with the METAR and corrects our value if they differ. X-Plane fades new weather in over 1-2 minutes (longer while it is busy loading), so the check now waits until the cloud layers it read back match the ones we sent, retrying every 60 s up to four times, and never lowers the correction below 0.3. Before this, a check made too early could read the old weather and push visibility far below the METAR (a 4 SM report ended up at under 1 km), which made everything look dark.

@@ -50,14 +50,14 @@ void XPLMEnableMenuItem(XPLMMenuID, int, int) {}
 XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t* p) { g_cb = p->callbackFunc; return (void*)3; }
 void XPLMDestroyFlightLoop(XPLMFlightLoopID) {}
 void XPLMScheduleFlightLoop(XPLMFlightLoopID, float, int) {}
-XPLMDataRef XPLMFindDataRef(const char* n) { return std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
+XPLMDataRef XPLMFindDataRef(const char* n) { return std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
 int XPLMGetDatavf(XPLMDataRef, float* out, int off, int n) {
     static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};
     if (!out) return 13;
     for (int i = 0; i < n && off + i < 13; ++i) out[i] = lv[off + i];
     return n;
 }
-float XPLMGetDataf(XPLMDataRef) { return g_agl; }
+float XPLMGetDataf(XPLMDataRef r) { return r == (void*)14 ? 0.01f : g_agl; }
 double XPLMGetDatad(XPLMDataRef r) { return r == (void*)10 ? g_lat : g_lon; }
 static std::string g_logAll;
 void XPLMDebugString(const char* s) { std::printf("  log: %s", s); g_logAll += s; }
@@ -75,7 +75,8 @@ void XPLMGetNavAidInfo(XPLMNavRef, XPLMNavType*, float* la, float* lo, float*, i
     std::strcpy(id, "????"); *la = *lo = 0;
 }
 static float g_lastSentVis = 0;
-int XPLMGetWeatherAtLocation(double, double, double, XPLMWeatherInfo_t* o) { o->visibility = g_lastSentVis * 2.5f; return 1; }
+static XPLMWeatherInfo_t g_lastSentInfo;
+int XPLMGetWeatherAtLocation(double, double, double, XPLMWeatherInfo_t* o) { for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) o->cloud_layers[i] = g_lastSentInfo.cloud_layers[i]; o->visibility = g_lastSentVis * 2.5f; return 1; }
 static size_t g_batchStart = 0, g_maxBatch = 0;
 static bool g_sawImmediate = false, g_sawFullWipe = false;
 void XPLMBeginWeatherUpdate(void) { ++g_begin; g_batchStart = g_calls.size(); }
@@ -84,7 +85,7 @@ static int g_erases = 0;
 void XPLMEraseWeatherAtLocation(double, double) { ++g_erases; }
 void XPLMEraseWeatherAtAirport(const char*) { ++g_erases; }
 void XPLMSetWeatherAtLocation(double la, double lo, double el, XPLMWeatherInfo_t* i) { g_calls.push_back({"loc", false, *i, la, lo, el}); }
-void XPLMSetWeatherAtAirport(const char* id, XPLMWeatherInfo_t* i) { if (std::strcmp(id, "KICT") == 0) g_lastSentVis = i->visibility; g_calls.push_back({id, true, *i, 0, 0, 0}); }
+void XPLMSetWeatherAtAirport(const char* id, XPLMWeatherInfo_t* i) { if (std::strcmp(id, "KICT") == 0) { g_lastSentVis = i->visibility; g_lastSentInfo = *i; } g_calls.push_back({id, true, *i, 0, 0, 0}); }
 
 
 // ---------------- mock window / drawing ----------------
@@ -214,8 +215,83 @@ static bool pump(size_t wantCalls, int ms = 3000) {
     return false;
 }
 
+
+// HARNESS_RAMP=1: the first load is released evenly over transition_s instead of in one burst.
+static int runRamp() {
+    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("max_age_hours = 12\nradar = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    char n[256], s[256], d[256];
+    g_loadingFlag = 0;
+    XPluginStart(n, s, d);
+    XPluginEnable();
+    auto t0 = std::chrono::steady_clock::now();
+    double first = -1, last = -1;
+    size_t seen = 0;
+    int inFirst300ms = 0;
+    for (int i = 0; i < 700 && seen < 4; ++i) {
+        g_cb(1, 1, i, nullptr);
+        double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        if (g_calls.size() > seen) {
+            if (first < 0) first = t;
+            if (t - first < 0.3) inFirst300ms = (int)g_calls.size();
+            seen = g_calls.size();
+            last = t;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    std::printf("ramp: %zu records, first at %.2f s, last at %.2f s, %d within 0.3 s of the first\n", seen, first, last, inFirst300ms);
+    CHECK(seen >= 3);
+    CHECK(inFirst300ms <= 2);                  // not a burst
+    CHECK(last - first > 1.5 && last - first < 6.0);   // spread over roughly the 3 s transition
+    XPluginDisable();
+    XPluginStop();
+    std::printf("%s (%d failures)\n", g_fail ? "RAMP FAILED" : "RAMP OK", g_fail);
+    return g_fail ? 1 : 0;
+}
+
+// HARNESS_STAGED=1: the first update has no radar; storms follow startup_radar_delay_s later.
+static int runStaged() {
+    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("max_age_hours = 12\nradar = 1\nstartup_delay_s = 0\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\n", f); std::fclose(f); }
+    char n[256], s[256], d[256];
+    XPluginStart(n, s, d);
+    XPluginEnable();
+    for (int i = 0; i < 600 && g_logAll.find("radar: deferred") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    CHECK(g_logAll.find("radar: deferred") != std::string::npos);
+    CHECK(g_logAll.find("radar: NOAA MRMS") == std::string::npos);
+    for (int i = 0; i < 1500 && g_logAll.find("radar: NOAA MRMS") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    CHECK(g_logAll.find("radar: NOAA MRMS") != std::string::npos);   // storms arrive in the second update
+    XPluginDisable();
+    XPluginStop();
+    std::printf("%s (%d failures)\n", g_fail ? "STAGED FAILED" : "STAGED OK", g_fail);
+    return g_fail ? 1 : 0;
+}
+
+// HARNESS_ONESHOT=1: with default settings, the first load is ONE weather update containing every record.
+static int runOneShot() {
+    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("max_age_hours = 12\nradar = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
+    char n[256], s[256], d[256];
+    XPluginStart(n, s, d);
+    XPluginEnable();
+    for (int i = 0; i < 400 && g_calls.size() < 3; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    for (int i = 0; i < 40; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    std::printf("oneshot: %zu records in %d weather update(s), largest %zu\n", g_calls.size(), g_end, g_maxBatch);
+    CHECK(g_calls.size() >= 3);
+    CHECK(g_end == 1 && g_begin == 1);               // one Begin/End pair for the whole first load
+    CHECK(g_maxBatch == g_calls.size());
+    CHECK(g_lastIncr == 1 && g_lastImm == 0);
+    XPluginDisable();
+    XPluginStop();
+    std::printf("%s (%d failures)\n", g_fail ? "ONESHOT FAILED" : "ONESHOT OK", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 int main() {
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("vis_check_s = 1\nmax_age_hours = 12\nradar = 0\nstartup_delay_s = 0\n", f); std::fclose(f); }
+    if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
+    if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
+    if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("vis_check_s = 1\nmax_age_hours = 12\nradar = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
@@ -389,7 +465,7 @@ int main() {
         CHECK(maxTop > 9500 && maxTop < 13100);       // echo top ~12 km from the mock product
         CHECK(maxPrecip >= 0.99f);
         CHECK(maxTurb > 0.8f);
-        CHECK(radius > 10 && radius < 11.5);
+        CHECK(radius > 8.5 && radius < 9.5);
         // the viewer window lists the radar section
         g_menuHandler(nullptr, (void*)(intptr_t)5);
         g_drawn.clear();

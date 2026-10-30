@@ -18,6 +18,7 @@ struct RadarCell {
     float topM = 0;            // echo top, metres MSL; 0 = unknown (estimated later)
     bool topKnown = false;
     float rateMmH = 0;         // rain rate for dbz
+    int neighbors = 8;         // neighbouring blocks (of 8) that also have echo: 8 = storm core, few = storm edge
     double distNm = 0;         // from the aircraft when built
     std::string key;           // stable per block, used to diff updates
 };

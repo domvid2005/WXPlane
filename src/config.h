@@ -36,12 +36,19 @@ struct Config {
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
-    double stormCoverageMax = 0.85; // densest storm cloud (1.0 makes solid slabs; lower looks like separate towers)
-    double stormTopJitterM = 1200;  // random-looking (but stable) top variation per block, breaks up flat tops
+    double stormCoverageMax = 0.7;  // densest storm cloud (1.0 makes solid slabs; lower looks like separate towers)
+    double stormTopJitterM = 1500;  // random-looking (but stable) top variation per block, breaks up flat tops
+    bool mapAirportWx = true;     // label airports on X-Plane's map with category/wind/ATIS letter, full METAR+ATIS when zoomed in
     bool radarMapTops = true;     // label storm tops (FLxxx) on X-Plane's map
     bool applyImmediately = false; // true forces X-Plane to rebuild clouds at once (a visible stall); false lets it fade in over 1-2 min
-    int applyPerTick = 4;         // weather records handed to X-Plane per 0.25 s
-    int startupDelayS = 20;       // wait this long after the plugin loads (and for scenery loading to finish) before the first download
+    int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
+    int startupDelayS = 15;       // wait this long after the plugin loads before the first download
+    bool startupWaitFps = true;      // hold the first update until the frame rate has been steady for a few seconds (up to 2.5 min)
+    bool startupStaged = true;       // first update = METAR/ATIS/winds only; radar storms follow ~20 s later, once the frame rate is steady
+    int startupRadarDelayS = 20;     // staged start-up: seconds after the first update before radar storms are added
+    bool startupWaitScenery = false; // also wait (up to 2.5 min) until X-Plane reports scenery loading finished
+    int transitionS = 0;          // first load: release the weather records evenly over this many seconds (0 = all in one update, recommended: each extra update is another hitch)
+    int updateTransitionS = 0;    // later updates: same, for the records that changed       
 };
 
 bool loadConfig(const std::string& path, Config& cfg);

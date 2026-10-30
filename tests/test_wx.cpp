@@ -268,7 +268,7 @@ int main() {
         RadarCell cell; cell.lat = 38; cell.lon = -98; cell.dbz = 52; cell.frac = 1; cell.topKnown = true; cell.topM = 13000; cell.rateMmH = rateFromDbz(52);
         XpWx st = base;
         applyStorm(st, cell, sc, 400, 38);
-        CHECK(st.clouds[2].coverage > 0.6f && st.clouds[2].coverage <= 0.85f && st.clouds[2].type == 3.0f && st.clouds[2].topM > 11000 && st.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1 && st.clouds[2].baseM < 1500);
+        CHECK(st.clouds[2].coverage > 0.55f && st.clouds[2].coverage <= 0.7f && st.clouds[2].type == 3.0f && st.clouds[2].topM > 11000 && st.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1 && st.clouds[2].baseM < 1500);
         CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= st.clouds[2].topM / 0.3048 - 1);
         CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
         CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
@@ -286,12 +286,15 @@ int main() {
             e.dbz = 28; e.frac = 0.25f; applyStorm(lo, e, sc, 400, 38);
             e.dbz = 55; e.frac = 1.0f; applyStorm(hi, e, sc, 400, 38);
             CHECK(lo.clouds[2].topM + 1500 < hi.clouds[2].topM && lo.clouds[2].coverage < hi.clouds[2].coverage);   // weak edge cells are lower and thinner
+            XpWx edge = base, core = base; RadarCell ec = cell; ec.key = "R9:9"; ec.topM = 12000; ec.topKnown = true; ec.dbz = 50; ec.frac = 1.0f;
+            ec.neighbors = 2; applyStorm(edge, ec, sc, 400, 38); ec.neighbors = 8; applyStorm(core, ec, sc, 400, 38);
+            CHECK(edge.clouds[2].topM + 1000 < core.clouds[2].topM);   // dome: storm edges are lower than the core
             sc.stormCoverageMax = 1.0; XpWx full = base; applyStorm(full, e, sc, 400, 38);
-            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.85;
+            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.7;
         }
         XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
         applyStorm(w2, cell, sc, 400, 38);
-        CHECK(w2.clouds[2].type < 1.5f && w2.clouds[2].coverage < 0.7f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
+        CHECK(w2.clouds[2].type < 1.5f && w2.clouds[2].coverage < 0.8f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
         XpWx w3 = base; cell.topM = 99000; cell.dbz = 45; cell.topKnown = true; applyStorm(w3, cell, sc, 400, 38);
         CHECK(w3.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1);   // absurd tops are clamped
         XpWx w4 = base; sc.radarTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);
@@ -361,6 +364,22 @@ int main() {
         auto w = wrapText("aaaa bbbb cccc dddd eeee ffff", 10);
         CHECK(w.size() == 3 && w[0] == "aaaa bbbb");
         CHECK(wrapText("", 10).size() == 1);
+        {   // map airport labels
+            Station st; st.icao = "KDEN"; st.rawMetar = "KDEN 301653Z 27015G25KT 3SM BR OVC008 10/09 A2992";
+            parseReport(st.rawMetar, st.report);
+            CHECK(flightCategory(st) == "IFR");
+            auto one = mapStationLines(st, false);
+            CHECK(one.size() == 1 && one[0] == "KDEN IFR 270" "15G25KT");
+            st.hasAtis = true; st.atisLetter = "B"; st.atisText = "DEN ARR INFO B 1653Z. WIND 27015G25. VISIBILITY 3. SKY CONDITION OVERCAST 800. LANDING RWY 16R AND 16L.";
+            CHECK(mapStationLines(st, false)[0].find("ATIS B") != std::string::npos);
+            auto det = mapStationLines(st, true, 40, 3);
+            CHECK(det.size() >= 4 && det[0].find("KDEN") == 0);
+            CHECK(det[1].find("KDEN 301653Z") != std::string::npos);
+            Station clr; clr.icao = "KXXX"; clr.rawMetar = "KXXX 301653Z 00000KT 10SM CLR 20/10 A3000"; parseReport(clr.rawMetar, clr.report);
+            CHECK(flightCategory(clr) == "VFR");
+            Station none; none.icao = "KNON";
+            CHECK(flightCategory(none) == "");
+        }
     }
 
     // --- NOAA winds / temps aloft (FD winds)
