@@ -128,6 +128,17 @@ int main() {
     XpWx clr = buildXp(st[1], cfg, now);
     CHECK(clr.cloudCount == 0 && !clr.fogLayerApplied);
     NEAR(clr.visM, cfg.clearVisM, 1); // 10 SM or more -> clear_vis_m (40 km), as before
+    {   // 8 SM (12874 m) is below 10 SM: exact, not "clear"
+        Station v8; v8.elevM = 100;
+        parseReport("KSEA 302153Z 04007KT 8SM -RA FEW007 BKN022 08/07 A2991", v8.report);
+        NEAR(buildXp(v8, cfg, now).visM, 8 * 1609.344, 5);
+        Station v9; v9.elevM = 100;
+        parseReport("EDDF 302153Z 04007KT 9999 FEW007 08/07 Q1015", v9.report);
+        NEAR(buildXp(v9, cfg, now).visM, cfg.clearVisM, 1);
+        Station v10; v10.elevM = 100;
+        parseReport("KSEA 302153Z 04007KT 10SM FEW007 08/07 A2991", v10.report);
+        NEAR(buildXp(v10, cfg, now).visM, cfg.clearVisM, 1);
+    }
     NEAR(clr.windMs, 10 * kKtToMs, 0.01);
 
     Station dfw;
@@ -135,6 +146,9 @@ int main() {
     parseReport("KDFW 301553Z 18015G30KT 3SM +TSRA BKN020CB OVC040 BKN150 BKN250 24/22 A2985", dfw.report);
     XpWx t = buildXp(dfw, cfg, now);
     CHECK(t.cloudCount == 3 && t.clouds[0].type == 3.0f); // 3 slots, lowest first
+    // layers never overlap: each top stays below the next layer's base
+    CHECK(t.clouds[0].topM < t.clouds[1].baseM && t.clouds[1].topM < t.clouds[2].baseM);
+    CHECK(t.clouds[0].topM > t.clouds[0].baseM && t.clouds[1].topM > t.clouds[1].baseM);
 
     // --- ATIS merge overrides wind/altimeter but keeps unspecified fields
     Station s = st[1];

@@ -126,7 +126,8 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     // Below 10 SM / 9999 the reported value is used exactly (e.g. 4SM = 6437 m). "10 SM or more" (10SM, 9999, CAVOK)
     // maps to clear_vis_m because those reports are a floor, not a measurement.
     double vis = r.hasVis ? r.visM : cfg.clearVisM;
-    if (r.cavok || (r.hasVis && vis >= 9999.0)) vis = cfg.clearVisM;
+    // 10 SM or more (16093 m) or the metric "9999" (10 km or more) means unlimited; 7, 8 and 9 SM are real values and stay exact.
+    if (r.cavok || (r.hasVis && (vis >= 16000.0 || (vis >= 9999.0 && vis <= 10000.5)))) vis = cfg.clearVisM;
     if (cfg.fogHaze) {
         // Fog must reduce visibility too, not only add a cloud layer.
         if (r.fog) vis = std::min(vis, 1000.0);
@@ -181,6 +182,12 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         else { c.type = 2.0f; thick = g.cover == CloudGroup::OVC ? 2200 : (g.cover == CloudGroup::BKN ? 1800 : 1000); }
         c.topM = (float)(c.baseM + thick);
         layers.push_back(c);
+    }
+    // Layers must not overlap: a lower layer whose top reaches into the one above it is shaded by it and renders dark.
+    // Keep a gap below the next layer's base (but never thinner than 250 m).
+    for (size_t i = 0; i + 1 < layers.size(); ++i) {
+        float limit = layers[i + 1].baseM - 100.0f;
+        if (layers[i].topM > limit) layers[i].topM = std::max(layers[i].baseM + 250.0f, limit);
     }
     if (fogSlot) {
         // slot 0 = ground fog (or empty); the two lowest real cloud layers follow in slots 1 and 2
