@@ -1,9 +1,13 @@
 #include "fetcher.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "geo.h"
 #include "http.h"
+#include "inflate.h"
+#include "json_mini.h"
+#include "png.h"
 #include "metar.h"
 #include "sources.h"
 #include "windsaloft.h"
@@ -130,6 +134,9 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     // 3) NOAA winds & temperatures aloft (FD winds), so the cruise levels follow real data too.
     if (cfg.useAloft) res.aloft = fetchAloft(rq, now, res.aloftNote);
 
+    // 4) Radar storm cells.
+    if (cfg.radar) res.radar = fetchRadar(rq, now);
+
     res.stations = std::move(keep);
     res.ok = true;
     if (res.stations.empty()) res.error = "no METARs within search radius";
@@ -196,6 +203,115 @@ std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_
         if (distNm(rq.lat, rq.lon, s.lat, s.lon) <= cfg.aloftRangeNm + cfg.searchNm + 60) out.push_back(std::move(s));
     }
     if (out.empty() && note.empty()) note = "no NOAA winds-aloft stations near this position (US/Pacific coverage only)";
+    return out;
+}
+
+} // namespace wx
+
+namespace wx {
+
+namespace {
+// Downloads, gunzips and decodes one MRMS product inside the window.
+bool loadMrms(const std::string& url, const GribWindow& win, GribField& f, std::string& err) {
+    std::string gz;
+    long status = 0;
+    if (!httpGet(url, gz, status, err, 60, 40u * 1024u * 1024u)) { err = "download failed (" + err + ")"; return false; }
+    std::vector<uint8_t> raw;
+    if (!gunzip(gz, raw, 400u * 1024u * 1024u)) { err = "bad gzip data"; return false; }
+    gz.clear();
+    gz.shrink_to_fit();
+    if (!decodeGrib2(raw.data(), raw.size(), win, f)) { err = f.error; return false; }
+    return true;
+}
+
+GribWindow windowFor(double lat, double lon, double rangeNm) {
+    GribWindow w;
+    double dLat = rangeNm / 60.0 + 0.1, dLon = rangeNm / (60.0 * std::max(0.2, std::cos(lat * 3.14159265358979 / 180.0))) + 0.1;
+    w.latMin = lat - dLat; w.latMax = lat + dLat;
+    w.lonMin = std::max(-180.0, lon - dLon); w.lonMax = std::min(180.0, lon + dLon);
+    return w;
+}
+} // namespace
+
+RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
+    const Config& cfg = rq.cfg;
+    RadarResult out;
+    out.attempted = true;
+    GribWindow win = windowFor(rq.lat, rq.lon, cfg.radarRangeNm);
+    std::string lastErr;
+    for (const std::string& region : mrmsRegionsFor(rq.lat, rq.lon)) {
+        const std::string name = region.empty() ? "CONUS" : region;
+        GribField refl;
+        if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) { lastErr = name + ": " + lastErr; continue; }
+        if (refl.refTime > 0 && now - refl.refTime > 30 * 60) {
+            lastErr = name + ": radar mosaic is " + std::to_string((now - refl.refTime) / 60) + " min old, ignoring";
+            continue;
+        }
+        GribField tops;
+        std::string topErr;
+        bool haveTops = false;
+        if (cfg.radarEchoTops) haveTops = loadMrms(mrmsUrl(region, "EchoTop_18"), win, tops, topErr);
+        out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg);
+        out.source = "NOAA MRMS (" + name + ")";
+        out.dataTime = refl.refTime;
+        if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
+        return out;
+    }
+    if (cfg.radarGlobal) {
+        RadarResult g = fetchRainViewer(rq, now);
+        if (g.ok || g.note.size()) return g;
+    }
+    out.ok = false;
+    out.note = lastErr.empty() ? std::string("no NOAA radar coverage here") + (cfg.radarGlobal ? "" : " (enable the global option for other regions)") : lastErr;
+    return out;
+}
+
+RadarResult Fetcher::fetchRainViewer(const FetchRequest& rq, std::time_t now) {
+    (void)now;
+    const Config& cfg = rq.cfg;
+    RadarResult out;
+    out.attempted = true;
+    out.source = "RainViewer (global, experimental)";
+    std::string body, err;
+    long status = 0;
+    if (!httpGet("https://api.rainviewer.com/public/weather-maps.json", body, status, err)) { out.note = "RainViewer index failed: " + err; return out; }
+    Json j;
+    if (!parseJson(body, j)) { out.note = "RainViewer index unreadable"; return out; }
+    std::string host = j.get("host") ? j.get("host")->asString() : "";
+    const Json* radar = j.get("radar");
+    const Json* past = radar ? radar->get("past") : nullptr;
+    if (host.empty() || !past || past->arr.empty()) { out.note = "RainViewer has no radar frames"; return out; }
+    const Json& frame = past->arr.back();
+    std::string path = frame.get("path") ? frame.get("path")->asString() : "";
+    if (path.empty()) { out.note = "RainViewer frame has no path"; return out; }
+    out.dataTime = frame.get("time") ? (std::time_t)frame.get("time")->asNum() : 0;
+
+    const int z = 6;
+    int x0, x1, y0, y1;
+    tileRange(rq.lat, rq.lon, cfg.radarRangeNm, z, x0, x1, y0, y1);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 16) { out.note = "radar range needs too many tiles"; return out; }
+    std::vector<TileImage> tiles;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            std::string url = host + path + "/256/" + std::to_string(z) + "/" + std::to_string(x) + "/" + std::to_string(y) + "/2/0_0.png";
+            std::string png, terr;
+            if (!httpGet(url, png, status, terr, 20, 2u * 1024u * 1024u)) continue;
+            PngImage im;
+            if (!decodePng((const uint8_t*)png.data(), png.size(), im, 1000000) || im.depth != 8 || im.channels != 4) continue;
+            TileImage t;
+            t.z = z; t.x = x; t.y = y; t.w = im.w; t.h = im.h; t.rgba = std::move(im.px);
+            tiles.push_back(std::move(t));
+        }
+    if (tiles.empty()) { out.note = "RainViewer tiles unavailable"; return out; }
+    GribWindow win = windowFor(rq.lat, rq.lon, cfg.radarRangeNm);
+    GribField f;
+    if (!tilesToField(tiles, win, f)) { out.note = "RainViewer tiles unusable: " + f.error; return out; }
+    std::string src = out.source;
+    std::time_t dt = out.dataTime;
+    out = buildRadarCells(f, nullptr, rq.lat, rq.lon, cfg);
+    out.source = src;
+    out.dataTime = dt;
+    out.note = "colour-decoded image tiles: intensities and tops are approximate";
     return out;
 }
 

@@ -39,6 +39,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "max_age_hours") c.maxAgeHours = d < 0.5 ? 0.5 : d;
         else if (k == "refetch_move_nm") c.refetchMoveNm = d < 5 ? 5 : d;
         else if (k == "fog_layer") c.fogLayer = toBool(v);
+        else if (k == "fog_haze") c.fogHaze = toBool(v);
         else if (k == "fog_top_agl_m") c.fogTopAglM = d < 10 ? 10 : d;
         else if (k == "normal_ceiling_ft") c.normalCeilingFt = (int)d;
         else if (k == "aloft_ceiling_ft") c.cruiseCeilingFt = (int)d;
@@ -48,6 +49,15 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "clear_vis_m") c.clearVisM = d < 10000 ? 10000 : d;
         else if (k == "vis_autocal") c.visAutocal = toBool(v);
         else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
+        else if (k == "radar") c.radar = toBool(v);
+        else if (k == "radar_global") c.radarGlobal = toBool(v);
+        else if (k == "radar_range_nm") c.radarRangeNm = d < 30 ? 30 : (d > 300 ? 300 : d);
+        else if (k == "radar_cell_nm") c.radarCellNm = d < 3 ? 3 : (d > 30 ? 30 : d);
+        else if (k == "radar_max_cells") c.radarMaxCells = (int)(d < 10 ? 10 : (d > 400 ? 400 : d));
+        else if (k == "radar_min_dbz") c.radarMinDbz = d < 5 ? 5 : (d > 45 ? 45 : d);
+        else if (k == "radar_rain_full_mmh") c.radarRainFullMmH = d < 5 ? 5 : d;
+        else if (k == "radar_turbulence") c.radarTurbulence = d < 0 ? 0 : (d > 2 ? 2 : d);
+        else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
     }
     return true;
 }
@@ -68,6 +78,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "max_age_hours = " << c.maxAgeHours << "\n"
       << "refetch_move_nm = " << c.refetchMoveNm << "\n"
       << "fog_layer = " << (c.fogLayer ? 1 : 0) << "\n"
+      << "fog_haze = " << (c.fogHaze ? 1 : 0) << "\n"
       << "fog_top_agl_m = " << c.fogTopAglM << "\n"
       << "normal_ceiling_ft = " << c.normalCeilingFt << "\n"
       << "aloft_ceiling_ft = " << c.cruiseCeilingFt << "\n"
@@ -76,7 +87,16 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "aloft_stations = " << c.aloftStations << "\n"
       << "clear_vis_m = " << c.clearVisM << "\n"
       << "vis_autocal = " << (c.visAutocal ? 1 : 0) << "\n"
-      << "vis_check_s = " << c.visCheckS << "\n";
+      << "vis_check_s = " << c.visCheckS << "\n"
+      << "radar = " << (c.radar ? 1 : 0) << "\n"
+      << "radar_global = " << (c.radarGlobal ? 1 : 0) << "\n"
+      << "radar_range_nm = " << c.radarRangeNm << "\n"
+      << "radar_cell_nm = " << c.radarCellNm << "\n"
+      << "radar_max_cells = " << c.radarMaxCells << "\n"
+      << "radar_min_dbz = " << c.radarMinDbz << "\n"
+      << "radar_rain_full_mmh = " << c.radarRainFullMmH << "\n"
+      << "radar_turbulence = " << c.radarTurbulence << "\n"
+      << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n";
     return true;
 }
 

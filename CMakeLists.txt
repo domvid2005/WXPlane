@@ -25,7 +25,8 @@ find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 
 set(WX_CORE_SOURCES
-  src/json_mini.cpp src/metar.cpp src/sources.cpp src/wxmodel.cpp src/windsaloft.cpp src/config.cpp)
+  src/json_mini.cpp src/metar.cpp src/sources.cpp src/wxmodel.cpp src/windsaloft.cpp src/config.cpp src/viewer.cpp
+  src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp)
 
 add_library(WXPlane MODULE
   ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/plugin.cpp)

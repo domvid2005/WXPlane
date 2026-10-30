@@ -16,7 +16,8 @@ struct Config {
     double maxAgeHours = 3;       // ignore older METARs
     double refetchMoveNm = 40;    // refresh early when the aircraft moves this far from the last fetch point
     bool fogLayer = true;         // render FG/BCFG/MIFG/VV as a ground-hugging stratus layer
-    double fogTopAglM = 120;      // depth of a full fog layer
+    double fogTopAglM = 200;      // depth of a full fog layer (thin layers shimmer when seen from above)
+    bool fogHaze = true;          // fog / mist / haze also cap visibility (and saturate the air for fog)
     int normalCeilingFt = 10000;  // reach of a report that has no aloft data (X-Plane default)
     int cruiseCeilingFt = 60000;  // reach of a report carrying winds/temps aloft (FL600)
     double aloftRangeNm = 250;    // use FD stations up to this far from each weather report
@@ -25,6 +26,16 @@ struct Config {
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
     bool visAutocal = true;       // compare what X-Plane reports with the METAR/ATIS and correct our input
     int visCheckS = 100;          // seconds after an update to run that comparison
+    // Radar storms (NOAA MRMS mosaic, optional global fallback)
+    bool radar = true;            // turn radar echoes into storm cells
+    bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
+    double radarRangeNm = 150;    // storms within this distance of the aircraft
+    double radarCellNm = 10;      // block size one storm record represents
+    int radarMaxCells = 120;      // cap on storm records handed to X-Plane
+    double radarMinDbz = 20;      // ignore weaker echoes
+    double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
+    double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
+    bool radarEchoTops = true;    // download MRMS echo tops for storm heights
 };
 
 bool loadConfig(const std::string& path, Config& cfg);

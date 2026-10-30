@@ -10,11 +10,15 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <ctime>
 #include <string>
+#include <vector>
 
 #include "XPLMDataAccess.h"
 #include "XPLMDefs.h"
+#include "XPLMDisplay.h"
+#include "XPLMGraphics.h"
 #include "XPLMMenus.h"
 #include "XPLMNavigation.h"
 #include "XPLMPlugin.h"
@@ -26,27 +30,29 @@
 #include "fetcher.h"
 #include "geo.h"
 #include "http.h"
+#include "viewer.h"
 #include "wxmodel.h"
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
-XPLMDataRef g_drLat = nullptr, g_drLon = nullptr, g_drLevels = nullptr;
+XPLMDataRef g_drLat = nullptr, g_drLon = nullptr, g_drLevels = nullptr, g_drAgl = nullptr;
 float g_levelsM[XPLM_NUM_TEMPERATURE_LAYERS];
 bool g_haveLevels = false;
 
 bool g_pluginEnabled = false;
+unsigned g_viewVersion = 1;     // bumped whenever new data is applied (METAR/ATIS window re-wraps on change)
 wx::FetchResult g_lastRes;      // last applied data, kept so a visibility correction can re-apply without a download
 bool g_haveLast = false;
 float g_visK = 1.0f;            // learned correction between what we send and what X-Plane ends up using
@@ -90,12 +96,23 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxEnabled, g_cfg.enabled ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxAtis, g_cfg.useAtis ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
 
 // Removes every record this plugin has set, handing control back to X-Plane's own weather.
+struct Rec {
+    XPLMWeatherInfo_t info;   // as sent, with age zeroed so unchanged data compares equal
+    bool airport = false;
+    std::string icao;
+    double lat = 0, lon = 0, elev = 0;
+};
+std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by station
+
 void eraseAll() {
     XPLMBeginWeatherUpdate();
     XPLMEndWeatherUpdate(0 /*not incremental: wipes our previous records*/, 1 /*immediately*/);
+    g_recs.clear();
     logf("plugin weather records removed");
 }
 
@@ -139,7 +156,7 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
         // A layer with coverage 0 is removed, which is what we want when the METAR reports clear skies.
         XPLMWeatherInfoClouds_t& c = info.cloud_layers[i];
-        if (i < x.cloudCount) {
+        if (x.clouds[i].coverage > 0) {
             c.cloud_type = x.clouds[i].type;
             c.coverage = x.clouds[i].coverage;
             c.alt_base = x.clouds[i].baseM;
@@ -172,22 +189,100 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_haveLevels = false;
     if (g_drLevels && XPLMGetDatavf(g_drLevels, nullptr, 0, 0) == XPLM_NUM_TEMPERATURE_LAYERS)
         g_haveLevels = XPLMGetDatavf(g_drLevels, g_levelsM, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
-    XPLMBeginWeatherUpdate();
+    // Only stations whose data changed are touched, and stations that left range are erased. Re-setting identical
+    // records makes X-Plane rebuild their cloud layers, which shows up as hitches, so unchanged ones are left alone.
+    const bool full = g_recs.empty() || !g_firstApplyDone;
+    struct Todo { std::string key; Rec rec; };
+    std::vector<Todo> todo;
+    std::map<std::string, bool> seen;
+    bool anyFog = false;
+    for (const auto& s : res.stations) anyFog = anyFog || wx::stationHasFog(s, g_cfg);
     for (const auto& s : res.stations) {
-        wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft);
+        wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
         fillInfo(info, x);
         if (x.fogLayerApplied) ++fogCount;
         if (x.aloft) ++aloftCount;
-        if (airportKnown(s)) XPLMSetWeatherAtAirport(s.icao.c_str(), &info);
-        else XPLMSetWeatherAtLocation(s.lat, s.lon, s.elevM, &info);
+        Rec r;
+        r.airport = airportKnown(s);
+        r.icao = s.icao; r.lat = s.lat; r.lon = s.lon; r.elev = s.elevM;
+        r.info = info;
+        r.info.age = 0.0f;
+        seen[s.icao] = true;
+        auto it = g_recs.find(s.icao);
+        if (!full && it != g_recs.end() && it->second.airport == r.airport && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0)
+            continue; // identical to what the sim already has
+        r.info.age = info.age; // keep the real age for the call itself
+        todo.push_back({s.icao, r});
     }
-    // Non-incremental: our previous set is replaced wholesale, so stale stations never linger.
-    XPLMEndWeatherUpdate(0, (res.immediate || !g_firstApplyDone) ? 1 : 0);
+    // Radar storm cells: the weather of the nearest station with the storm applied on top, as location records.
+    int stormCount = 0;
+    if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
+        for (const auto& c : res.radar.cells) {
+            const wx::Station* nearest = &res.stations[0];
+            double nd = 1e9;
+            for (const auto& s : res.stations) {
+                double d = wx::distNm(c.lat, c.lon, s.lat, s.lon);
+                if (d < nd) { nd = d; nearest = &s; }
+            }
+            wx::XpWx x = wx::buildXp(*nearest, g_cfg, now, &res.aloft, anyFog);
+            // A station's ground fog and low visibility are local; do not project them onto storms far from it.
+            if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
+            if (nd > 15.0 || x.visM < 5000.0f) x.visM = (float)g_cfg.clearVisM;
+            wx::applyStorm(x, c, g_cfg, nearest->elevM, c.lat);
+            XPLMWeatherInfo_t info;
+            fillInfo(info, x);
+            info.radius_nm = (float)std::max(6.0, g_cfg.radarCellNm * 0.9);
+            Rec r;
+            r.airport = false;
+            r.lat = c.lat; r.lon = c.lon; r.elev = nearest->elevM;
+            r.info = info;
+            r.info.age = 0.0f;
+            const std::string key = "radar:" + c.key;
+            seen[key] = true;
+            ++stormCount;
+            auto it = g_recs.find(key);
+            if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
+            r.info.age = info.age;
+            todo.push_back({key, r});
+        }
+    }
+    std::vector<std::string> gone;
+    if (!full)
+        for (const auto& kv : g_recs)
+            if (!seen.count(kv.first)) gone.push_back(kv.first);
+
+    if (full || !todo.empty() || !gone.empty()) {
+        XPLMBeginWeatherUpdate();
+        if (full) g_recs.clear();
+        for (auto& t : todo) {
+            if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &t.rec.info);
+            else XPLMSetWeatherAtLocation(t.rec.lat, t.rec.lon, t.rec.elev, &t.rec.info);
+            t.rec.info.age = 0.0f;
+            g_recs[t.key] = t.rec;
+        }
+        for (const auto& k : gone) {
+            const Rec& r = g_recs[k];
+            if (r.airport) XPLMEraseWeatherAtAirport(r.icao.c_str());
+            else XPLMEraseWeatherAtLocation(r.lat, r.lon);
+            g_recs.erase(k);
+        }
+        // First apply wipes anything left from before (non-incremental); later ones are incremental.
+        XPLMEndWeatherUpdate(full ? 0 : 1, (res.immediate || !g_firstApplyDone) ? 1 : 0);
+    }
+    logf("update: %zu stations, %d storm cells, %zu changed, %zu removed%s", res.stations.size(), stormCount, todo.size(), gone.size(), full ? " (full)" : "");
+    if (g_cfg.radar) {
+        if (res.radar.ok)
+            logf("radar: %s, %d echo blocks, %d cells applied%s%s", res.radar.source.c_str(), res.radar.echoBlocks, stormCount,
+                 res.radar.topsFromRadar ? ", echo tops from radar" : ", tops estimated", res.radar.note.empty() ? "" : (" (" + res.radar.note + ")").c_str());
+        else
+            logf("radar: none (%s)", res.radar.note.c_str());
+    }
     g_firstApplyDone = true;
     g_lastRes = res;
     g_haveLast = true;
+    ++g_viewVersion;
     if (fromFetch) g_calIter = 0;
     g_checkPending = g_cfg.visAutocal && !res.stations.empty();
     g_checkAt = Clock::now() + std::chrono::seconds(res.immediate ? std::min(15, g_cfg.visCheckS) : g_cfg.visCheckS);
@@ -204,11 +299,12 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     char l1[160], l2[160];
     std::string fogNote = fogCount ? ", fog at " + std::to_string(fogCount) : "";
     std::snprintf(l1, sizeof l1, "Updated %s: %d METAR, %d ATIS%s", t, res.metarCount, res.atisCount, fogNote.c_str());
+    std::string radarNote = !g_cfg.radar ? "Radar: off" : (res.radar.ok ? "Radar: " + std::to_string(stormCount) + " storm cells" : "Radar: " + (res.radar.note.empty() ? std::string("none") : res.radar.note));
     std::string aloftNote = g_cfg.useAloft ? (aloftCount ? "Winds aloft: " + std::to_string(res.aloft.size()) + " NOAA stations"
                                                           : "Winds aloft: " + (res.aloftNote.empty() ? std::string("none") : res.aloftNote))
                                            : "Winds aloft: off";
     if (!res.stations.empty())
-        std::snprintf(l2, sizeof l2, "%s | nearest %s %.0f nm", aloftNote.c_str(), res.stations[0].icao.c_str(), res.stations[0].distNm);
+        std::snprintf(l2, sizeof l2, "%s | %s | nearest %s %.0f nm", aloftNote.c_str(), radarNote.c_str(), res.stations[0].icao.c_str(), res.stations[0].distNm);
     else
         std::snprintf(l2, sizeof l2, "No stations in range");
     g_lastGoodStatus = l1;
@@ -226,6 +322,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
 // METAR/ATIS. If the sim does not honour our value (blending with its own data), correct our input and re-apply.
 void visibilityCheck() {
     if (!g_haveLast || g_lastRes.stations.empty()) return;
+    // Re-applying records makes X-Plane rebuild their cloud layers, which shows as flicker. The comparison is only
+    // meaningful near the ground anyway, so skip it (and any correction) while airborne.
+    if (g_drAgl && XPLMGetDataf(g_drAgl) > 1000.0f) return;
     double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
     const wx::Station* best = nullptr;
     double bestD = 1e9;
@@ -234,13 +333,20 @@ void visibilityCheck() {
         if (d < bestD) { bestD = d; best = &s; }
     }
     if (!best || bestD > 15.0) return; // only meaningful close to a station
-    wx::XpWx x = wx::buildXp(*best, g_cfg, std::time(nullptr), &g_lastRes.aloft);
+    bool anyFog = false;
+    for (const auto& st : g_lastRes.stations) anyFog = anyFog || wx::stationHasFog(st, g_cfg);
+    wx::XpWx x = wx::buildXp(*best, g_cfg, std::time(nullptr), &g_lastRes.aloft, anyFog);
     XPLMWeatherInfo_t info;
     std::memset(&info, 0, sizeof info);
     info.structSize = sizeof info;
     int detailed = XPLMGetWeatherAtLocation(best->lat, best->lon, best->elevM + 5.0, &info);
     logf("visibility check %s (%.0f nm away): report says %.0f m, we sent %.0f m, X-Plane is using %.0f m (correction %.2f, detailed=%d)",
          best->icao.c_str(), bestD, x.visM, std::max(50.0f, x.visM < 20000.0f ? x.visM * g_visK : x.visM), info.visibility, g_visK, detailed);
+    logf("  read-back cloud layers at %s:%s", best->icao.c_str(), "");
+    for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
+        logf("    layer %d: type %.1f coverage %.2f base %.0f m top %.0f m (we set: %s)", i, info.cloud_layers[i].cloud_type,
+             info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
+             x.clouds[i].coverage > 0 ? "coverage>0" : "none");
     if (!g_cfg.visAutocal || x.visM >= 20000.0f || info.visibility < 100.0f || g_calIter >= 4) return;
     double ratio = x.visM / info.visibility;
     if (std::fabs(ratio - 1.0) <= 0.15) return;
@@ -304,6 +410,129 @@ float flightLoop(float, float, int, void*) {
     return 1.0f;
 }
 
+// ---------------- "Show Local METAR/ATIS Data" window ----------------
+XPLMWindowID g_win = nullptr;
+int g_scroll = 0;                 // first visible wrapped line
+struct DrawLine { wx::LineKind kind; std::string text; };
+std::vector<DrawLine> g_wrapped;
+unsigned g_wrappedVersion = 0;
+int g_wrappedWidth = -1;
+
+void colorFor(wx::LineKind k, float* c) {
+    switch (k) {
+        case wx::LineKind::Title:   c[0] = 1.0f; c[1] = 1.0f; c[2] = 1.0f; break;
+        case wx::LineKind::Header:  c[0] = 0.55f; c[1] = 0.85f; c[2] = 1.0f; break;
+        case wx::LineKind::Metar:   c[0] = 0.85f; c[1] = 0.95f; c[2] = 0.7f; break;
+        case wx::LineKind::Atis:    c[0] = 1.0f; c[1] = 0.85f; c[2] = 0.5f; break;
+        case wx::LineKind::Applied: c[0] = 0.75f; c[1] = 0.75f; c[2] = 0.75f; break;
+        default:                    c[0] = 0.9f; c[1] = 0.9f; c[2] = 0.9f; break;
+    }
+}
+
+// Word wrap using the real font width so nothing runs off the window edge.
+void wrapPx(const std::string& text, wx::LineKind kind, int widthPx, std::vector<DrawLine>& out) {
+    if (text.empty()) { out.push_back({kind, ""}); return; }
+    std::string line;
+    size_t i = 0;
+    while (i < text.size()) {
+        size_t j = text.find(' ', i);
+        if (j == std::string::npos) j = text.size();
+        std::string word = text.substr(i, j - i);
+        std::string trial = line.empty() ? word : line + " " + word;
+        if (!line.empty() && XPLMMeasureString(xplmFont_Proportional, trial.c_str(), (int)trial.size()) > widthPx) {
+            out.push_back({kind, line});
+            line = "    " + word;   // continuation lines are indented
+        } else {
+            line = trial;
+        }
+        // a single token longer than the window: hard split
+        while (line.size() > 8 && XPLMMeasureString(xplmFont_Proportional, line.c_str(), (int)line.size()) > widthPx) {
+            size_t cut = line.size();
+            while (cut > 4 && XPLMMeasureString(xplmFont_Proportional, line.c_str(), (int)cut) > widthPx) --cut;
+            out.push_back({kind, line.substr(0, cut)});
+            line = "    " + line.substr(cut);
+        }
+        i = j + 1;
+    }
+    out.push_back({kind, line});
+}
+
+void rewrap(int widthPx) {
+    if (g_wrappedVersion == g_viewVersion && g_wrappedWidth == widthPx) return;
+    g_wrapped.clear();
+    for (const auto& l : wx::buildViewLines(g_lastRes, g_haveLast, g_cfg, std::time(nullptr))) wrapPx(l.text, l.kind, widthPx, g_wrapped);
+    g_wrappedVersion = g_viewVersion;
+    g_wrappedWidth = widthPx;
+}
+
+void drawWin(XPLMWindowID w, void*) {
+    int l, t, r, b;
+    XPLMGetWindowGeometry(w, &l, &t, &r, &b);
+    int cw = 0, ch = 0;
+    XPLMGetFontDimensions(xplmFont_Proportional, &cw, &ch, nullptr);
+    int lineH = ch + 3;
+    int x = l + 10, widthPx = (r - l) - 28;
+    rewrap(widthPx);
+    int rows = ((t - b) - 20) / lineH;
+    if (rows < 1) rows = 1;
+    int maxScroll = std::max(0, (int)g_wrapped.size() - rows);
+    g_scroll = std::max(0, std::min(g_scroll, maxScroll));
+    int y = t - 8 - ch;
+    for (int i = g_scroll; i < (int)g_wrapped.size() && i < g_scroll + rows; ++i, y -= lineH) {
+        float c[3];
+        colorFor(g_wrapped[(size_t)i].kind, c);
+        std::string s = g_wrapped[(size_t)i].text;
+        XPLMDrawString(c, x, y, &s[0], nullptr, xplmFont_Proportional);
+    }
+    if (maxScroll > 0) {   // slim scroll indicator on the right edge
+        int track = (t - b) - 20;
+        int barH = std::max(12, track * rows / (int)g_wrapped.size());
+        int barTop = t - 10 - (track - barH) * g_scroll / maxScroll;
+        XPLMDrawTranslucentDarkBox(r - 12, barTop, r - 8, barTop - barH);
+    }
+}
+
+int clickWin(XPLMWindowID, int, int, XPLMMouseStatus, void*) { return 1; }
+void keyWin(XPLMWindowID, char, XPLMKeyFlags, char, void*, int) {}
+XPLMCursorStatus cursorWin(XPLMWindowID, int, int, void*) { return xplm_CursorDefault; }
+int wheelWin(XPLMWindowID, int, int, int wheel, int clicks, void*) {
+    if (wheel == 0) g_scroll -= clicks * 3;
+    return 1;
+}
+
+void showWindow() {
+    ++g_viewVersion;   // always show fresh data when opened
+    if (!g_win) {
+        int sl, st, sr, sb;
+        XPLMGetScreenBoundsGlobal(&sl, &st, &sr, &sb);
+        XPLMCreateWindow_t p;
+        std::memset(&p, 0, sizeof p);
+        p.structSize = sizeof p;
+        p.left = sl + 60; p.right = std::min(sr - 60, sl + 60 + 860);
+        p.top = st - 80;  p.bottom = std::max(sb + 80, st - 80 - 620);
+        p.visible = 1;
+        p.drawWindowFunc = drawWin;
+        p.handleMouseClickFunc = clickWin;
+        p.handleRightClickFunc = clickWin;
+        p.handleKeyFunc = keyWin;
+        p.handleCursorFunc = cursorWin;
+        p.handleMouseWheelFunc = wheelWin;
+        p.refcon = nullptr;
+        p.decorateAsFloatingWindow = xplm_WindowDecorationRoundRectangle;
+        p.layer = xplm_WindowLayerFloatingWindows;
+        g_win = XPLMCreateWindowEx(&p);
+        if (g_win) {
+            XPLMSetWindowTitle(g_win, "WXPlane - local METAR / ATIS data");
+            XPLMSetWindowResizingLimits(g_win, 360, 200, 4000, 4000);
+        }
+    }
+    if (g_win) {
+        g_scroll = 0;
+        XPLMSetWindowIsVisible(g_win, 1);
+        XPLMBringWindowToFront(g_win);
+    }
+}
+
 void menuHandler(void*, void* item) {
     switch ((int)(intptr_t)item) {
         case kEnabled:
@@ -319,6 +548,17 @@ void menuHandler(void*, void* item) {
         case kAtis:
             g_cfg.useAtis = !g_cfg.useAtis;
             if (g_cfg.enabled) g_manualRefresh = true;
+            break;
+        case kShow:
+            showWindow();
+            break;
+        case kRadar:
+            g_cfg.radar = !g_cfg.radar;
+            if (g_cfg.enabled) g_manualRefresh = true;
+            break;
+        case kRadarGlobal:
+            g_cfg.radarGlobal = !g_cfg.radarGlobal;
+            if (g_cfg.enabled && g_cfg.radar) g_manualRefresh = true;
             break;
         case kAloft:
             g_cfg.useAloft = !g_cfg.useAloft;
@@ -339,18 +579,27 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_cfgPath = configPath();
     wx::loadConfig(g_cfgPath, g_cfg);
     wx::saveConfig(g_cfgPath, g_cfg); // writes defaults on first run so the file can be edited
+    {   // optional colour table for the experimental global radar: lines "r,g,b,dBZ" next to the config file
+        std::string pal = g_cfgPath.substr(0, g_cfgPath.find_last_of("/\\") + 1) + "WXPlane_radar_palette.csv";
+        int n = wx::loadRainViewerPalette(pal);
+        if (n > 0) logf("loaded %d radar palette entries from %s", n, pal.c_str());
+    }
 
     g_drLat = XPLMFindDataRef("sim/flightmodel/position/latitude");
     g_drLon = XPLMFindDataRef("sim/flightmodel/position/longitude");
     g_drLevels = XPLMFindDataRef("sim/weather/region/atmosphere_alt_levels_m");
+    g_drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
 
     int sub = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "WXPlane", nullptr, 0);
     g_menu = XPLMCreateMenu("WXPlane", XPLMFindPluginsMenu(), sub, menuHandler, nullptr);
     g_idxEnabled = XPLMAppendMenuItem(g_menu, "Enabled", (void*)(intptr_t)kEnabled, 0);
     g_idxRefresh = XPLMAppendMenuItem(g_menu, "Refresh Weather Data Now", (void*)(intptr_t)kRefresh, 0);
+    g_idxShow = XPLMAppendMenuItem(g_menu, "Show Local METAR/ATIS Data...", (void*)(intptr_t)kShow, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxAtis = XPLMAppendMenuItem(g_menu, "Use ATIS", (void*)(intptr_t)kAtis, 0);
     g_idxAloft = XPLMAppendMenuItem(g_menu, "Use NOAA Winds/Temps Aloft", (void*)(intptr_t)kAloft, 0);
+    g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
+    g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);
@@ -361,6 +610,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
 }
 
 PLUGIN_API void XPluginStop(void) {
+    if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
     if (g_menu) { XPLMDestroyMenu(g_menu); g_menu = nullptr; }
 }
 

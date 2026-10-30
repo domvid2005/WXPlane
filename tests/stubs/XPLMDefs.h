@@ -3,3 +3,4 @@
 #define PLUGIN_API extern "C" __attribute__((visibility("default")))
 typedef int XPLMPluginID;
 typedef void* XPLMDataRef;
+typedef int XPLMKeyFlags;

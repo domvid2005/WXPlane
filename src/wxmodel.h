@@ -56,7 +56,17 @@ struct XpWx {
 // Temperature from a profile at an altitude (linear between points, constant outside).
 float profileTemp(const std::vector<std::pair<float, float>>& p, float altM);
 
-XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft = nullptr);
+// fogSlot: reserve cloud slot 0 for ground fog at EVERY station (empty where there is none). X-Plane blends cloud
+// layers between neighbouring reports by slot number, so fog must always sit in the same slot or it gets mixed
+// with unrelated clouds as you fly past (this shows up as flicker).
+XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft = nullptr,
+             bool fogSlot = false);
+
+// True if this station's report calls for a fog layer under the given config.
+bool stationHasFog(const Station& st, const Config& cfg);
+
+// One-line human-readable summary of what is applied for a station (used by the METAR/ATIS window).
+std::string describeXp(const XpWx& x, double elevM);
 
 // ATIS values override the METAR where the ATIS actually provides them.
 void mergeAtis(Station& st, const Report& atis, const std::string& atisText);

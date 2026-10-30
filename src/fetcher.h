@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "config.h"
+#include "radar.h"
 #include "wxmodel.h"
 
 namespace wx {
@@ -27,6 +28,7 @@ struct FetchResult {
     int atisCount = 0;
     std::vector<AloftStation> aloft; // FD stations with coordinates, near the aircraft
     std::string aloftNote;           // why winds aloft are missing, if they are
+    RadarResult radar;               // storm cells from radar (MRMS mosaic or experimental global tiles)
     double centerLat = 0, centerLon = 0;
     bool immediate = false;
     std::time_t fetchedAt = 0;
@@ -44,6 +46,8 @@ private:
     void run();
     FetchResult fetch(const FetchRequest& r);
     std::vector<AloftStation> fetchAloft(const FetchRequest& r, std::time_t now, std::string& note);
+    RadarResult fetchRadar(const FetchRequest& r, std::time_t now);
+    RadarResult fetchRainViewer(const FetchRequest& r, std::time_t now);
 
     std::thread th_;
     std::mutex m_;

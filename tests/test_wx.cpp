@@ -5,12 +5,15 @@
 
 #include "../src/json_mini.h"
 #include "../src/metar.h"
+#include "../src/radar.h"
 #include "../src/sources.h"
+#include "../src/viewer.h"
 #include "../src/windsaloft.h"
 #include "../src/wxmodel.h"
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(c) do { if (c) ++g_pass; else { ++g_fail; std::printf("FAIL line %d: %s\n", __LINE__, #c); } } while (0)
+static bool nr(double a, double b, double t) { return std::fabs(a - b) <= t; }
 #define NEAR(a, b, t) CHECK(std::fabs((double)(a) - (double)(b)) <= (t))
 
 using namespace wx;
@@ -117,8 +120,8 @@ int main() {
     XpWx x = buildXp(st[0], cfg, now);
     CHECK(x.fogLayerApplied && x.cloudCount == 1);
     CHECK(x.clouds[0].type == 1.0f && x.clouds[0].coverage == 1.0f);
-    NEAR(x.clouds[0].baseM, 5, 0.1);
-    NEAR(x.clouds[0].topM, 3 + 0.3048 * 200, 0.1); // VV 200 ft sets the fog depth
+    NEAR(x.clouds[0].baseM, 3, 0.1);                 // starts at the field elevation
+    NEAR(x.clouds[0].topM, 3 + 120, 0.1); // VV 200 ft (61 m) is below the 120 m minimum, so 120 m
     NEAR(x.visM, 402.3, 1);
     NEAR(x.qnhPa, 3001 / 100.0 * 33.8639 * 100, 30);
     CHECK(x.hasWind && x.windMs == 0);
@@ -160,6 +163,171 @@ int main() {
         CHECK(ar.hasVis && ar.mist);
         mergeAtis(v, ar, "x");
         NEAR(buildXp(v, cfg, now).visM, 4 * kSmToM, 1);
+    }
+
+    // --- fog adds haze: visibility capped, air saturated, layer starts at the ground and is not razor-thin
+    {
+        Station f; f.elevM = 1655;
+        parseReport("KDEN 301553Z 18008KT 9999 BCFG FEW008 08/05 A3015", f.report);
+        XpWx a = buildXp(f, cfg, now);
+        NEAR(a.visM, 3000, 1);                                 // patchy fog caps a "clear" 9999
+        CHECK(a.hasDewp && a.dewpC == a.tempC);                // saturated
+        CHECK(a.fogLayerApplied && a.clouds[0].baseM == 1655 && a.clouds[0].topM - a.clouds[0].baseM >= 100);
+        parseReport("KDEN 301553Z 00000KT 1/4SM FG VV002 05/05 A3015", f.report);
+        CHECK(buildXp(f, cfg, now).visM < 450);
+        parseReport("KDEN 301553Z 00000KT 5SM BR 08/07 A3015", f.report);
+        NEAR(buildXp(f, cfg, now).visM, 5 * kSmToM, 1);        // mist / haze keep the reported value
+        parseReport("KDEN 301553Z 00000KT 6SM HZ 25/05 A3015", f.report);
+        NEAR(buildXp(f, cfg, now).visM, 6 * kSmToM, 1);
+        parseReport("KDEN 301553Z 00000KT 3/8SM FG OVC001 05/05 A3015", f.report);
+        NEAR(buildXp(f, cfg, now).visM, 0.375 * kSmToM, 2);     // never raises a lower reported value
+        parseReport("KDEN 301553Z 00000KT 2SM FG OVC001 05/05 A3015", f.report);
+        NEAR(buildXp(f, cfg, now).visM, 1000, 1);               // FG with a larger number is inconsistent -> 1 km
+        Config nohaze = cfg; nohaze.fogHaze = false;
+        parseReport("KDEN 301553Z 18008KT 9999 BCFG 08/05 A3015", f.report);
+        NEAR(buildXp(f, nohaze, now).visM, 40000, 1);
+    }
+
+    // --- fog slot: slot 0 is always fog (or empty) when any station has fog, so neighbours blend fog-with-fog
+    {
+        Station fogS, clearS;
+        fogS.elevM = clearS.elevM = 100;
+        parseReport("KAAA 301553Z 00000KT 1/4SM FG OVC001 08/08 A3010", fogS.report);
+        parseReport("KBBB 301553Z 18010KT 10SM FEW030 BKN080 15/05 A3010", clearS.report);
+        CHECK(stationHasFog(fogS, cfg) && !stationHasFog(clearS, cfg));
+        XpWx f = buildXp(fogS, cfg, now, nullptr, true), c = buildXp(clearS, cfg, now, nullptr, true);
+        CHECK(f.clouds[0].type == 1.0f && f.clouds[0].coverage == 1.0f && f.clouds[0].topM - f.clouds[0].baseM >= 120);
+        CHECK(c.clouds[0].coverage == 0);                          // reserved, empty
+        CHECK(c.clouds[1].coverage > 0 && c.clouds[2].coverage > 0 && c.cloudCount == 2);
+        CHECK(f.clouds[1].coverage > 0 && f.clouds[2].coverage == 0);  // OVC001 in slot 1
+        XpWx c2 = buildXp(clearS, cfg, now, nullptr, false);       // no fog anywhere: normal packing, nothing reserved
+        CHECK(c2.clouds[0].coverage > 0 && c2.cloudCount == 2);
+        CHECK(describeXp(f, 100).find("FOG stratus") != std::string::npos);
+        CHECK(describeXp(c, 100).find("vis 40000 m") != std::string::npos);
+    }
+
+    // --- radar
+    {
+        CHECK(nr(rateFromDbz(20), 0.65, 0.05) && nr(rateFromDbz(40), 11.5, 0.8) && rateFromDbz(50) > 50 && rateFromDbz(50) < 75);
+        CHECK(rateFromDbz(2) == 0 && rateFromDbz(80) <= 200);
+        CHECK(nr(tropopauseKm(0), 17, 0.01) && nr(tropopauseKm(35), 11.05, 0.01) && nr(tropopauseKm(80), 9, 0.01));
+        CHECK(nr(estimateTopM(55, 35), 11050, 1) && estimateTopM(25, 35) > 3000 && estimateTopM(25, 35) < 5000);
+        CHECK(mrmsRegionsFor(39, -98).size() == 1 && mrmsRegionsFor(39, -98)[0].empty());
+        CHECK(mrmsRegionsFor(21, -157)[0] == "HAWAII" && mrmsRegionsFor(61, -150)[0] == "ALASKA" && mrmsRegionsFor(18, -66)[0] == "CARIB");
+        CHECK(mrmsRegionsFor(13.5, 144.8)[0] == "GUAM" && mrmsRegionsFor(50, 8).empty());
+        CHECK(mrmsUrl("", "EchoTop_18") == "https://mrms.ncep.noaa.gov/2D/EchoTop_18/MRMS_EchoTop_18.latest.grib2.gz");
+        CHECK(mrmsUrl("GUAM", "X") == "https://mrms.ncep.noaa.gov/2D/GUAM/X/MRMS_X.latest.grib2.gz");
+
+        // synthetic mosaic: 100 x 100 pixels (1 x 1 degree) with a 50 dBZ core and a weak 25 dBZ patch, missing codes elsewhere
+        GribField refl, tops;
+        refl.ni = refl.nj = tops.ni = tops.nj = 100;
+        refl.lat0 = tops.lat0 = 38.495; refl.lon0 = tops.lon0 = -98.495;
+        refl.dLat = refl.dLon = tops.dLat = tops.dLon = 0.01;
+        refl.v.assign(10000, -99.0f); tops.v.assign(10000, -3.0f);
+        for (int j = 40; j < 60; ++j) for (int i = 40; i < 60; ++i) { refl.v[(size_t)j * 100 + i] = 50.0f; tops.v[(size_t)j * 100 + i] = 12.0f; }
+        for (int j = 5; j < 15; ++j) for (int i = 5; i < 15; ++i) refl.v[(size_t)j * 100 + i] = 25.0f;
+        for (int j = 80; j < 90; ++j) for (int i = 80; i < 90; ++i) refl.v[(size_t)j * 100 + i] = 12.0f;   // below threshold
+        Config rc;
+        rc.radarCellNm = 10; rc.radarRangeNm = 100; rc.radarMaxCells = 100; rc.radarMinDbz = 20;
+        RadarResult rr = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
+        CHECK(rr.ok && rr.topsFromRadar && rr.cells.size() >= 3 && rr.cells.size() <= 12);
+        float maxD = 0, maxTop = 0; int weak = 0;
+        for (auto& c : rr.cells) { maxD = std::max(maxD, c.dbz); maxTop = std::max(maxTop, c.topM); if (c.dbz < 30) { ++weak; CHECK(!c.topKnown && c.topM > 3000); } CHECK(c.rateMmH > 0 && !c.key.empty()); }
+        CHECK(nr(maxD, 50, 0.01) && nr(maxTop, 12000, 1) && weak >= 1);
+        CHECK(rr.cells[0].dbz > 40);                                 // strong and close sorts first
+        // keys are tied to the block grid, not to the aircraft position
+        RadarResult rr2 = buildRadarCells(refl, &tops, 38.1, -98.1, rc);
+        std::string k1, k2; for (auto& c : rr.cells) if (c.dbz > 40) k1 += c.key + ";"; for (auto& c : rr2.cells) if (c.dbz > 40) k2 += c.key + ";";
+        CHECK(!k1.empty() && k1 == k2);
+        rc.radarMaxCells = 2; RadarResult rr3 = buildRadarCells(refl, nullptr, 38.0, -98.0, rc);
+        CHECK(rr3.cells.size() == 2 && rr3.echoBlocks >= 3 && !rr3.topsFromRadar && rr3.cells[0].topM > 3000 && !rr3.cells[0].topKnown);
+        rc.radarMaxCells = 100; rc.radarRangeNm = 20; RadarResult rr4 = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
+        CHECK(rr4.cells.size() < rr.cells.size());                   // range limit applies
+        rc.radarRangeNm = 100; rc.radarMinDbz = 40; RadarResult rr5 = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
+        for (auto& c : rr5.cells) CHECK(c.dbz >= 40);
+
+        // storm applied on a clear station
+        Station cs; cs.elevM = 400;
+        parseReport("KCCC 301553Z 18010KT 10SM FEW040 BKN090 25/10 A3010", cs.report);
+        Config sc;
+        XpWx base = buildXp(cs, sc, now, nullptr, true);
+        RadarCell cell; cell.lat = 38; cell.lon = -98; cell.dbz = 52; cell.frac = 1; cell.topKnown = true; cell.topM = 13000; cell.rateMmH = rateFromDbz(52);
+        XpWx st = base;
+        applyStorm(st, cell, sc, 400, 38);
+        CHECK(st.clouds[2].coverage > 0.95f && st.clouds[2].type == 3.0f && nr(st.clouds[2].topM, 13000, 1) && st.clouds[2].baseM < 1500);
+        CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= 13000 / 0.3048 - 1);
+        CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
+        CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
+        XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
+        applyStorm(w2, cell, sc, 400, 38);
+        CHECK(w2.clouds[2].type < 1.5f && w2.clouds[2].coverage < 0.7f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
+        XpWx w3 = base; cell.topM = 99000; cell.dbz = 45; cell.topKnown = true; applyStorm(w3, cell, sc, 400, 38);
+        CHECK(w3.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1);   // absurd tops are clamped
+        XpWx w4 = base; sc.radarTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);
+        CHECK(w4.turbulence == 0);
+
+        // RainViewer-style tiles (z=6): one tile around 35N 97W with a dark blob
+        int x0, x1, y0, y1;
+        tileRange(35.0, -97.0, 100, 6, x0, x1, y0, y1);
+        CHECK(x0 <= x1 && y0 <= y1 && (x1 - x0 + 1) * (y1 - y0 + 1) <= 4);
+        TileImage t; t.z = 6; t.x = (int)std::floor((-97.0 + 180.0) / 360.0 * 64); t.w = t.h = 256;
+        { double r = 35.0 * 3.14159265358979 / 180; t.y = (int)std::floor((1.0 - std::log(std::tan(r) + 1.0 / std::cos(r)) / 3.14159265358979) / 2.0 * 64); }
+        t.rgba.assign(256 * 256 * 4, 0);
+        double fx = (-97.0 + 180.0) / 360.0 * 64, fy; { double r = 35.0 * 3.14159265358979 / 180; fy = (1.0 - std::log(std::tan(r) + 1.0 / std::cos(r)) / 3.14159265358979) / 2.0 * 64; }
+        int cx = (int)((fx - t.x) * 256), cy = (int)((fy - t.y) * 256);
+        for (int dy = -6; dy <= 6; ++dy) for (int dx = -6; dx <= 6; ++dx) { uint8_t* p = &t.rgba[((size_t)(cy + dy) * 256 + (size_t)(cx + dx)) * 4]; p[0] = 20; p[1] = 20; p[2] = 90; p[3] = 255; }
+        GribWindow gw; gw.latMin = 34; gw.latMax = 36; gw.lonMin = -98; gw.lonMax = -96;
+        GribField tf;
+        CHECK(tilesToField({t}, gw, tf) && tf.valid());
+        CHECK(tf.at(35.0, -97.0) > 30 && tf.at(34.2, -97.9) < -50);   // blob found at the right place, elsewhere empty
+        CHECK(dbzFromRainViewerPixel(0, 0, 0, 0) < -50 && dbzFromRainViewerPixel(20, 20, 90, 255) > dbzFromRainViewerPixel(200, 220, 255, 255));
+        std::FILE* pf = std::fopen("wx_pal_test.csv", "w");
+        std::fputs("# r,g,b,dbz\n200,220,255,15\n20,20,90,45\n", pf); std::fclose(pf);
+        CHECK(loadRainViewerPalette("wx_pal_test.csv") == 2);
+        CHECK(dbzFromRainViewerPixel(22, 18, 95, 255) == 45 && dbzFromRainViewerPixel(198, 221, 250, 255) == 15 && dbzFromRainViewerPixel(0, 255, 0, 255) < -50);
+        loadRainViewerPalette("/nonexistent");                         // unreadable file leaves the palette alone
+        CHECK(dbzFromRainViewerPixel(22, 18, 95, 255) == 45);
+
+        // viewer text
+        FetchResult fr; fr.fetchedAt = now; fr.radar = rr; fr.radar.source = "NOAA MRMS (CONUS)"; fr.radar.dataTime = now - 240;
+        Station vs; vs.icao = "KVVV"; vs.rawMetar = "KVVV 301553Z 00000KT 10SM CLR 20/10 A3010"; parseReport(vs.rawMetar, vs.report); fr.stations = {vs};
+        auto lines = buildViewLines(fr, true, sc, now);
+        std::string all; for (auto& l : lines) all += l.text + "\n";
+        CHECK(all.find("Radar: NOAA MRMS (CONUS)") != std::string::npos && all.find("4 min old") != std::string::npos && all.find("dBZ") != std::string::npos);
+        fr.radar = RadarResult(); fr.radar.note = "no NOAA radar coverage here";
+        lines = buildViewLines(fr, true, sc, now);
+        all.clear(); for (auto& l : lines) all += l.text + "\n";
+        CHECK(all.find("Radar: none") != std::string::npos && all.find("no NOAA radar coverage here") != std::string::npos);
+        sc.radar = false; lines = buildViewLines(fr, true, sc, now);
+        all.clear(); for (auto& l : lines) all += l.text + "\n";
+        CHECK(all.find("Radar: off") != std::string::npos);
+    }
+
+    // --- METAR/ATIS window text
+    {
+        FetchResult fr;
+        fr.fetchedAt = now;
+        Station a, b;
+        a.icao = "KAAA"; a.elevM = 100; a.distNm = 4; a.rawMetar = "KAAA 301553Z 00000KT 1/4SM FG OVC001 08/08 A3010";
+        parseReport(a.rawMetar, a.report);
+        b.icao = "KBBB"; b.elevM = 50; b.distNm = 20; b.rawMetar = "KBBB 301553Z 18010KT 10SM FEW030 15/05 A3010";
+        parseReport(b.rawMetar, b.report);
+        b.hasAtis = true; b.atisLetter = "C"; b.atisText = "KBBB ATIS INFO C 1553Z. 18010KT 10SM FEW030 A3010.";
+        fr.stations = {a, b};
+        fr.atisCount = 1;
+        AloftStation fd; fd.id = "ABI"; fd.located = true; fr.aloft.push_back(fd);
+        auto v = buildViewLines(fr, true, cfg, now);
+        std::string all; for (auto& l : v) all += l.text + "\n";
+        CHECK(all.find("KAAA") != std::string::npos && all.find("KBBB") != std::string::npos);
+        CHECK(all.find("METAR  KAAA 301553Z") != std::string::npos);
+        CHECK(all.find("ATIS   KBBB ATIS INFO C") != std::string::npos);
+        CHECK(all.find("ATIS C") != std::string::npos);                 // letter in the header
+        CHECK(all.find("ABI") != std::string::npos);
+        CHECK(all.find("ATIS   KAAA") == std::string::npos);            // no ATIS block for a station without one
+        CHECK(buildViewLines(fr, false, cfg, now).size() == 2);         // nothing downloaded yet
+        auto w = wrapText("aaaa bbbb cccc dddd eeee ffff", 10);
+        CHECK(w.size() == 3 && w[0] == "aaaa bbbb");
+        CHECK(wrapText("", 10).size() == 1);
     }
 
     // --- NOAA winds / temps aloft (FD winds)

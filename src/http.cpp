@@ -5,10 +5,11 @@
 namespace wx {
 
 namespace {
+struct Sink { std::string* s; size_t max; };
 size_t sink(char* ptr, size_t size, size_t nmemb, void* ud) {
-    auto* s = static_cast<std::string*>(ud);
-    if (s->size() + size * nmemb > 8u * 1024u * 1024u) return 0; // refuse absurdly large replies
-    s->append(ptr, size * nmemb);
+    auto* k = static_cast<Sink*>(ud);
+    if (k->s->size() + size * nmemb > k->max) return 0; // refuse absurdly large replies
+    k->s->append(ptr, size * nmemb);
     return size * nmemb;
 }
 } // namespace
@@ -16,15 +17,16 @@ size_t sink(char* ptr, size_t size, size_t nmemb, void* ud) {
 void httpGlobalInit() { curl_global_init(CURL_GLOBAL_DEFAULT); }
 void httpGlobalCleanup() { curl_global_cleanup(); }
 
-bool httpGet(const std::string& url, std::string& body, long& status, std::string& error, long timeoutSec) {
+bool httpGet(const std::string& url, std::string& body, long& status, std::string& error, long timeoutSec, size_t maxBytes) {
     body.clear();
     status = 0;
+    Sink k{&body, maxBytes};
     CURL* c = curl_easy_init();
     if (!c) { error = "curl init failed"; return false; }
     char errbuf[CURL_ERROR_SIZE] = {0};
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, sink);
-    curl_easy_setopt(c, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &k);
     curl_easy_setopt(c, CURLOPT_ERRORBUFFER, errbuf);
     curl_easy_setopt(c, CURLOPT_USERAGENT, "XPlane12-WXPlane/1.0 (+x-plane plugin)");
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);

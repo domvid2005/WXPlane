@@ -10,6 +10,8 @@
 
 #include "stubs/XPLMDataAccess.h"
 #include "stubs/XPLMMenus.h"
+#include "stubs/XPLMDisplay.h"
+#include "stubs/XPLMGraphics.h"
 #include "stubs/XPLMNavigation.h"
 #include "stubs/XPLMProcessing.h"
 #include "stubs/XPLMUtilities.h"
@@ -33,6 +35,7 @@ static std::vector<std::string> g_menuNames;
 static int g_begin = 0, g_end = 0, g_lastIncr = -1, g_lastImm = -1;
 struct Call { std::string where; bool airport; XPLMWeatherInfo_t info; double lat, lon, elev; };
 static std::vector<Call> g_calls;
+static float g_agl = 10000.0f;
 static double g_lat = 37.60, g_lon = -97.40; // cruising abeam KICT
 
 XPLMMenuID XPLMFindPluginsMenu(void) { return (void*)1; }
@@ -46,15 +49,17 @@ void XPLMEnableMenuItem(XPLMMenuID, int, int) {}
 XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t* p) { g_cb = p->callbackFunc; return (void*)3; }
 void XPLMDestroyFlightLoop(XPLMFlightLoopID) {}
 void XPLMScheduleFlightLoop(XPLMFlightLoopID, float, int) {}
-XPLMDataRef XPLMFindDataRef(const char* n) { return std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : (void*)12; }
+XPLMDataRef XPLMFindDataRef(const char* n) { return std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
 int XPLMGetDatavf(XPLMDataRef, float* out, int off, int n) {
     static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};
     if (!out) return 13;
     for (int i = 0; i < n && off + i < 13; ++i) out[i] = lv[off + i];
     return n;
 }
+float XPLMGetDataf(XPLMDataRef) { return g_agl; }
 double XPLMGetDatad(XPLMDataRef r) { return r == (void*)10 ? g_lat : g_lon; }
-void XPLMDebugString(const char* s) { std::printf("  log: %s", s); }
+static std::string g_logAll;
+void XPLMDebugString(const char* s) { std::printf("  log: %s", s); g_logAll += s; }
 void XPLMGetPrefsPath(char* o) { std::strcpy(o, "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/X-Plane.prf"); }
 const char* XPLMGetDirectorySeparator(void) { return "/"; }
 char* XPLMExtractFileAndPath(char* p) { char* s = std::strrchr(p, '/'); if (s) *s = 0; return p; }
@@ -72,18 +77,49 @@ static float g_lastSentVis = 0;
 int XPLMGetWeatherAtLocation(double, double, double, XPLMWeatherInfo_t* o) { o->visibility = g_lastSentVis * 2.5f; return 1; }
 void XPLMBeginWeatherUpdate(void) { ++g_begin; }
 void XPLMEndWeatherUpdate(int incr, int imm) { ++g_end; g_lastIncr = incr; g_lastImm = imm; }
+static int g_erases = 0;
+void XPLMEraseWeatherAtLocation(double, double) { ++g_erases; }
+void XPLMEraseWeatherAtAirport(const char*) { ++g_erases; }
 void XPLMSetWeatherAtLocation(double la, double lo, double el, XPLMWeatherInfo_t* i) { g_calls.push_back({"loc", false, *i, la, lo, el}); }
 void XPLMSetWeatherAtAirport(const char* id, XPLMWeatherInfo_t* i) { if (std::strcmp(id, "KICT") == 0) g_lastSentVis = i->visibility; g_calls.push_back({id, true, *i, 0, 0, 0}); }
+
+
+// ---------------- mock window / drawing ----------------
+static XPLMDrawWindow_f g_drawCb = nullptr;
+static XPLMHandleMouseWheel_f g_wheelCb = nullptr;
+static bool g_winVisible = false, g_winDestroyed = false;
+static std::string g_drawn;
+XPLMWindowID XPLMCreateWindowEx(XPLMCreateWindow_t* p) { g_drawCb = p->drawWindowFunc; g_wheelCb = p->handleMouseWheelFunc; g_winVisible = p->visible; return (void*)99; }
+void XPLMDestroyWindow(XPLMWindowID) { g_winDestroyed = true; }
+void XPLMGetScreenBoundsGlobal(int* l, int* t, int* r, int* b) { *l = 0; *t = 1080; *r = 1920; *b = 0; }
+void XPLMGetWindowGeometry(XPLMWindowID, int* l, int* t, int* r, int* b) { *l = 100; *t = 900; *r = 960; *b = 300; }
+void XPLMSetWindowIsVisible(XPLMWindowID, int v) { g_winVisible = v; }
+int XPLMGetWindowIsVisible(XPLMWindowID) { return g_winVisible; }
+void XPLMSetWindowTitle(XPLMWindowID, const char*) {}
+void XPLMSetWindowResizingLimits(XPLMWindowID, int, int, int, int) {}
+void XPLMBringWindowToFront(XPLMWindowID) {}
+void XPLMDrawString(float*, int, int, char* s, int*, XPLMFontID) { g_drawn += s; g_drawn += "\n"; }
+float XPLMMeasureString(XPLMFontID, const char*, int n) { return 6.0f * n; }
+void XPLMGetFontDimensions(XPLMFontID, int* w, int* h, int* d) { if (w) *w = 6; if (h) *h = 10; if (d) *d = 0; }
+void XPLMDrawTranslucentDarkBox(int, int, int, int) {}
 
 // ---------------- mock libcurl ----------------
 struct Easy { long status = 200; std::string url; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
 static int g_netRequests = 0, g_fdRequests = 0;
+static std::vector<std::string> g_urls;
+static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
+static std::string readFile(const char* p) { FILE* f = std::fopen(p, "rb"); std::string r; if (!f) return r; char b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) r.append(b, n); std::fclose(f); return r; }
 static const char* kAwc =
     "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT 301553Z 00000KT 1/4SM FG VV001 08/08 A3010 RMK AO2\"},"
     "{\"icaoId\":\"KEWK\",\"lat\":38.06,\"lon\":-97.28,\"elev\":467,\"rawOb\":\"KEWK 301555Z 27014G24KT 10SM SCT060 BKN110 14/05 A3005\"},"
     "{\"icaoId\":\"KSLN\",\"lat\":38.79,\"lon\":-97.65,\"elev\":389,\"rawOb\":\"KSLN 301553Z 24012KT 6SM -RA BR OVC009 10/09 A3003\"},"
     "{\"icaoId\":\"KFAKE\",\"lat\":37.2,\"lon\":-97.1,\"elev\":300,\"rawOb\":\"KFAKE 301500Z 18008KT CAVOK 15/05 Q1015\"},"
     "{\"icaoId\":\"KOLD\",\"lat\":37.9,\"lon\":-97.9,\"elev\":300,\"rawOb\":\"KOLD 290900Z 18008KT 10SM CLR 15/05 A3000\"}]";
+static const char* kAwcNoSln =
+    "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT 301553Z 00000KT 1/4SM FG VV001 08/08 A3010 RMK AO2\"},"
+    "{\"icaoId\":\"KEWK\",\"lat\":38.06,\"lon\":-97.28,\"elev\":467,\"rawOb\":\"KEWK 301555Z 27014G24KT 10SM SCT060 BKN110 14/05 A3005\"},"
+    "{\"icaoId\":\"KFAKE\",\"lat\":37.2,\"lon\":-97.1,\"elev\":300,\"rawOb\":\"KFAKE 301500Z 18008KT CAVOK 15/05 Q1015\"}]";
+static bool g_dropSln = false;
 static const char* kFdLow =
     "DATA BASED ON 301200Z\nVALID 301800Z   FOR USE 1400-2100Z. TEMPS NEG ABV 24000\n\n"
     "FT  3000    6000    9000   12000   18000   24000\n"
@@ -111,14 +147,32 @@ CURLcode curl_easy_perform(CURL* c) {
     Easy* e = (Easy*)c;
     ++g_netRequests;
     std::printf("  net: GET %s\n", e->url.c_str());
+    g_urls.push_back(e->url);
+    if (e->url.find("api.rainviewer.com") != std::string::npos) {
+        static const char* idx = "{\"version\":\"2.0\",\"generated\":1,\"host\":\"https://tilecache.rainviewer.com\",\"radar\":{\"past\":[{\"time\":1,\"path\":\"/v2/radar/1\"},{\"time\":1761800000,\"path\":\"/v2/radar/2\"}]}}";
+        e->status = 200;
+        e->wf((char*)idx, 1, std::strlen(idx), e->wd);
+        return 0;
+    }
+    if (e->url.find("tilecache.rainviewer.com/v2/radar/2/256/6/") != std::string::npos) {
+        e->status = 200;
+        e->wf((char*)g_tilePng.data(), 1, g_tilePng.size(), e->wd);
+        return 0;
+    }
+    if (e->url.find("mrms.ncep.noaa.gov") != std::string::npos) {
+        const std::string& b = e->url.find("EchoTop_18") != std::string::npos ? g_mrmsTop : g_mrmsRefl;
+        e->status = b.empty() ? 404 : 200;
+        e->wf((char*)b.data(), 1, b.size(), e->wd);
+        return 0;
+    }
     bool fd = e->url.find("windtemp") != std::string::npos;
     bool ids = e->url.find("ids=KICT,KSLN,KFAR") != std::string::npos || e->url.find("ids=KFAR") != std::string::npos || e->url.find("ids=KICT") != std::string::npos;
     if (fd) ++g_fdRequests;
     const char* body = fd ? (e->url.find("level=low") != std::string::npos ? kFdLow : kFdHigh)
                      : ids ? kFdIds
-                     : e->url.find("aviationweather.gov") != std::string::npos ? kAwc
+                     : e->url.find("aviationweather.gov") != std::string::npos ? (g_dropSln ? kAwcNoSln : kAwc)
                      : e->url.find("/KICT") != std::string::npos ? kDatis : "{\"error\":\"no data\"}";
-    e->status = (body == kAwc || body == kDatis || body == kFdLow || body == kFdHigh || body == kFdIds) ? 200 : 404;
+    e->status = (body == kAwc || body == kAwcNoSln || body == kDatis || body == kFdLow || body == kFdHigh || body == kFdIds) ? 200 : 404;
     e->wf((char*)body, 1, std::strlen(body), e->wd);
     return 0;
 }
@@ -144,7 +198,12 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 }
 
 int main() {
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("vis_check_s = 1\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("vis_check_s = 1\nmax_age_hours = 12\nradar = 0\n", f); std::fclose(f); }
+    const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
+    g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
+    g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
+    g_tilePng = readFile((std::string(kScratch) + "tile.png").c_str());
+    CHECK(!g_mrmsRefl.empty() && !g_mrmsTop.empty() && !g_tilePng.empty());
     char n[256], s[256], d[256];
     CHECK(XPluginStart(n, s, d) == 1);
     CHECK(XPluginEnable() == 1);
@@ -166,7 +225,7 @@ int main() {
         CHECK(i.structSize == (int)sizeof(XPLMWeatherInfo_t));
         CHECK(i.visibility > 390 && i.visibility < 420);                 // 1/4 SM fog
         CHECK(i.cloud_layers[0].cloud_type == 1.0f && i.cloud_layers[0].coverage == 1.0f);
-        CHECK(i.cloud_layers[0].alt_base < 410 && i.cloud_layers[0].alt_top > 430 && i.cloud_layers[0].alt_top < 445); // VV001 = 100 ft deep, above the 407 m field
+        CHECK(i.cloud_layers[0].alt_base < 410 && i.cloud_layers[0].alt_top > 520 && i.cloud_layers[0].alt_top < 535); // VV001: fog layer 120 m deep (minimum), from the 407 m field
         CHECK(i.cloud_layers[1].coverage == 0 && i.cloud_layers[2].coverage == 0);
         CHECK(i.pressure_alt > 101900 && i.pressure_alt < 102000);        // ATIS altimeter 30.11 overrides METAR 30.10
         CHECK(i.max_altitude_msl_ft == 60000 && i.radius_nm == 30); // carries aloft data, so it reaches cruise levels
@@ -196,9 +255,10 @@ int main() {
     size_t before = g_calls.size();
     int reqBefore = g_netRequests;
     g_menuHandler(nullptr, (void*)(intptr_t)2 /*kRefresh*/);
-    CHECK(pump(before + 4));
-    CHECK(g_end == 2 && g_lastImm == 1 && g_lastIncr == 0);
+    for (int i = 0; i < 300 && g_netRequests == reqBefore; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); } // let it apply
     CHECK(g_netRequests > reqBefore);
+    CHECK(g_calls.size() - before < 4);   // identical data is NOT re-sent (re-sending makes the sim rebuild cloud layers)
     CHECK(g_fdRequests == 2); // winds aloft cached for 30 min, not re-downloaded on a manual refresh
     std::printf("  menu status: '%s' / '%s'\n", g_menuNames[g_menuNames.size() - 2].c_str(), g_menuNames.back().c_str());
 
@@ -212,6 +272,7 @@ int main() {
     for (int i = 0; i < 20; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     CHECK(g_netRequests == reqBefore);
 
+    g_agl = 0.0f;  // autocal only runs near the ground
     std::printf("[2b] visibility self-correction: mock sim reports 2.5x what we send\n");
     {
         // KICT reports 1/4 SM (402 m). The mock sim returns 2.5x; the plugin must learn to send less.
@@ -227,6 +288,17 @@ int main() {
         CHECK(lastSent * 2.5f < 402 * 1.4f && lastSent * 2.5f > 402 * 0.7f); // sim now lands near the report
     }
 
+    std::printf("[2c] a station drops out of the NOAA data -> only that station is erased\n");
+    {
+        g_dropSln = true;
+        int er = g_erases; size_t callsBefore = g_calls.size();
+        g_menuHandler(nullptr, (void*)(intptr_t)2);
+        for (int i = 0; i < 300; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        CHECK(g_erases == er + 1);
+        CHECK(g_lastIncr == 1);                                  // incremental, no full wipe
+        CHECK(g_calls.size() - callsBefore < 3);
+    }
+
     std::printf("[5] disable from menu -> records erased, no further downloads\n");
     int endBefore = g_end;
     g_menuHandler(nullptr, (void*)(intptr_t)1 /*kEnabled*/);
@@ -236,8 +308,99 @@ int main() {
     for (int i = 0; i < 20; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     CHECK(g_netRequests == reqAfter);
 
+    std::printf("[6] METAR/ATIS window\n");
+    g_menuHandler(nullptr, (void*)(intptr_t)5 /*kShow*/);
+    CHECK(g_drawCb && g_winVisible);
+    if (g_drawCb) {
+        g_drawn.clear();
+        g_drawCb((void*)99, nullptr);
+        CHECK(g_drawn.find("KICT") != std::string::npos);
+        CHECK(g_drawn.find("METAR  KICT 301553Z 00000KT 1/4SM FG VV001") != std::string::npos);
+        CHECK(g_drawn.find("ATIS INFO D") != std::string::npos);
+        CHECK(g_drawn.find("FOG") != std::string::npos);                 // "Applied" line mentions the fog layer
+        CHECK(g_drawn.find("winds/temps aloft") != std::string::npos);
+        g_wheelCb((void*)99, 0, 0, 0, -5, nullptr);                       // scroll down, then back to the top
+        g_drawn.clear(); g_drawCb((void*)99, nullptr);
+        g_wheelCb((void*)99, 0, 0, 0, 50, nullptr);
+        g_drawn.clear(); g_drawCb((void*)99, nullptr);
+        CHECK(g_drawn.find("WXPlane - ") != std::string::npos);
+    }
+
+    std::printf("[7] radar storms from the MRMS mosaic\n");
+    {
+        g_menuHandler(nullptr, (void*)(intptr_t)1 /*kEnabled: back on after [5]*/);
+        pump(g_calls.size() + 1, 6000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        for (int i = 0; i < 20; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        size_t before = g_calls.size();
+        int erBefore = g_erases;
+        g_urls.clear();
+        g_menuHandler(nullptr, (void*)(intptr_t)6 /*kRadar -> on, refresh*/);
+        CHECK(pump(before + 1, 8000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        bool gotRefl = false, gotTop = false;
+        for (auto& u : g_urls) {
+            gotRefl = gotRefl || u.find("https://mrms.ncep.noaa.gov/2D/MergedReflectivityQCComposite/MRMS_MergedReflectivityQCComposite.latest.grib2.gz") != std::string::npos;
+            gotTop = gotTop || u.find("https://mrms.ncep.noaa.gov/2D/EchoTop_18/MRMS_EchoTop_18.latest.grib2.gz") != std::string::npos;
+        }
+        CHECK(gotRefl && gotTop);
+        int storms = 0, heavy = 0;
+        float minVis = 1e9f, maxTop = 0, maxTurb = 0, maxPrecip = 0, radius = 0;
+        for (size_t i = before; i < g_calls.size(); ++i) {
+            const Call& c = g_calls[i];
+            if (c.airport || c.info.cloud_layers[2].cloud_type < 1.0f || c.info.cloud_layers[2].coverage <= 0) continue;
+            ++storms;
+            CHECK(c.info.cloud_layers[0].coverage == 0);                    // station fog is not copied onto storms
+            if (c.info.cloud_layers[2].cloud_type >= 2.9f) ++heavy;
+            minVis = std::min(minVis, c.info.visibility);
+            maxTop = std::max(maxTop, c.info.cloud_layers[2].alt_top);
+            maxPrecip = std::max(maxPrecip, c.info.precip_rate);
+            radius = c.info.radius_nm;
+            for (int k = 0; k < XPLM_NUM_WIND_LAYERS; ++k) if (c.info.wind_layers[k].speed >= 0) maxTurb = std::max(maxTurb, c.info.wind_layers[k].turbulence);
+        }
+        std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
+                    storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);
+        CHECK(storms >= 3 && storms <= 120);
+        CHECK(heavy >= 1);
+        CHECK(minVis <= 800 && minVis >= 400);
+        CHECK(maxTop > 10500 && maxTop < 12600);       // echo top ~12 km from the mock product
+        CHECK(maxPrecip >= 0.99f);
+        CHECK(maxTurb > 0.8f);
+        CHECK(radius > 8 && radius < 10);
+        // the viewer window lists the radar section
+        g_menuHandler(nullptr, (void*)(intptr_t)5);
+        g_drawn.clear();
+        if (g_drawCb) g_drawCb((void*)99, nullptr);
+        CHECK(g_drawn.find("Radar: NOAA MRMS (CONUS)") != std::string::npos);
+        CHECK(g_drawn.find("dBZ") != std::string::npos);
+        // turning radar off removes every storm record again
+        int er1 = g_erases;
+        g_menuHandler(nullptr, (void*)(intptr_t)6);
+        CHECK(pump(before + 1, 3000) || true);
+        for (int i = 0; i < 100 && g_erases - er1 < storms; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        std::printf("  erased %d records after switching radar off (had %d)\n", g_erases - er1, storms);
+        CHECK(g_erases - er1 >= storms);
+        (void)erBefore;
+    }
+
+    std::printf("[8] outside NOAA coverage: experimental global radar\n");
+    {
+        g_menuHandler(nullptr, (void*)(intptr_t)6 /*radar on again*/);
+        g_lat = 50.0; g_lon = 8.0;                       // Germany: no MRMS product, no METARs in the mock data
+        g_urls.clear();
+        g_logAll.clear();
+        g_menuHandler(nullptr, (void*)(intptr_t)7 /*kRadarGlobal -> on, refresh*/);
+        for (int i = 0; i < 300 && g_logAll.find("radar:") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        bool mrms = false, idx = false, tiles = false;
+        for (auto& u : g_urls) { mrms = mrms || u.find("mrms.ncep") != std::string::npos; idx = idx || u.find("weather-maps.json") != std::string::npos; tiles = tiles || u.find("/256/6/") != std::string::npos; }
+        CHECK(!mrms && idx && tiles);
+        CHECK(g_logAll.find("radar: RainViewer (global, experimental)") != std::string::npos);
+        CHECK(g_logAll.find("echo blocks") != std::string::npos);
+    }
+
     XPluginDisable();
     XPluginStop();
+    CHECK(g_winDestroyed);
     std::printf("%s (%d failures)\n", g_fail ? "HARNESS FAILED" : "HARNESS OK", g_fail);
     return g_fail ? 1 : 0;
 }

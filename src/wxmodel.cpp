@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace wx {
 namespace {
@@ -51,7 +52,15 @@ float profileTemp(const std::vector<std::pair<float, float>>& p, float altM) {
     return p.back().second;
 }
 
-XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft) {
+bool stationHasFog(const Station& st, const Config& cfg) {
+    const Report& r = st.report;
+    if (!cfg.fogLayer) return false;
+    for (const auto& g : r.clouds)
+        if (g.cover == CloudGroup::VV) return true;
+    return r.fog || r.shallowFog || r.patchyFog;
+}
+
+XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft, bool fogSlot) {
     const Report& r = st.report;
     XpWx x;
     x.ageS = (float)reportAgeSeconds(r, now);
@@ -118,6 +127,15 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     // maps to clear_vis_m because those reports are a floor, not a measurement.
     double vis = r.hasVis ? r.visM : cfg.clearVisM;
     if (r.cavok || (r.hasVis && vis >= 9999.0)) vis = cfg.clearVisM;
+    if (cfg.fogHaze) {
+        // Fog must reduce visibility too, not only add a cloud layer.
+        if (r.fog) vis = std::min(vis, 1000.0);
+        if (r.clouds.end() != std::find_if(r.clouds.begin(), r.clouds.end(), [](const CloudGroup& g) { return g.cover == CloudGroup::VV; })) vis = std::min(vis, 800.0);
+        if (r.shallowFog || r.patchyFog) vis = std::min(vis, 3000.0);
+        // Mist (BR) and haze (HZ) are left at the reported value: US reports use them up to ~6 SM.
+        // Saturated air: the sim derives haze from humidity as well as visibility.
+        if ((r.fog || r.shallowFog || r.patchyFog) && x.hasTemp) { x.hasDewp = true; x.dewpC = x.tempC; }
+    }
     if (vis < 50) vis = 50;
     x.visM = (float)vis;
     x.precip = (float)r.precip;
@@ -132,12 +150,12 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     if (cfg.fogLayer && anyFog) {
         XpCloud f;
         f.type = 1.0f;
-        f.baseM = (float)(st.elevM + 2.0);
+        f.baseM = (float)st.elevM; // starts at the ground, so it is part of the surface weather
         double depth = cfg.fogTopAglM;
         f.coverage = 1.0f;
-        if (vv) depth = std::min(400.0, std::max(30.0, vv->baseFtAgl * kFtToM));
-        else if (r.shallowFog) { depth = std::min(depth, 25.0); f.coverage = 0.9f; }
-        else if (r.patchyFog) { depth *= 0.6; f.coverage = 0.5f; }
+        if (vv) depth = std::min(400.0, std::max(120.0, vv->baseFtAgl * kFtToM));
+        else if (r.shallowFog) { depth = 100.0; f.coverage = 0.9f; }
+        else if (r.patchyFog) { depth = std::max(100.0, depth * 0.6); f.coverage = 0.5f; }
         f.topM = (float)(st.elevM + depth);
         layers.push_back(f);
         x.fogLayerApplied = true;
@@ -160,9 +178,44 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         c.topM = (float)(c.baseM + thick);
         layers.push_back(c);
     }
-    x.cloudCount = (int)std::min<size_t>(3, layers.size());
-    for (int i = 0; i < x.cloudCount; ++i) x.clouds[i] = layers[(size_t)i];
+    if (fogSlot) {
+        // slot 0 = ground fog (or empty); the two lowest real cloud layers follow in slots 1 and 2
+        size_t first = x.fogLayerApplied ? 1 : 0;
+        if (x.fogLayerApplied) x.clouds[0] = layers[0];
+        for (size_t i = 0; i < 2 && first + i < layers.size(); ++i) x.clouds[1 + i] = layers[first + i];
+    } else {
+        for (size_t i = 0; i < 3 && i < layers.size(); ++i) x.clouds[i] = layers[i];
+    }
+    x.cloudCount = 0;
+    for (const auto& c : x.clouds)
+        if (c.coverage > 0) ++x.cloudCount;
     return x;
+}
+
+std::string describeXp(const XpWx& x, double elevM) {
+    char b[256];
+    std::string out;
+    std::snprintf(b, sizeof b, "vis %.0f m", x.visM);
+    out += b;
+    if (x.hasWind) {
+        std::snprintf(b, sizeof b, " | wind %03.0f/%.0f kt", x.windDir, x.windMs / kKtToMs);
+        out += b;
+        if (x.gustMs > x.windMs + 0.5f) { std::snprintf(b, sizeof b, " G%.0f", x.gustMs / kKtToMs); out += b; }
+    }
+    if (x.qnhPa > 0) { std::snprintf(b, sizeof b, " | QNH %.1f hPa", x.qnhPa / 100.0f); out += b; }
+    if (x.hasTemp) { std::snprintf(b, sizeof b, " | %.0f/%.0f C", x.tempC, x.hasDewp ? x.dewpC : x.tempC); out += b; }
+    static const char* names[] = {"cirrus", "stratus", "cumulus", "CB"};
+    for (int i = 0; i < 3; ++i) {
+        const XpCloud& c = x.clouds[i];
+        if (c.coverage <= 0) continue;
+        int t = (int)(c.type + 0.5f);
+        t = t < 0 ? 0 : (t > 3 ? 3 : t);
+        std::snprintf(b, sizeof b, " | %s%s %.0f%% %.0f-%.0f ft AGL", (i == 0 && x.fogLayerApplied) ? "FOG " : "", names[t],
+                      c.coverage * 100.0f, (c.baseM - elevM) / kFtToM, (c.topM - elevM) / kFtToM);
+        out += b;
+    }
+    if (x.aloft) { std::snprintf(b, sizeof b, " | NOAA winds aloft to FL%.0f", x.winds.back().altMsl / kFtToM / 100.0f); out += b; }
+    return out;
 }
 
 } // namespace wx
