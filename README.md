@@ -199,3 +199,7 @@ Whatever `apply_per_tick`, `transition_s` or `update_transition_s` say, the star
 ## Staying in control of the weather
 
 X-Plane gives each weather record a weight based on its age, so every record WXPlane sends now has age 0 (a 50-minute-old METAR would otherwise count for less than X-Plane's own weather). The log also gains a `weather watch` line 30 s after each update, then every minute for 10 minutes and every 5 minutes after that: it shows the wind, visibility and cloud X-Plane is using at the aircraft next to what the surrounding stations call for. It only logs. Turn off X-Plane's own real weather as well, since it blends its downloaded METARs with ours.
+
+## Cloud edges between records
+
+Each station's circle used to stop at 0.49 x the distance to its nearest neighbour, so neighbouring circles only touched and X-Plane had nothing to blend: where two reports had different cloud bases the cloud ended in a vertical wall. Circles now reach 0.65 x that distance (`station_radius_factor`) and gap-fill tiles 0.95 x their cell size (`fill_radius_factor`), so neighbours overlap a little and X-Plane blends the edge. Set `station_radius_factor = 0.49` and `fill_radius_factor = 0.8` for the old touching-only behaviour; raise them for a wider blend. If overcast ever looks darker in the overlap, lower them.

@@ -285,7 +285,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             double nn = 1e9;
             for (const auto& o : res.stations)
                 if (&o != &s) nn = std::min(nn, wx::distNm(s.lat, s.lon, o.lat, o.lon));
-            info.radius_nm = (float)std::min(g_cfg.radiusNm, std::max(0.5, nn * 0.49));
+            info.radius_nm = (float)std::min(g_cfg.radiusNm, std::max(0.5, nn * g_cfg.stationRadiusFactor));
         }
         stationRadius[s.icao] = info.radius_nm;
         if (x.fogLayerApplied) ++fogCount;
@@ -337,7 +337,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
                     XPLMWeatherInfo_t info;
                     fillInfo(info, x);
-                    info.radius_nm = (float)(cellNm * 0.8);   // a little more than half the cell diagonal: tiles without gaps
+                    info.radius_nm = (float)(cellNm * g_cfg.fillRadiusFactor);   // above ~0.8 neighbouring tiles overlap, so X-Plane blends their edges
                     Rec r;
                     r.airport = false;
                     r.lat = latc; r.lon = lonc; r.elev = nearest->elevM;
