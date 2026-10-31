@@ -65,6 +65,7 @@ wx::FetchResult g_lastRes;      // last applied data, kept so a visibility corre
 bool g_haveLast = false;
 float g_visK = 1.0f;            // factor between the METAR visibility and what we send (vis_scale; the optional self-check adjusts it)
 bool g_checkPending = false;
+Clock::time_point g_lastRadarRequest{};
 XPLMDataRef g_drElev = nullptr;
 bool g_watchOn = false;
 int g_watchN = 0;
@@ -415,7 +416,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (res.noaaFixes > 0 || res.filledElements > 0)
         logf("NOAA crosscheck: %d of %zu reports corrected or completed from NOAA's decoded fields, %d missing elements filled from neighbouring stations",
              res.noaaFixes, res.stations.size(), res.filledElements);
-    logf("update (+%d s after the sim started running): %zu stations, %d gap-fill records, %d storm cells, %zu changed, %zu removed%s%s", g_loopStarted ? (int)std::chrono::duration<double>(Clock::now() - g_enabledAt).count() : -1, res.stations.size(), fillCount, stormCount, todo.size(), gone.size(), full ? " (full)" : "",
+    logf("update (+%d s after the sim started running): %zu stations, %d gap-fill records, %d storm cells, %zu changed, %zu removed%s%s", g_loopStarted ? (int)std::chrono::duration<double>(Clock::now() - g_enabledAt).count() : -1, res.stations.size(), fillCount, stormCount, todo.size(), gone.size(), full ? " (full)" : (res.radarOnly ? " (radar only)" : ""),
          (g_pendingTodo.empty() && g_pendingGone.empty()) ? "" : " [queued, sent a few at a time]");
     if (g_cfg.radar) {
         if (res.radar.ok) {
@@ -687,7 +688,17 @@ float flightLoop(float, float, int, void*) {
     // 1) results from the worker thread
     wx::FetchResult res;
     if (g_fetcher.take(res)) {
-        if (!res.ok) {
+        if (res.radarOnly) {
+            // storm radar on its own: keep the last stations/winds, swap in the new storm cells, apply only what changed (non-immediate: X-Plane fades it in)
+            if (!res.ok) logf("radar refresh failed: %s", res.error.c_str());
+            else if (g_haveLast && g_cfg.enabled) {
+                wx::FetchResult merged = g_lastRes;
+                merged.radar = res.radar;
+                merged.immediate = false;
+                merged.radarOnly = true;
+                applyResult(merged, true);
+            }
+        } else if (!res.ok) {
             logf("update failed: %s", res.error.c_str());
             setStatus("Update failed (will retry)", res.error.substr(0, 60));
         } else if (g_cfg.enabled) {
@@ -721,7 +732,16 @@ float flightLoop(float, float, int, void*) {
                                  std::chrono::duration<double>(now - g_firstApplyAt).count() >= g_cfg.startupRadarDelayS && (!g_cfg.startupWaitFps || framesSteady());
             if (catchUp) due = true;
             bool moved = g_haveCenter && since >= 60.0 && wx::distNm(lat, lon, g_centerLat, g_centerLon) > g_cfg.refetchMoveNm;
+            const bool radarDue = g_cfg.radar && g_firstApplyDone && !g_radarDeferred && !due && !moved && !g_manualRefresh && !g_startupPhase &&
+                                  std::chrono::duration<double>(now - g_lastRadarRequest).count() >= g_cfg.radarMinutes * 60.0;
+            if (radarDue) {
+                wx::FetchRequest rq;
+                rq.lat = lat; rq.lon = lon; rq.cfg = g_cfg; rq.radarOnly = true;
+                g_fetcher.request(rq);
+                g_lastRadarRequest = now;
+            }
             if (due || moved || g_manualRefresh) {
+                g_lastRadarRequest = now;
                 wx::FetchRequest rq;
                 rq.lat = lat; rq.lon = lon; rq.cfg = g_cfg;
                 if (catchUp) g_radarDeferred = false;

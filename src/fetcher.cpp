@@ -105,7 +105,14 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     res.centerLon = rq.lon;
     res.immediate = rq.immediate;
     res.fetchedAt = std::time(nullptr);
+    res.radarOnly = rq.radarOnly;
     const Config& cfg = rq.cfg;
+    if (rq.radarOnly) {
+        if (cfg.radar) res.radar = fetchRadar(rq, res.fetchedAt);
+        res.ok = res.radar.ok;
+        if (!res.ok) res.error = res.radar.note.empty() ? std::string("radar refresh failed") : res.radar.note;
+        return res;
+    }
 
     // 1) METARs from NOAA's Aviation Weather Center, centred on the aircraft (not on any airport),
     //    so the weather below you stays current at cruise altitude too.

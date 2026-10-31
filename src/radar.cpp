@@ -59,6 +59,23 @@ std::string mrmsUrl(const std::string& region, const std::string& product) {
     return u + product + "/MRMS_" + product + ".latest.grib2.gz";
 }
 
+void smoothStormTops(std::vector<RadarCell>& cells, double cellNm) {
+    std::vector<float> orig(cells.size());
+    for (size_t i = 0; i < cells.size(); ++i) orig[i] = cells[i].topM;
+    const double reach = cellNm * 1.7;
+    for (size_t i = 0; i < cells.size(); ++i) {
+        if (!(cells[i].topM > 0)) continue;
+        double sum = 0;
+        int n = 0;
+        for (size_t j = 0; j < cells.size(); ++j) {
+            if (j == i || !(orig[j] > 0)) continue;
+            if (distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon) <= reach) { sum += orig[j]; ++n; }
+        }
+        float cap = n == 0 ? 8000.0f : (float)(sum / n) + 2000.0f;
+        if (cells[i].topM > cap) cells[i].topM = std::max(1500.0f, std::round(cap / 500.0f) * 500.0f);
+    }
+}
+
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
                             const std::set<std::string>* prev) {
     RadarResult res;
@@ -122,6 +139,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     auto score = [&](const RadarCell& c) { return c.distNm - 2.0 * (c.dbz - 20.0) - (prevKeys.count(c.key) ? 25.0 : 0.0); };
     std::sort(all.begin(), all.end(), [&](const RadarCell& a, const RadarCell& b) { return score(a) < score(b); });
     if ((int)all.size() > cfg.radarMaxCells) all.resize((size_t)cfg.radarMaxCells);
+    if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm);
     res.cells = std::move(all);
     res.ok = true;
     res.topsFromRadar = tops != nullptr;

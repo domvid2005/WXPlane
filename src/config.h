@@ -9,6 +9,8 @@ struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
+    double radarMinutes = 5;         // storm radar (MRMS publishes every ~2 min) is refetched this often, on its own
+    bool stormSmoothTops = true;  // tame lone tall echo tops that render as thin spikes
     int updateMinutes = 30;       // periodic refresh
     double searchNm = 120;        // METARs are fetched within this distance of the aircraft
     int maxStations = 40;         // nearest N stations are applied

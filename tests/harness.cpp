@@ -246,7 +246,7 @@ static int runRamp() {
 // HARNESS_STAGED=1: the first update has no radar; storms follow startup_radar_delay_s later.
 static int runStaged() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 6\nvis_scale = 1\nmax_age_hours = 20\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 6\nvis_scale = 1\nmax_age_hours = 20\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -256,6 +256,15 @@ static int runStaged() {
     for (int i = 0; i < 1500 && g_logAll.find("radar: NOAA MRMS") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
     CHECK(g_logAll.find("radar: NOAA MRMS") != std::string::npos);   // storms arrive in the second update
     CHECK(g_logAll.find("gap-fill records") != std::string::npos && g_logAll.find(" 0 gap-fill records") == std::string::npos);   // gap fill produced records
+    // radar refreshes on its own schedule: only the MRMS grids are downloaded, only changed storm records are sent, with X-Plane's fade
+    g_urls.clear();
+    const int endsBefore = g_end;
+    for (int i = 0; i < 1500 && g_logAll.find("(radar only)") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    CHECK(g_logAll.find("(radar only)") != std::string::npos);
+    { bool metar = false, mrms = false; for (auto& u : g_urls) { metar = metar || u.find("aviationweather.gov/api/data/metar") != std::string::npos; mrms = mrms || u.find("mrms.ncep") != std::string::npos; }
+      CHECK(!metar && mrms); }
+    CHECK(g_end == endsBefore || g_lastImm == 0);   // nothing forced: either nothing changed, or the update was left to fade in
     XPluginDisable();
     XPluginStop();
     std::printf("%s (%d failures)\n", g_fail ? "STAGED FAILED" : "STAGED OK", g_fail);
@@ -504,7 +513,7 @@ int main() {
         g_mapLabels.clear();
         g_mapLabelCb((void*)77, bounds, 1.0f, 1.0f, 0, (void*)1, nullptr);
         std::printf("  labels at zoom 1: %zu (first %s)\n", g_mapLabels.size(), g_mapLabels.empty() ? "-" : g_mapLabels[0].c_str());
-        { bool has390 = false; for (auto& l : g_mapLabels) has390 = has390 || l == "FL390"; CHECK(!g_mapLabels.empty() && has390); }
+        { bool hasFl = false; for (auto& l : g_mapLabels) hasFl = hasFl || l.rfind("FL", 0) == 0; CHECK(!g_mapLabels.empty() && hasFl); }
         size_t zoomedOut = g_mapLabels.size();
         g_mapLabels.clear();
         g_mapLabelCb((void*)77, bounds, 3.0f, 1.0f, 0, (void*)1, nullptr);

@@ -18,6 +18,7 @@ namespace wx {
 struct FetchRequest {
     double lat = 0, lon = 0;
     Config cfg;
+    bool radarOnly = false; // refresh only the storm radar (stations, ATIS and winds aloft are kept)
     bool immediate = false; // apply without X-Plane's 1-2 minute fade (first load, manual refresh)
 };
 
@@ -34,6 +35,7 @@ struct FetchResult {
     RadarResult radar;               // storm cells from radar (MRMS mosaic or experimental global tiles)
     double centerLat = 0, centerLon = 0;
     bool immediate = false;
+    bool radarOnly = false;
     std::time_t fetchedAt = 0;
 };
 

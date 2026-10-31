@@ -71,6 +71,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "fill_cell_nm") c.fillCellNm = (int)(d < 6 ? 6 : (d > 30 ? 30 : d));
         else if (k == "fill_far_range_nm") c.fillFarRangeNm = (int)(d < 20 ? 20 : (d > 250 ? 250 : d));
         else if (k == "fill_far_cell_nm") c.fillFarCellNm = (int)(d < 12 ? 12 : (d > 60 ? 60 : d));
+        else if (k == "radar_minutes") c.radarMinutes = d < 0.1 ? 0.1 : (d > 120 ? 120 : d);
+        else if (k == "storm_smooth_tops") c.stormSmoothTops = toBool(v);
         else if (k == "station_radius_factor") c.stationRadiusFactor = d < 0.3 ? 0.3 : (d > 1.2 ? 1.2 : d);
         else if (k == "fill_radius_factor") c.fillRadiusFactor = d < 0.5 ? 0.5 : (d > 1.5 ? 1.5 : d);
         else if (k == "station_radius_auto") c.stationRadiusAuto = toBool(v);
@@ -147,6 +149,8 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "fill_cell_nm = " << c.fillCellNm << "\n"
       << "fill_far_range_nm = " << c.fillFarRangeNm << "\n"
       << "fill_far_cell_nm = " << c.fillFarCellNm << "\n"
+      << "radar_minutes = " << c.radarMinutes << "\n"
+      << "storm_smooth_tops = " << (c.stormSmoothTops ? 1 : 0) << "\n"
       << "station_radius_factor = " << c.stationRadiusFactor << "\n"
       << "fill_radius_factor = " << c.fillRadiusFactor << "\n"
       << "station_radius_auto = " << (c.stationRadiusAuto ? 1 : 0) << "\n"

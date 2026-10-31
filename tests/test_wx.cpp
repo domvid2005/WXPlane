@@ -238,6 +238,17 @@ int main() {
             CHECK(ok);
         }
     }
+    // --- storm tops: lone or much-taller-than-neighbours tops are tamed (spikes), ordinary clusters are untouched
+    {
+        std::vector<RadarCell> v(5);
+        for (int i = 0; i < 4; ++i) { v[i].lat = 35.0 + 0.1 * i; v[i].lon = -97.0; v[i].topM = 10000; }   // a cluster at ~10 km
+        v[3].topM = 15000;                                    // one spike in the cluster
+        v[4].lat = 40.0; v[4].lon = -90.0; v[4].topM = 14000; // a lone block far away
+        smoothStormTops(v, 12.0);
+        CHECK(v[0].topM == 10000 && v[1].topM == 10000);
+        CHECK(v[3].topM <= 12500 && v[3].topM > 10000);
+        CHECK(v[4].topM == 8000);
+    }
     // --- fog adds haze: visibility capped, air saturated, layer starts at the ground and is not razor-thin
     {
         Station f; f.elevM = 1655;

@@ -22,6 +22,10 @@ struct RadarCell {
     std::string key;           // stable per block, used to diff updates
 };
 
+// Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
+// the neighbour mean + 2 km, and lone blocks to 8 km. Only ever lowers a top.
+void smoothStormTops(std::vector<RadarCell>& cells, double cellNm);
+
 struct RadarResult {
     bool attempted = false;
     bool ok = false;

@@ -209,3 +209,8 @@ Each station's circle stops at 0.49 x the distance to its nearest neighbour (`st
 A solid, thick, fully closed sheet rendered with a dark grey-blue top when seen from above. Overcast is now 94% coverage and thinner: stratus 1400 m (overcast) / 1100 m (broken) / 800 m (scattered), cumuliform 1600 / 1300 / 900 m (it was 2200 / 1600 / 900 and 2200 / 1800 / 1000). The sheet stays deep enough not to go black from below.
 
 Cloud layers at one station never overlap vertically: every top stays at least 150 m below the next layer's base. The lower layer is trimmed first (never under 120 m thick); if two bases are closer together than that allows, the upper layer is lifted just enough to keep the gap.
+
+## Radar every 5 minutes, and storm spikes
+
+* **Radar refresh:** NOAA's MRMS mosaic is republished about every 2 minutes, so the storm radar is now refetched on its own every `radar_minutes` (5; minimum 0.1 for testing). A radar refresh downloads only the MRMS grids, keeps the stations and winds aloft from the last full update, and sends X-Plane only the storm records that changed (plus erases storms that ended). It is applied without the "immediate" flag, so X-Plane fades the change in over its usual 1-2 minutes. METARs, ATIS and winds aloft still refresh every `update_minutes` (30).
+* **Spikes:** a radar block whose echo top is far above its neighbours (or that has no neighbours) rendered as a thin tower. With `storm_smooth_tops = 1` each measured top is limited to the mean of the neighbouring blocks' tops plus 2 km, and a lone block to 8 km. Tops are only ever lowered, and the map's FL labels use the same smoothed values. Set `storm_smooth_tops = 0` for the raw radar tops.
