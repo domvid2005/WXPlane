@@ -55,6 +55,12 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "edge_coverage") c.edgeCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
         else if (k == "edge_radius_factor") c.edgeRadiusFactor = d < 0.1 ? 0.1 : (d > 1.0 ? 1.0 : d);
         else if (k == "edge_points") c.edgePoints = (int)(d < 3 ? 3 : (d > 24 ? 24 : d));
+        else if (k == "top_bumps") c.topBumps = toBool(v);
+        else if (k == "bump_count") c.bumpCount = (int)(d < 0 ? 0 : (d > 40 ? 40 : d));
+        else if (k == "bump_max") c.bumpMax = (int)(d < 0 ? 0 : (d > 400 ? 400 : d));
+        else if (k == "bump_height_m") c.bumpHeightM = d < 50 ? 50 : (d > 1500 ? 1500 : d);
+        else if (k == "bump_coverage") c.bumpCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
+        else if (k == "bump_radius_factor") c.bumpRadiusFactor = d < 0.05 ? 0.05 : (d > 0.8 ? 0.8 : d);
         else if (k == "edge_max") c.edgeMax = (int)(d < 0 ? 0 : (d > 400 ? 400 : d));
         else if (k == "handoff_alt_ft") c.handoffAltFt = (int)(d < 0 ? 0 : (d > 60000 ? 60000 : d));
         else if (k == "handoff_band_ft") c.handoffBandFt = (int)(d < 500 ? 500 : (d > 15000 ? 15000 : d));
@@ -155,6 +161,12 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "edge_radius_factor = " << c.edgeRadiusFactor << "\n"
       << "edge_points = " << c.edgePoints << "\n"
       << "edge_max = " << c.edgeMax << "\n"
+      << "top_bumps = " << (c.topBumps ? 1 : 0) << "\n"
+      << "bump_count = " << c.bumpCount << "\n"
+      << "bump_max = " << c.bumpMax << "\n"
+      << "bump_height_m = " << c.bumpHeightM << "\n"
+      << "bump_coverage = " << c.bumpCoverage << "\n"
+      << "bump_radius_factor = " << c.bumpRadiusFactor << "\n"
       << "handoff_alt_ft = " << c.handoffAltFt << "\n"
       << "handoff_band_ft = " << c.handoffBandFt << "\n"
       << "vis_check_s = " << c.visCheckS << "\n"

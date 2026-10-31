@@ -296,6 +296,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     std::map<std::string, float> stationRadius;
     std::map<std::string, wx::XpWx> edgeWx;   // weather of the stations next to an overcast edge
     int edgeCount = 0;
+    int bumpCount = 0;
     for (const auto& s : res.stations) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         baseWx[s.icao] = x;
@@ -367,7 +368,13 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                             const float dBase = std::min(room * 0.4f, 20.0f + (float)(h % 50));
                             const float dTop = std::min(room * 0.4f, 25.0f + (float)((h / 50) % 70));
                             e.info.cloud_layers[i].alt_base += dBase;
-                            e.info.cloud_layers[i].alt_top -= dTop;
+                            // Tops vary too: some edge clouds stand above the deck, some below, so the rim is uneven. A rise is kept
+                            // clear of the layer above.
+                            float ceilM = 1e9f;
+                            for (int j = 0; j < 3; ++j)
+                                if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > e.info.cloud_layers[i].alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
+                            const float up = std::min((float)(g_cfg.topBumps ? g_cfg.bumpHeightM * 0.6 : 0.0) * (float)((h / 3500) % 100) / 100.0f, std::max(0.0f, ceilM - e.info.cloud_layers[i].alt_top - 120.0f));
+                            e.info.cloud_layers[i].alt_top += ((h / 7) % 3 == 0) ? up : -dTop;
                         }
                     e.info.age = 0.0f;
                     const std::string key = "edge:" + s.icao + ":" + std::to_string(k);
@@ -375,6 +382,52 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     ++edgeCount;
                     auto eit = g_recs.find(key);
                     if (!full && eit != g_recs.end() && std::memcmp(&eit->second.info, &e.info, sizeof e.info) == 0) continue;
+                    e.info.age = info.age;
+                    todo.push_back({key, e});
+                }
+            }
+        }
+        if (g_cfg.topBumps && bumpCount < g_cfg.bumpMax) {
+            // A flat overcast has a flat top. Scatter small records across it whose overcast layer is billowy (type 3) and stands
+            // a different height above the deck, so the top is rough and uneven instead of one sheet. Each keeps the upper part
+            // of the deck only, so nothing gets thicker underneath, and is capped to stay clear of the layer above.
+            auto ovc = [&](int i) { return x.clouds[i].coverage >= 0.85f && x.clouds[i].type > 0.5f && !(i == 0 && x.fogLayerApplied); };
+            bool any = false;
+            for (int i = 0; i < 3; ++i) any = any || ovc(i);
+            if (any) {
+                const unsigned seed = (unsigned)std::fabs(s.lat * 1000.0) * 2654435761u + (unsigned)std::fabs(s.lon * 1000.0) * 40503u;
+                auto hash = [](unsigned v) { v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16; return v; };
+                for (int k = 0; k < g_cfg.bumpCount && bumpCount < g_cfg.bumpMax; ++k) {
+                    const unsigned h1 = hash(seed + (unsigned)k * 7919u), h2 = hash(h1 + 17u), h3 = hash(h2 + 31u);
+                    const double ang = 6.283185307179586 * (h1 % 3600) / 3600.0;
+                    const double frac = 0.15 + 0.7 * ((h2 % 1000) / 1000.0);          // somewhere across the deck, not only at the rim
+                    const double rNm = info.radius_nm * frac;
+                    Rec e;
+                    e.airport = false;
+                    e.lat = s.lat + rNm / 60.0 * std::cos(ang);
+                    e.lon = s.lon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(s.lat * 3.14159265358979 / 180.0));
+                    e.elev = s.elevM;
+                    e.info = info;
+                    e.info.radius_nm = (float)std::max(0.5, info.radius_nm * g_cfg.bumpRadiusFactor * (0.6 + 0.8 * ((h3 % 1000) / 1000.0)));
+                    for (int i = 0; i < 3; ++i) {
+                        auto& L = e.info.cloud_layers[i];
+                        if (!ovc(i)) continue;
+                        float ceilM = 1e9f;   // base of the next layer above this one
+                        for (int j = 0; j < 3; ++j)
+                            if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
+                        const float thick = L.alt_top - L.alt_base;
+                        const float rise = std::min((float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), std::max(0.0f, ceilM - L.alt_top - 120.0f));
+                        L.cloud_type = 3.0f;
+                        L.coverage = (float)std::min(0.95, g_cfg.bumpCoverage * (0.8 + 0.4 * ((h1 / 3600) % 1000) / 1000.0));
+                        L.alt_base = L.alt_base + thick * 0.6f;
+                        L.alt_top = L.alt_top + rise;
+                    }
+                    e.info.age = 0.0f;
+                    const std::string key = "bump:" + s.icao + ":" + std::to_string(k);
+                    seen[key] = true;
+                    ++bumpCount;
+                    auto bit = g_recs.find(key);
+                    if (!full && bit != g_recs.end() && std::memcmp(&bit->second.info, &e.info, sizeof e.info) == 0) continue;
                     e.info.age = info.age;
                     todo.push_back({key, e});
                 }
@@ -550,6 +603,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         std::snprintf(l2, sizeof l2, "No stations in range");
     g_lastGoodStatus = l1;
     setStatus(l1, l2);
+    if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
     if (g_cfg.edgeClouds) logf("overcast edges: %d billowy edge records around thick overcast decks", edgeCount);
     logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
