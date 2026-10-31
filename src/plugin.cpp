@@ -297,6 +297,53 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     std::map<std::string, wx::XpWx> edgeWx;   // weather of the stations next to an overcast edge
     int edgeCount = 0;
     int bumpCount = 0;
+    // Rough tops: scatter small billowy records over a thick overcast so its top is uneven instead of one flat sheet. Each keeps only
+    // the upper 40% of the deck and stands up to bump_height_m above its top, at a different height each time, capped to stay clear
+    // of the layer above. Used for the station decks and for the overcast that continues over the gap-fill tiles between stations.
+    auto addBumps = [&](const wx::XpWx& x, const XPLMWeatherInfo_t& info, double cLat, double cLon, double radNm, double elev,
+                        const std::string& id, int count, double fracMin, double fracMax) {
+        if (!g_cfg.topBumps || bumpCount >= g_cfg.bumpMax) return;
+        auto ovc = [&](int i) { return x.clouds[i].coverage >= 0.85f && x.clouds[i].type > 0.5f && !(i == 0 && x.fogLayerApplied); };
+        bool any = false;
+        for (int i = 0; i < 3; ++i) any = any || ovc(i);
+        if (!any) return;
+        const unsigned seed = (unsigned)std::fabs(cLat * 1000.0) * 2654435761u + (unsigned)std::fabs(cLon * 1000.0) * 40503u;
+        auto hash = [](unsigned v) { v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16; return v; };
+        for (int k = 0; k < count && bumpCount < g_cfg.bumpMax; ++k) {
+            const unsigned h1 = hash(seed + (unsigned)k * 7919u), h2 = hash(h1 + 17u), h3 = hash(h2 + 31u);
+            const double ang = 6.283185307179586 * (h1 % 3600) / 3600.0;
+            const double frac = fracMin + (fracMax - fracMin) * ((h2 % 1000) / 1000.0);
+            const double rNm = radNm * frac;
+            Rec e;
+            e.airport = false;
+            e.lat = cLat + rNm / 60.0 * std::cos(ang);
+            e.lon = cLon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(cLat * 3.14159265358979 / 180.0));
+            e.elev = elev;
+            e.info = info;
+            e.info.radius_nm = (float)std::max(0.5, radNm * g_cfg.bumpRadiusFactor * (0.6 + 0.8 * ((h3 % 1000) / 1000.0)));
+            for (int i = 0; i < 3; ++i) {
+                auto& L = e.info.cloud_layers[i];
+                if (!ovc(i)) continue;
+                float ceilM = 1e9f;   // base of the next layer above this one
+                for (int j = 0; j < 3; ++j)
+                    if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
+                const float thick = L.alt_top - L.alt_base;
+                const float rise = std::min((float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), std::max(0.0f, ceilM - L.alt_top - 120.0f));
+                L.cloud_type = 3.0f;
+                L.coverage = (float)std::min(0.95, g_cfg.bumpCoverage * (0.8 + 0.4 * ((h1 / 3600) % 1000) / 1000.0));
+                L.alt_base = L.alt_base + thick * 0.6f;
+                L.alt_top = L.alt_top + rise;
+            }
+            e.info.age = 0.0f;
+            const std::string key = "bump:" + id + ":" + std::to_string(k);
+            seen[key] = true;
+            ++bumpCount;
+            auto bit = g_recs.find(key);
+            if (!full && bit != g_recs.end() && std::memcmp(&bit->second.info, &e.info, sizeof e.info) == 0) continue;
+            e.info.age = info.age;
+            todo.push_back({key, e});
+        }
+    };
     for (const auto& s : res.stations) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         baseWx[s.icao] = x;
@@ -387,52 +434,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 }
             }
         }
-        if (g_cfg.topBumps && bumpCount < g_cfg.bumpMax) {
-            // A flat overcast has a flat top. Scatter small records across it whose overcast layer is billowy (type 3) and stands
-            // a different height above the deck, so the top is rough and uneven instead of one sheet. Each keeps the upper part
-            // of the deck only, so nothing gets thicker underneath, and is capped to stay clear of the layer above.
-            auto ovc = [&](int i) { return x.clouds[i].coverage >= 0.85f && x.clouds[i].type > 0.5f && !(i == 0 && x.fogLayerApplied); };
-            bool any = false;
-            for (int i = 0; i < 3; ++i) any = any || ovc(i);
-            if (any) {
-                const unsigned seed = (unsigned)std::fabs(s.lat * 1000.0) * 2654435761u + (unsigned)std::fabs(s.lon * 1000.0) * 40503u;
-                auto hash = [](unsigned v) { v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16; return v; };
-                for (int k = 0; k < g_cfg.bumpCount && bumpCount < g_cfg.bumpMax; ++k) {
-                    const unsigned h1 = hash(seed + (unsigned)k * 7919u), h2 = hash(h1 + 17u), h3 = hash(h2 + 31u);
-                    const double ang = 6.283185307179586 * (h1 % 3600) / 3600.0;
-                    const double frac = 0.15 + 0.7 * ((h2 % 1000) / 1000.0);          // somewhere across the deck, not only at the rim
-                    const double rNm = info.radius_nm * frac;
-                    Rec e;
-                    e.airport = false;
-                    e.lat = s.lat + rNm / 60.0 * std::cos(ang);
-                    e.lon = s.lon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(s.lat * 3.14159265358979 / 180.0));
-                    e.elev = s.elevM;
-                    e.info = info;
-                    e.info.radius_nm = (float)std::max(0.5, info.radius_nm * g_cfg.bumpRadiusFactor * (0.6 + 0.8 * ((h3 % 1000) / 1000.0)));
-                    for (int i = 0; i < 3; ++i) {
-                        auto& L = e.info.cloud_layers[i];
-                        if (!ovc(i)) continue;
-                        float ceilM = 1e9f;   // base of the next layer above this one
-                        for (int j = 0; j < 3; ++j)
-                            if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
-                        const float thick = L.alt_top - L.alt_base;
-                        const float rise = std::min((float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), std::max(0.0f, ceilM - L.alt_top - 120.0f));
-                        L.cloud_type = 3.0f;
-                        L.coverage = (float)std::min(0.95, g_cfg.bumpCoverage * (0.8 + 0.4 * ((h1 / 3600) % 1000) / 1000.0));
-                        L.alt_base = L.alt_base + thick * 0.6f;
-                        L.alt_top = L.alt_top + rise;
-                    }
-                    e.info.age = 0.0f;
-                    const std::string key = "bump:" + s.icao + ":" + std::to_string(k);
-                    seen[key] = true;
-                    ++bumpCount;
-                    auto bit = g_recs.find(key);
-                    if (!full && bit != g_recs.end() && std::memcmp(&bit->second.info, &e.info, sizeof e.info) == 0) continue;
-                    e.info.age = info.age;
-                    todo.push_back({key, e});
-                }
-            }
-        }
+        addBumps(x, info, s.lat, s.lon, info.radius_nm, s.elevM, s.icao, g_cfg.bumpCount, 0.15, 0.85);
         auto it = g_recs.find(s.icao);
         if (!full && it != g_recs.end() && it->second.airport == r.airport && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0)
             continue; // identical to what the sim already has
@@ -480,6 +482,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     r.lat = latc; r.lon = lonc; r.elev = nearest->elevM;
                     r.info = info;
                     r.info.age = 0.0f;
+                    addBumps(x, info, latc, lonc, cellNm * 0.5, nearest->elevM, std::string("f") + tag + std::to_string(j) + "_" + std::to_string(i), g_cfg.bumpFillCount, 0.0, 0.9);
                     const std::string key = std::string("fill") + tag + ":" + std::to_string(j) + ":" + std::to_string(i);
                     seen[key] = true;
                     ++fillCount;

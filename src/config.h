@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 9;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 10;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -39,11 +39,12 @@ struct Config {
     int edgePoints = 8;           // edge records per overcast station
     int edgeMax = 120;            // most edge records in one update
     bool topBumps = true;         // scatter billowy records over thick overcasts so the top is uneven, not one flat sheet
-    int bumpCount = 8;            // rough-top records per overcast station
-    int bumpMax = 160;            // most of them in one update
-    double bumpHeightM = 450;     // how far a bump can stand above the deck top (m)
+    int bumpCount = 14;           // rough-top records per overcast station
+    int bumpMax = 320;            // most of them in one update
+    int bumpFillCount = 2;        // rough-top records per gap-fill tile that carries an overcast
+    double bumpHeightM = 550;     // how far a bump can stand above the deck top (m)
     double bumpCoverage = 0.7;    // coverage of the overcast layer in those records
-    double bumpRadiusFactor = 0.22; // record radius = this x the station record radius
+    double bumpRadiusFactor = 0.26; // record radius = this x the station record radius
     int handoffAltFt = 0;         // above this altitude (ft MSL) X-Plane's own weather takes over from ours; 0 = our weather all the way up
     int handoffBandFt = 3000;     // our clouds fade out over this many feet below the hand-off altitude
     double visScale = 1.0;        // factor on reported visibility below 10 SM before it goes to X-Plane (1 = exactly the METAR/ATIS value)

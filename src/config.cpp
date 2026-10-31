@@ -57,7 +57,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "edge_points") c.edgePoints = (int)(d < 3 ? 3 : (d > 24 ? 24 : d));
         else if (k == "top_bumps") c.topBumps = toBool(v);
         else if (k == "bump_count") c.bumpCount = (int)(d < 0 ? 0 : (d > 40 ? 40 : d));
-        else if (k == "bump_max") c.bumpMax = (int)(d < 0 ? 0 : (d > 400 ? 400 : d));
+        else if (k == "bump_fill_count") c.bumpFillCount = (int)(d < 0 ? 0 : (d > 10 ? 10 : d));
+        else if (k == "bump_max") c.bumpMax = (int)(d < 0 ? 0 : (d > 800 ? 800 : d));
         else if (k == "bump_height_m") c.bumpHeightM = d < 50 ? 50 : (d > 1500 ? 1500 : d);
         else if (k == "bump_coverage") c.bumpCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
         else if (k == "bump_radius_factor") c.bumpRadiusFactor = d < 0.05 ? 0.05 : (d > 0.8 ? 0.8 : d);
@@ -116,6 +117,7 @@ bool loadConfig(const std::string& path, Config& c) {
         // The plugin writes every setting to the file on start-up, so values from earlier test builds stick even after the default
         // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
         c.startupCalmS = d.startupCalmS;
+        c.bumpCount = d.bumpCount; c.bumpMax = d.bumpMax; c.bumpHeightM = d.bumpHeightM; c.bumpRadiusFactor = d.bumpRadiusFactor;
         c.edgeCoverage = d.edgeCoverage; c.edgeRadiusFactor = d.edgeRadiusFactor; c.edgePoints = d.edgePoints;   // sparse edge clouds sparkled
         c.regenWaitS = d.regenWaitS;
         c.lowCloudType = d.lowCloudType;
@@ -164,6 +166,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "top_bumps = " << (c.topBumps ? 1 : 0) << "\n"
       << "bump_count = " << c.bumpCount << "\n"
       << "bump_max = " << c.bumpMax << "\n"
+      << "bump_fill_count = " << c.bumpFillCount << "\n"
       << "bump_height_m = " << c.bumpHeightM << "\n"
       << "bump_coverage = " << c.bumpCoverage << "\n"
       << "bump_radius_factor = " << c.bumpRadiusFactor << "\n"
