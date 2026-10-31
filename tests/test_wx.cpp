@@ -252,6 +252,33 @@ int main() {
         CHECK(v[3].topM <= 12500 && v[3].topM > 10000);
         CHECK(v[4].topM == 8000);
     }
+    // --- hand-off to X-Plane's own weather above a chosen altitude: clouds above it are dropped, clouds just below fade out
+    {
+        Station st; st.elevM = 400;
+        parseReport("KICT 301553Z 18010KT 10SM BKN040 BKN080 OVC120 12/05 A3002", st.report);
+        XpWx full = buildXp(st, cfg, now);
+        Config h = cfg; h.handoffAltFt = 10000; h.handoffBandFt = 3000;
+        XpWx cut = buildXp(st, h, now);
+        CHECK(full.cloudCount == 3 && cut.cloudCount == 2);                 // the OVC120 deck (above 10000 ft MSL) is left to X-Plane
+        CHECK(cut.clouds[0].coverage == full.clouds[0].coverage);           // the low deck is untouched
+        CHECK(cut.clouds[1].coverage > 0 && cut.clouds[1].coverage < full.clouds[1].coverage * 0.5f);   // the deck in the band fades
+        CHECK(cut.maxAltFt == 10000.0f && full.maxAltFt > 10000.0f - 1);
+        for (const auto& c : cut.clouds) CHECK(c.coverage <= 0 || c.topM <= 10000 * 0.3048f + 1);
+        Config off = cfg; off.handoffAltFt = 0;
+        CHECK(buildXp(st, off, now).cloudCount == 3);                       // 0 = our weather all the way up
+    }
+    // --- mist (BR) shows as a thin ground layer, and not only as reduced visibility
+    {
+        Station st; st.elevM = 400;
+        parseReport("KICT 301553Z 00000KT 3SM BR FEW002 12/11 A3002", st.report);
+        CHECK(stationHasFog(st, cfg));
+        XpWx a = buildXp(st, cfg, now);
+        CHECK(a.fogLayerApplied && a.clouds[0].baseM == 400 && a.clouds[0].topM - a.clouds[0].baseM >= 80 && a.clouds[0].topM - a.clouds[0].baseM <= 120 && a.clouds[0].coverage < 0.6f);
+        NEAR(a.visM, 4828, 5);                                // the 3 SM is still sent exactly
+        Station clear; clear.elevM = 400;
+        parseReport("KICT 301553Z 00000KT 10SM FEW040 12/05 A3002", clear.report);
+        CHECK(!stationHasFog(clear, cfg));
+    }
     // --- fog adds haze: visibility capped, air saturated, layer starts at the ground and is not razor-thin
     {
         Station f; f.elevM = 1655;

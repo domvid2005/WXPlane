@@ -39,14 +39,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kImmediate };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kHandoff };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxImmediate = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxHandoff = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -75,6 +75,7 @@ int g_calIter = 0;
 int g_checkTries = 0;
 float g_prevReadVis = 0;
 float g_visBeforeCorr = 0;
+bool g_reapplyRequested = false;   // settings that change the weather we send (not what we download): rebuild from the data we already have
 bool g_manualRefresh = false;
 bool g_eraseRequested = false;
 bool g_firstApplyDone = false;
@@ -115,7 +116,12 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
-    XPLMCheckMenuItem(g_menu, g_idxImmediate, g_cfg.applyImmediately ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    {
+        char b[96];
+        if (g_cfg.handoffAltFt > 0) std::snprintf(b, sizeof b, "X-Plane Real Weather Above %d ft (click to change)", g_cfg.handoffAltFt);
+        else std::snprintf(b, sizeof b, "X-Plane Real Weather Above: off (click to change)");
+        XPLMSetMenuItemName(g_menu, g_idxHandoff, b, 0);
+    }
 }
 
 // Removes every record this plugin has set, handing control back to X-Plane's own weather.
@@ -132,6 +138,9 @@ std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by 
 bool g_pendingImmediate = false;
 bool g_startupPhase = true;        // true until the start-up updates (stations, then storms) are out
 bool g_pendingStartup = false;
+XPLMCommandRef g_regenCmd = nullptr;
+bool g_regenDone = false;
+Clock::time_point g_regenAt{};
 bool g_pendingManual = false;       // the pending update was asked for with "Refresh Weather Data Now"
 Clock::time_point g_nextRelease{};   // when the next queued record may be handed to X-Plane
 double g_releaseStepS = 0.0;         // seconds between records, so a whole update spreads over transition_s
@@ -154,6 +163,16 @@ void eraseRec(const std::string& k) {
 }
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
+    if (g_pendingStartup && g_cfg.regenWeatherOnStart) {
+        // Taking over: first have X-Plane throw away its previous weather (its clouds included), give that a few seconds to
+        // take effect, and only then hand over ours, so none of the old clouds are blended into the new weather.
+        if (!g_regenDone) {
+            g_regenDone = true;
+            if (!g_regenCmd) g_regenCmd = XPLMFindCommand("sim/operation/regen_weather");
+            if (g_regenCmd) { XPLMCommandOnce(g_regenCmd); g_regenAt = Clock::now(); logf("cleared X-Plane's previous weather (regen_weather) before applying ours"); }
+        }
+        if (g_regenAt != Clock::time_point{} && Clock::now() < g_regenAt + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(g_cfg.regenWaitS))) return;
+    }
     auto t0 = Clock::now();
     // The start-up load always goes to X-Plane as ONE update, whatever apply_per_tick / transition_s say: every extra update is
     // another rebuild, and spreading it out was what made the load-in a couple of minutes of changing clouds and light.
@@ -170,7 +189,7 @@ void flushPending() {
     for (size_t i = 0; i < n; ++i) sendRec(g_pendingTodo[i]);
     sent = n;
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
-    XPLMEndWeatherUpdate(1 /*incremental*/, (g_pendingImmediate && (g_cfg.applyImmediately || g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
+    XPLMEndWeatherUpdate(1 /*incremental*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued)", ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size());
     if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
@@ -273,6 +292,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     const bool anyFog = now < g_fogUntil;
     std::map<std::string, wx::XpWx> baseWx;   // weather built per station, reused for storm cells
     std::map<std::string, float> stationRadius;
+    std::map<std::string, wx::XpWx> edgeWx;   // weather of the stations next to an overcast edge
+    int edgeCount = 0;
     for (const auto& s : res.stations) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         baseWx[s.icao] = x;
@@ -297,6 +318,57 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         r.info = info;
         r.info.age = 0.0f;
         seen[s.icao] = true;
+        if (g_cfg.edgeClouds) {
+            // A thick overcast ends at its record's edge in a smooth wall. Around its rim, place small records whose overcast layer is
+            // thinner and billowy (type 3), so the sheet breaks up into cloud instead of stopping dead. Points that lie inside the
+            // overcast of the nearest other station (the sheet continues there) get none.
+            auto isOvc = [&](const wx::XpWx& w, int i) { return w.clouds[i].coverage >= 0.85f && w.clouds[i].type > 0.5f && !(i == 0 && w.fogLayerApplied); };
+            bool anyOvc = false;
+            for (int i = 0; i < 3; ++i) anyOvc = anyOvc || isOvc(x, i);
+            if (anyOvc && edgeCount < g_cfg.edgeMax) {
+                const wx::Station* other = nullptr;
+                for (int k = 0; k < g_cfg.edgePoints && edgeCount < g_cfg.edgeMax; ++k) {
+                    const double ang = 6.283185307179586 * k / g_cfg.edgePoints;
+                    const double rNm = info.radius_nm * 0.95;
+                    const double pLat = s.lat + rNm / 60.0 * std::cos(ang);
+                    const double pLon = s.lon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(s.lat * 3.14159265358979 / 180.0));
+                    other = nullptr;
+                    double od = 1e9;
+                    for (const auto& o : res.stations) {
+                        if (&o == &s) continue;
+                        const double d = wx::distNm(pLat, pLon, o.lat, o.lon);
+                        if (d < od) { od = d; other = &o; }
+                    }
+                    bool continues = false;
+                    if (other) {
+                        auto ow = edgeWx.find(other->icao);
+                        if (ow == edgeWx.end()) ow = edgeWx.emplace(other->icao, wx::buildXp(*other, g_cfg, now, &res.aloft, anyFog)).first;
+                        for (int i = 0; i < 3 && !continues; ++i)
+                            for (int j = 0; j < 3; ++j)
+                                if (isOvc(x, i) && isOvc(ow->second, j) && std::fabs(x.clouds[i].baseM - ow->second.clouds[j].baseM) < 600.0f) { continues = true; break; }
+                    }
+                    if (continues) continue;
+                    Rec e;
+                    e.airport = false;
+                    e.lat = pLat; e.lon = pLon; e.elev = s.elevM;
+                    e.info = info;
+                    e.info.radius_nm = (float)std::max(0.5, info.radius_nm * g_cfg.edgeRadiusFactor);
+                    for (int i = 0; i < 3; ++i)
+                        if (isOvc(x, i)) {
+                            e.info.cloud_layers[i].cloud_type = 3.0f;
+                            e.info.cloud_layers[i].coverage = (float)std::min((double)e.info.cloud_layers[i].coverage, g_cfg.edgeCoverage);
+                        }
+                    e.info.age = 0.0f;
+                    const std::string key = "edge:" + s.icao + ":" + std::to_string(k);
+                    seen[key] = true;
+                    ++edgeCount;
+                    auto eit = g_recs.find(key);
+                    if (!full && eit != g_recs.end() && std::memcmp(&eit->second.info, &e.info, sizeof e.info) == 0) continue;
+                    e.info.age = info.age;
+                    todo.push_back({key, e});
+                }
+            }
+        }
         auto it = g_recs.find(s.icao);
         if (!full && it != g_recs.end() && it->second.airport == r.airport && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0)
             continue; // identical to what the sim already has
@@ -409,7 +481,6 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     {   // spread the records evenly over the configured transition time (nearest stations first)
         size_t n = todo.size() + gone.size();
         int T = g_startupPhase ? 0 : (g_firstApplyDone ? g_cfg.updateTransitionS : g_cfg.transitionS);
-        if (g_cfg.applyImmediately && g_pendingImmediate) T = 0;
         g_releaseStepS = (n > 0 && T > 0) ? std::max(0.0625, (double)T / (double)n) : 0.0;
         g_nextRelease = Clock::now();
     }
@@ -468,6 +539,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         std::snprintf(l2, sizeof l2, "No stations in range");
     g_lastGoodStatus = l1;
     setStatus(l1, l2);
+    if (g_cfg.edgeClouds) logf("overcast edges: %d billowy edge records around thick overcast decks", edgeCount);
     logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
          res.immediate ? " [immediate]" : "");
@@ -572,51 +644,6 @@ void visibilityCheck() {
     applyResult(copy, false);
 }
 
-// ---------------- storm tops on X-Plane's map ----------------
-XPLMMapLayerID g_mapLayer = nullptr;
-bool g_mapHookRegistered = false;
-
-void mapLabels(XPLMMapLayerID layer, const float* bounds, float zoom, float, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
-    if (!g_cfg.radar || !g_cfg.radarMapTops || !g_haveLast || !g_lastRes.radar.ok) return;
-    // bounds: left, top, right, bottom in map units. Stronger storms first; fewer labels when zoomed out.
-    const float minDbz = zoom >= 2.0f ? 30.0f : 40.0f;
-    std::vector<const wx::RadarCell*> cells;
-    for (const auto& c : g_lastRes.radar.cells) if (c.dbz >= minDbz) cells.push_back(&c);
-    std::sort(cells.begin(), cells.end(), [](const wx::RadarCell* a, const wx::RadarCell* b) { return a->dbz > b->dbz; });
-    int drawn = 0;
-    for (const auto* c : cells) {
-        float x = 0, y = 0;
-        XPLMMapProject(proj, c->lat, c->lon, &x, &y);
-        if (x < bounds[0] || x > bounds[2] || y > bounds[1] || y < bounds[3]) continue;
-        std::string t = wx::formatFl(wx::stormTopM(*c, g_cfg, 900.0f), c->topKnown);   // same value the cloud is built with
-        XPLMDrawMapLabel(layer, t.c_str(), x, y, xplm_MapOrientation_Map, 0.0f);
-        if (++drawn >= 150) break;
-    }
-}
-void mapPrep(XPLMMapLayerID, const float*, XPLMMapProjectionID, void*) {}
-void mapGone(XPLMMapLayerID, void*) { g_mapLayer = nullptr; }
-
-void createMapLayer(const char* mapId, void*) {
-    if (g_mapLayer || std::strcmp(mapId, XPLM_MAP_USER_INTERFACE) != 0) return;
-    XPLMCreateMapLayer_t p;
-    std::memset(&p, 0, sizeof p);
-    p.structSize = sizeof p;
-    p.mapToCreateLayerIn = XPLM_MAP_USER_INTERFACE;
-    p.layerType = xplm_MapLayer_Markings;
-    p.willBeDeletedCallback = mapGone;
-    p.prepCacheCallback = mapPrep;
-    p.drawCallback = nullptr;
-    p.iconCallback = nullptr;
-    p.labelCallback = mapLabels;
-    p.showUiToggle = 1;
-    p.layerName = "WXPlane storm tops";
-    p.refcon = nullptr;
-    g_mapLayer = XPLMCreateMapLayer(&p);
-}
-
-
-void mapCreatedHook(const char* mapId, void* rc) { if (g_pluginEnabled) createMapLayer(mapId, rc); }
-
 // ---------------- start-up gating ----------------
 // Scenery loading is the busiest moment of a flight; downloads and weather rebuilds then add to the load. Hold the first
 // update back until the plugin has been up for startup_delay_s and X-Plane reports no scenery loading for a few seconds.
@@ -643,7 +670,7 @@ bool sceneryReady() {
     if (!g_cfg.startupWaitScenery || up > std::max(150.0, (double)g_cfg.startupMaxWaitS) || !g_drLoading) return true;           // never wait forever; without the dataref the delay alone applies
     if (XPLMGetDatai(g_drLoading) != 0) { g_calm = false; return false; }
     if (!g_calm) { g_calm = true; g_calmSince = now; }
-    return std::chrono::duration<double>(now - g_calmSince).count() >= 3.0;
+    return std::chrono::duration<double>(now - g_calmSince).count() >= g_cfg.startupCalmS;
 }
 
 bool g_disableErase = false;   // plugin was disabled: erase our records from the next callback, then stop
@@ -683,6 +710,15 @@ float flightLoop(float, float, int, void*) {
         weatherWatch();
         ++g_watchN;
         g_watchAt = Clock::now() + std::chrono::seconds(g_watchN < 10 ? 60 : 300);
+    }
+
+    if (g_reapplyRequested) {
+        g_reapplyRequested = false;
+        if (g_haveLast && g_cfg.enabled) {
+            wx::FetchResult copy = g_lastRes;
+            copy.immediate = false;
+            applyResult(copy, false);
+        }
     }
 
     // 1) results from the worker thread
@@ -905,13 +941,19 @@ void menuHandler(void*, void* item) {
             g_cfg.radar = !g_cfg.radar;
             if (g_cfg.enabled) g_manualRefresh = true;
             break;
-        case kImmediate:   // applies to the next update; may cause a short stall while X-Plane rebuilds clouds
-            g_cfg.applyImmediately = !g_cfg.applyImmediately;
-            break;
         case kRadarGlobal:
             g_cfg.radarGlobal = !g_cfg.radarGlobal;
             if (g_cfg.enabled && g_cfg.radar) g_manualRefresh = true;
             break;
+        case kHandoff: {   // cycle through the presets; our weather fades out below the chosen altitude and X-Plane's takes over
+            static const int kSteps[] = {0, 5000, 8000, 10000, 15000, 18000, 24000, 30000};
+            size_t next = 0;
+            for (size_t i = 0; i < sizeof kSteps / sizeof kSteps[0]; ++i)
+                if (kSteps[i] > g_cfg.handoffAltFt) { next = i; break; }
+            g_cfg.handoffAltFt = kSteps[next];
+            g_reapplyRequested = true;
+            break;
+        }
         case kAloft:
             g_cfg.useAloft = !g_cfg.useAloft;
             if (g_cfg.enabled) g_manualRefresh = true;
@@ -955,7 +997,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxAloft = XPLMAppendMenuItem(g_menu, "Use NOAA Winds/Temps Aloft", (void*)(intptr_t)kAloft, 0);
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
-    g_idxImmediate = XPLMAppendMenuItem(g_menu, "Apply Weather Immediately (may stutter)", (void*)(intptr_t)kImmediate, 0);
+    g_idxHandoff = XPLMAppendMenuItem(g_menu, "X-Plane Real Weather Above", (void*)(intptr_t)kHandoff, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);
@@ -982,8 +1024,6 @@ PLUGIN_API int XPluginEnable(void) {
     g_loopStarted = false;
     g_visK = (float)g_cfg.visScale;
     g_calm = false;
-    if (!g_mapHookRegistered) { XPLMRegisterMapCreationHook(mapCreatedHook, nullptr); g_mapHookRegistered = true; }
-    if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayer(XPLM_MAP_USER_INTERFACE, nullptr);
 
     g_disableErase = false;
     if (!g_loop) {
@@ -1002,6 +1042,8 @@ PLUGIN_API int XPluginEnable(void) {
     g_firstApplyDone = false;
     g_radarDeferred = false;
     g_startupPhase = true;
+    g_regenDone = false;
+    g_regenAt = Clock::time_point{};
     setStatus(g_cfg.enabled ? "Waiting for sim..." : "Disabled", "");
     logf("enabled (update every %d min, search %.0f nm)", g_cfg.updateMinutes, g_cfg.searchNm);
     return 1;
@@ -1009,7 +1051,6 @@ PLUGIN_API int XPluginEnable(void) {
 
 PLUGIN_API void XPluginDisable(void) {
     g_pluginEnabled = false;
-    if (g_mapLayer) { XPLMDestroyMapLayer(g_mapLayer); g_mapLayer = nullptr; }
     g_fetcher.stop();
     wx::httpGlobalCleanup();
     // Give weather back to X-Plane so our fog/cloud records don't outlive the plugin. The weather API may only be used from the

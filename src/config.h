@@ -11,6 +11,9 @@ struct Config {
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
     double lowCloudType = 3.0;    // X-Plane cloud type for low/overcast layers: 1 = smooth stratus sheet (curtain-like edges), 2 = cumulus, 3 = billowy cumulonimbus
     double stormTopVariationM = 1500; // estimated storm tops (no radar echo-top data) vary by up to +/- this, stable per block, so tops are not one flat plateau
+    double startupCalmS = 1.5;        // scenery loading must have been finished this long before the first download starts
+    double regenWaitS = 1.5;          // pause between X-Plane's weather reset and our first update
+    bool regenWeatherOnStart = true;  // before the first load is applied, run X-Plane's own 'regenerate weather' command so none of its previous clouds are left
     double radarMinutes = 5;         // storm radar (MRMS publishes every ~2 min) is refetched this often, on its own
     bool stormSmoothTops = true;  // tame lone tall echo tops that render as thin spikes
     int updateMinutes = 30;       // periodic refresh
@@ -30,6 +33,13 @@ struct Config {
     int aloftFcstHours = 6;       // NOAA winds-aloft forecast cycle: 6, 12 or 24
     int aloftStations = 4;        // FD stations blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
+    bool edgeClouds = true;       // ring of type-3 clouds around the edge of every overcast so its edge is billowy, not a smooth wall
+    double edgeCoverage = 0.55;   // coverage of the overcast layer in those edge records
+    double edgeRadiusFactor = 0.4; // edge record radius = this x the station record radius
+    int edgePoints = 10;          // edge records per overcast station
+    int edgeMax = 120;            // most edge records in one update
+    int handoffAltFt = 0;         // above this altitude (ft MSL) X-Plane's own weather takes over from ours; 0 = our weather all the way up
+    int handoffBandFt = 3000;     // our clouds fade out over this many feet below the hand-off altitude
     double visScale = 1.0;        // factor on reported visibility below 10 SM before it goes to X-Plane (1 = exactly the METAR/ATIS value)
     bool visAutocal = false;      // compare what X-Plane reports with the METAR/ATIS and correct our input
     int visCheckS = 100;          // seconds after an update to run that comparison
@@ -44,9 +54,7 @@ struct Config {
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud
-    bool radarMapTops = true;     // label storm tops (FLxxx) on X-Plane's map
     bool firstLoadImmediate = true;  // the start-up updates (stations, then radar storms) skip X-Plane's slow fade-in, so the clouds do not dissolve in patches
-    bool applyImmediately = false; // true forces X-Plane to rebuild clouds at once (a visible stall); false lets it fade in over 1-2 min
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
     int startupDelayS = 0;        // wait this long after the plugin loads before the first download
     bool fillGaps = true;            // fill the gaps between station circles so every point takes the nearest station's weather

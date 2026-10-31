@@ -51,6 +51,13 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "clear_vis_m") c.clearVisM = d < 10000 ? 10000 : d;
         else if (k == "vis_scale") c.visScale = d < 0.2 ? 0.2 : (d > 1.5 ? 1.5 : d);
         else if (k == "vis_autocal") c.visAutocal = toBool(v);
+        else if (k == "edge_clouds") c.edgeClouds = toBool(v);
+        else if (k == "edge_coverage") c.edgeCoverage = d < 0.1 ? 0.1 : (d > 0.9 ? 0.9 : d);
+        else if (k == "edge_radius_factor") c.edgeRadiusFactor = d < 0.1 ? 0.1 : (d > 1.0 ? 1.0 : d);
+        else if (k == "edge_points") c.edgePoints = (int)(d < 3 ? 3 : (d > 24 ? 24 : d));
+        else if (k == "edge_max") c.edgeMax = (int)(d < 0 ? 0 : (d > 400 ? 400 : d));
+        else if (k == "handoff_alt_ft") c.handoffAltFt = (int)(d < 0 ? 0 : (d > 60000 ? 60000 : d));
+        else if (k == "handoff_band_ft") c.handoffBandFt = (int)(d < 500 ? 500 : (d > 15000 ? 15000 : d));
         else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
         else if (k == "radar") c.radar = toBool(v);
         else if (k == "radar_global") c.radarGlobal = toBool(v);
@@ -62,9 +69,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_turbulence") c.radarTurbulence = d < 0 ? 0 : (d > 2 ? 2 : d);
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
-        else if (k == "radar_map_tops") c.radarMapTops = toBool(v);
         else if (k == "first_load_immediate") c.firstLoadImmediate = toBool(v);
-        else if (k == "apply_immediately") c.applyImmediately = toBool(v);
         else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 1000 ? 1000 : d));
         else if (k == "fill_gaps") c.fillGaps = toBool(v);
         else if (k == "fill_range_nm") c.fillRangeNm = (int)(d < 10 ? 10 : (d > 150 ? 150 : d));
@@ -73,6 +78,9 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "fill_far_cell_nm") c.fillFarCellNm = (int)(d < 12 ? 12 : (d > 60 ? 60 : d));
         else if (k == "low_cloud_type") c.lowCloudType = d < 1.0 ? 1.0 : (d > 3.0 ? 3.0 : d);
         else if (k == "storm_top_variation_m") c.stormTopVariationM = d < 0 ? 0 : (d > 4000 ? 4000 : d);
+        else if (k == "startup_calm_s") c.startupCalmS = d < 0 ? 0 : (d > 30 ? 30 : d);
+        else if (k == "regen_wait_s") c.regenWaitS = d < 0.5 ? 0.5 : (d > 30 ? 30 : d);
+        else if (k == "regen_weather_on_start") c.regenWeatherOnStart = toBool(v);
         else if (k == "radar_minutes") c.radarMinutes = d < 0.1 ? 0.1 : (d > 120 ? 120 : d);
         else if (k == "storm_smooth_tops") c.stormSmoothTops = toBool(v);
         else if (k == "station_radius_factor") c.stationRadiusFactor = d < 0.3 ? 0.3 : (d > 1.2 ? 1.2 : d);
@@ -101,6 +109,8 @@ bool loadConfig(const std::string& path, Config& c) {
         c.applyPerTick = d.applyPerTick;
         // The plugin writes every setting to the file on start-up, so values from earlier test builds stick even after the default
         // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
+        c.startupCalmS = d.startupCalmS;
+        c.regenWaitS = d.regenWaitS;
         c.lowCloudType = d.lowCloudType;
         c.stationRadiusFactor = d.stationRadiusFactor;
         c.fillRadiusFactor = d.fillRadiusFactor;
@@ -139,6 +149,13 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "clear_vis_m = " << c.clearVisM << "\n"
       << "vis_scale = " << c.visScale << "\n"
       << "vis_autocal = " << (c.visAutocal ? 1 : 0) << "\n"
+      << "edge_clouds = " << (c.edgeClouds ? 1 : 0) << "\n"
+      << "edge_coverage = " << c.edgeCoverage << "\n"
+      << "edge_radius_factor = " << c.edgeRadiusFactor << "\n"
+      << "edge_points = " << c.edgePoints << "\n"
+      << "edge_max = " << c.edgeMax << "\n"
+      << "handoff_alt_ft = " << c.handoffAltFt << "\n"
+      << "handoff_band_ft = " << c.handoffBandFt << "\n"
       << "vis_check_s = " << c.visCheckS << "\n"
       << "radar = " << (c.radar ? 1 : 0) << "\n"
       << "radar_global = " << (c.radarGlobal ? 1 : 0) << "\n"
@@ -150,9 +167,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_turbulence = " << c.radarTurbulence << "\n"
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
-      << "radar_map_tops = " << (c.radarMapTops ? 1 : 0) << "\n"
       << "first_load_immediate = " << (c.firstLoadImmediate ? 1 : 0) << "\n"
-      << "apply_immediately = " << (c.applyImmediately ? 1 : 0) << "\n"
       << "apply_per_tick = " << c.applyPerTick << "\n"
       << "fill_gaps = " << (c.fillGaps ? 1 : 0) << "\n"
       << "fill_range_nm = " << c.fillRangeNm << "\n"
@@ -161,6 +176,9 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "fill_far_cell_nm = " << c.fillFarCellNm << "\n"
       << "low_cloud_type = " << c.lowCloudType << "\n"
       << "storm_top_variation_m = " << c.stormTopVariationM << "\n"
+      << "startup_calm_s = " << c.startupCalmS << "\n"
+      << "regen_wait_s = " << c.regenWaitS << "\n"
+      << "regen_weather_on_start = " << (c.regenWeatherOnStart ? 1 : 0) << "\n"
       << "radar_minutes = " << c.radarMinutes << "\n"
       << "storm_smooth_tops = " << (c.stormSmoothTops ? 1 : 0) << "\n"
       << "station_radius_factor = " << c.stationRadiusFactor << "\n"

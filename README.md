@@ -17,9 +17,11 @@ Requires **X-Plane 12.3 or newer** (it uses the `XPLMWeather` plugin API, SDK 4.
 | **Show Local METAR/ATIS Data...** | Opens a scrollable, resizable window listing every nearby station: raw METAR, ATIS text and letter, what WXPlane applied to the sim (visibility, fog, clouds, wind), and the NOAA winds-aloft stations in use. Mouse wheel scrolls. |
 | **Radar Storms (NOAA MRMS)** | Turns the NOAA radar mosaic into storm cells (see Radar below). On by default. |
 | **Radar Outside US (experimental)** | Uses RainViewer image tiles where NOAA has no radar. Off by default. |
-| **Apply Weather Immediately (may stutter)** | Off by default: weather fades in over 1-2 minutes. On: first load, refreshes and manual refresh force X-Plane to rebuild at once, which is faster but can stall for a moment. |
 | **Use ATIS** | Merge D-ATIS data for airports near you. |
 | **Use NOAA Winds/Temps Aloft** | On (default): winds and temperatures at every level come from NOAA. Off: only the lowest 10,000 ft is touched and X-Plane's own winds/temps are used above. |
+| **X-Plane Real Weather Above ...** | Click to step through: off, 5,000, 8,000, 10,000, 15,000, 18,000, 24,000, 30,000 ft (MSL). Below the chosen altitude our METAR/ATIS weather applies; above it X-Plane's own weather takes over. Our clouds fade out over the last 3,000 ft below it (`handoff_band_ft`), clouds that start above it are dropped, and winds/temperatures are cut at the altitude with an interpolated last point, so nothing jumps at the edge. Off (default) = our weather all the way up. Changes apply at once from the data already downloaded. Config keys: `handoff_alt_ft`, `handoff_band_ft`. Radar storms keep their full height. |
+
+Overcast edges: a thick overcast (coverage 85%+, not cirrus, not the ground fog layer) ends at its record's edge in a smooth wall. Around the rim of every such record, WXPlane places `edge_points` (10) small records whose overcast layer is type 3 with `edge_coverage` (0.55) coverage and radius `edge_radius_factor` (0.4) x the station's, so the sheet breaks up into billowy cloud. Rim points that lie inside the overcast of the nearest other station get none, and no more than `edge_max` (120) are used per update. `edge_clouds = 0` turns it off.
 | *status lines* | Last update time, METAR/ATIS/fog counts, number of NOAA winds-aloft stations, nearest station. |
 
 Settings are saved to `Output/preferences/WXPlane.cfg`.
@@ -65,7 +67,7 @@ No compiler? Push this folder to a GitHub repo; `.github/workflows/build.yml` bu
 
 ## Config keys (`WXPlane.cfg`)
 
-`update_minutes` (30), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `station_radius_auto` (1: each station's radius is limited to 49% of the distance to its nearest neighbour, so no two station records overlap and none dilutes another's weather), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `first_load_immediate` (1), `apply_immediately` (0), `apply_per_tick` (500), `startup_delay_s` (0), `startup_wait_fps` (0), `startup_staged` (0), `startup_radar_delay_s` (8), `startup_max_wait_s` (90), `startup_wait_scenery` (0), `transition_s` (0), `update_transition_s` (0).
+`update_minutes` (30), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `station_radius_auto` (1: each station's radius is limited to 49% of the distance to its nearest neighbour, so no two station records overlap and none dilutes another's weather), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `first_load_immediate` (1) (0), `apply_per_tick` (500), `startup_delay_s` (0), `startup_wait_fps` (0), `startup_staged` (0), `startup_radar_delay_s` (8), `startup_max_wait_s` (90), `startup_wait_scenery` (0), `transition_s` (0), `update_transition_s` (0).
 
 ## Limits you should know about
 
@@ -125,7 +127,7 @@ An update also happens early when you move more than `refetch_move_nm` (40 nm; a
 
 ## Storm tops on the map
 
-A map layer called "WXPlane storm tops" (toggle it in the map's layer list; `radar_map_tops = 0` disables it) labels storm cells with their top as a flight level (the storm cloud in the sim is built to exactly that top whenever the radar provides an echo top, capped at tropopause + 2.5 km; estimated tops, marked `~`, are shaped to avoid flat slabs), rounded to 1000 ft: `FL390`. A leading `~` (`~FL390`) means the top is estimated because no echo-top data was available. Zoomed out only cells of 40 dBZ and up are labelled, zoomed in 30 dBZ and up. X-Plane does not let plugins change the text of its own weather layer, so these labels sit on top of it.
+Removed: the map no longer shows storm-top (FL) labels. The storm clouds themselves still use the radar echo tops.
 
 ## Weather settings screen
 
@@ -226,3 +228,21 @@ Storm blocks without a measured echo top got one estimated height per intensity,
 ## Old settings stick (config version 7)
 
 WXPlane writes every setting to `WXPlane.cfg` when it starts, so a value saved by an earlier test build stays even after the default changes. A leftover `low_cloud_type = 2` kept the layers at type 2 and a leftover `station_radius_factor = 0.65` kept the record overlap. Config files older than version 7 now get `low_cloud_type`, `station_radius_factor`, `fill_radius_factor`, `storm_smooth_tops`, `storm_top_variation_m` and `radar_minutes` reset to their defaults once; every other setting is kept.
+
+## Clearing X-Plane's previous weather
+
+Before the first load is applied (and again when the plugin is re-enabled from the menu), WXPlane runs X-Plane's own `sim/operation/regen_weather` command, which Laminar documents as an immediate full reset of the current weather, waits 3 seconds for it to take effect, and then hands over its records. That keeps clouds from the weather X-Plane started with from blending into ours. It is logged as `cleared X-Plane's previous weather (regen_weather) before applying ours`. Set `regen_weather_on_start = 0` to skip it. The 5-minute radar refreshes and the 30-minute updates do not do this; they only change the records that changed.
+
+The plugin can only erase its own records through the weather API; X-Plane's own weather can only be reset with that command.
+
+## Shorter hand-over waits
+
+Two pauses before the first update were shortened: the quiet period after scenery loading (`startup_calm_s`, 3 -> 1.5 s) and the pause after X-Plane's weather reset (`regen_wait_s`, 3 -> 1.5 s). The remaining time between the plugin applying the weather and X-Plane finishing it is X-Plane building its clouds; Laminar's documentation says clouds take about a minute even with the immediate flag, and longer while the sim is still loading textures and scenery.
+
+## Removed: Apply Weather Immediately, map storm tops
+
+The "Apply Weather Immediately" menu option and the `apply_immediately` setting are gone: the start-up load and the manual Refresh always apply immediately, everything else fades in over X-Plane's usual 1-2 minutes. The map layer with storm-top numbers (and `radar_map_tops`) is gone too.
+
+## Mist (BR)
+
+A METAR with BR (mist) used to change only the visibility, so nothing was visible on the ground. It now also gets a thin ground layer (90 m deep, 45% coverage), in addition to the exact reported visibility. Fog, shallow fog and patchy fog are unchanged.

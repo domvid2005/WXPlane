@@ -59,8 +59,64 @@ bool stationHasFog(const Station& st, const Config& cfg) {
     if (!cfg.fogLayer) return false;
     for (const auto& g : r.clouds)
         if (g.cover == CloudGroup::VV) return true;
-    return r.fog || r.shallowFog || r.patchyFog;
+    return r.fog || r.shallowFog || r.patchyFog || r.mist;
 }
+
+namespace {
+// Hand-off to X-Plane's own weather above cfg.handoffAltFt: our record stops there (max altitude), clouds that start above it are
+// dropped, clouds in the band below it fade out (coverage falls to zero at the top of the band), and winds / temperatures are
+// cut at the hand-off altitude with an interpolated last point, so nothing jumps at the edge.
+void applyHandoff(XpWx& x, const Config& cfg) {
+    const float topM = (float)(cfg.handoffAltFt * kFtToM);
+    const float bandM = (float)(std::max(500, cfg.handoffBandFt) * kFtToM);
+    constexpr float kMinThick = 120.0f;
+    for (auto& c : x.clouds) {
+        if (c.coverage <= 0) continue;
+        if (c.baseM >= topM) { c = XpCloud(); continue; }
+        if (c.baseM > topM - bandM) c.coverage *= (topM - c.baseM) / bandM;
+        if (c.topM > topM) c.topM = std::max(c.baseM + kMinThick, topM);
+        if (c.coverage < 0.02f) c = XpCloud();
+    }
+    if (x.maxAltFt > (float)cfg.handoffAltFt) x.maxAltFt = (float)cfg.handoffAltFt;
+    if (x.winds.size() > 1) {
+        std::vector<XpWind> kept;
+        for (size_t i = 0; i < x.winds.size(); ++i) {
+            if (x.winds[i].altMsl <= topM) { kept.push_back(x.winds[i]); continue; }
+            if (!kept.empty() && kept.back().altMsl < topM) {
+                const XpWind& a = kept.back();
+                const XpWind& b = x.winds[i];
+                const float f = (topM - a.altMsl) / (b.altMsl - a.altMsl);
+                XpWind m = a;
+                m.altMsl = topM;
+                float dd = b.dir - a.dir;
+                while (dd > 180.0f) dd -= 360.0f;
+                while (dd < -180.0f) dd += 360.0f;
+                m.dir = a.dir + dd * f;
+                if (m.dir < 0) m.dir += 360.0f;
+                if (m.dir >= 360.0f) m.dir -= 360.0f;
+                m.ms = a.ms + (b.ms - a.ms) * f;
+                m.gustMs = a.gustMs + (b.gustMs - a.gustMs) * f;
+                kept.push_back(m);
+            }
+            break;
+        }
+        x.winds = kept;
+    }
+    if (x.tempProfile.size() > 1) {
+        std::vector<std::pair<float, float>> kept;
+        for (size_t i = 0; i < x.tempProfile.size(); ++i) {
+            if (x.tempProfile[i].first <= topM) { kept.push_back(x.tempProfile[i]); continue; }
+            if (!kept.empty() && kept.back().first < topM) {
+                const auto& a = kept.back();
+                const auto& b = x.tempProfile[i];
+                kept.push_back({topM, a.second + (b.second - a.second) * (topM - a.first) / (b.first - a.first)});
+            }
+            break;
+        }
+        x.tempProfile = kept;
+    }
+}
+} // namespace
 
 XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft, bool fogSlot) {
     const Report& r = st.report;
@@ -149,7 +205,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     for (const auto& g : r.clouds)
         if (g.cover == CloudGroup::VV) vv = &g;
 
-    bool anyFog = r.fog || r.shallowFog || r.patchyFog || vv != nullptr;
+    bool anyFog = r.fog || r.shallowFog || r.patchyFog || r.mist || vv != nullptr;
     if (cfg.fogLayer && anyFog) {
         XpCloud f;
         f.type = 1.0f;
@@ -159,6 +215,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         if (vv) depth = std::min(400.0, std::max(120.0, vv->baseFtAgl * kFtToM));
         else if (r.shallowFog) { depth = 100.0; f.coverage = 0.9f; }
         else if (r.patchyFog) { depth = std::max(100.0, depth * 0.6); f.coverage = 0.5f; }
+        else if (r.mist && !r.fog) { depth = 90.0; f.coverage = 0.45f; }   // BR: a thin veil on the ground, so mist is visible and not only a shorter view
         f.topM = (float)(st.elevM + depth);
         layers.push_back(f);
         x.fogLayerApplied = true;
@@ -209,6 +266,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     } else {
         for (size_t i = 0; i < 3 && i < layers.size(); ++i) x.clouds[i] = layers[i];
     }
+    if (cfg.handoffAltFt > 0) applyHandoff(x, cfg);
     x.cloudCount = 0;
     for (const auto& c : x.clouds)
         if (c.coverage > 0) ++x.cloudCount;

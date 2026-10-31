@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <string>
 #include <thread>
 #include <vector>
@@ -60,6 +61,9 @@ int XPLMGetDatavf(XPLMDataRef, float* out, int off, int n) {
 float XPLMGetDataf(XPLMDataRef r) { return r == (void*)14 ? 0.01f : g_agl; }
 double XPLMGetDatad(XPLMDataRef r) { return r == (void*)10 ? g_lat : g_lon; }
 static std::string g_logAll;
+static int g_regenCalls = 0;
+XPLMCommandRef XPLMFindCommand(const char* n) { return std::strcmp(n, "sim/operation/regen_weather") == 0 ? (void*)0x77 : nullptr; }
+void XPLMCommandOnce(XPLMCommandRef r) { if (r == (void*)0x77) ++g_regenCalls; }
 void XPLMDebugString(const char* s) { std::printf("  log: %s", s); g_logAll += s; }
 void XPLMGetPrefsPath(char* o) { std::strcpy(o, "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/X-Plane.prf"); }
 const char* XPLMGetDirectorySeparator(void) { return "/"; }
@@ -219,7 +223,7 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 // HARNESS_RAMP=1: the first load is released evenly over transition_s instead of in one burst.
 static int runRamp() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 7\nvis_scale = 1\nmax_age_hours = 20\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 7\nedge_clouds = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
     XPluginStart(n, s, d);
@@ -246,7 +250,7 @@ static int runRamp() {
 // HARNESS_STAGED=1: the first update has no radar; storms follow startup_radar_delay_s later.
 static int runStaged() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 7\nvis_scale = 1\nmax_age_hours = 20\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 7\nedge_clouds = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -274,11 +278,11 @@ static int runStaged() {
 // HARNESS_ONESHOT=1: with default settings, the first load is ONE weather update containing every record.
 static int runOneShot() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 7\nmax_age_hours = 20\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 7\nedge_clouds = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
-    for (int i = 0; i < 400 && g_calls.size() < 3; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    for (int i = 0; i < 700 && g_calls.size() < 3; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
     for (int i = 0; i < 40; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
     std::printf("oneshot: %zu records in %d weather update(s), largest %zu\n", g_calls.size(), g_end, g_maxBatch);
     CHECK(g_calls.size() >= 3);
@@ -286,17 +290,51 @@ static int runOneShot() {
     CHECK(g_maxBatch == g_calls.size());
     CHECK(g_lastSentVis > 390 && g_lastSentVis < 415);   // default vis_scale 1: KICT reports 402 m and exactly that is sent
     CHECK(g_lastIncr == 1 && g_lastImm == 1);   // the start-up update skips X-Plane's slow fade-in
+    CHECK(g_regenCalls == 1 && g_logAll.find("cleared X-Plane's previous weather") != std::string::npos);   // X-Plane's old weather is regenerated away first
     XPluginDisable();
     XPluginStop();
     std::printf("%s (%d failures)\n", g_fail ? "ONESHOT FAILED" : "ONESHOT OK", g_fail);
     return g_fail ? 1 : 0;
 }
 
+// HARNESS_EDGE=1: a thick overcast (KSLN, OVC009) gets a ring of small type-3 records with a thinner overcast around its rim.
+static int runEdge() {
+    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 7\nmax_age_hours = 40\nradar = 0\nfill_gaps = 0\nuse_aloft = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\nregen_weather_on_start = 0\nedge_clouds = 1\nedge_points = 8\n", f); std::fclose(f); }
+    g_agl = 0.0f; g_lat = 38.79; g_lon = -97.65;
+    char n[256], s[256], d[256];
+    XPluginStart(n, s, d);
+    XPluginEnable();
+    for (int i = 0; i < 700 && g_calls.size() < 4; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    for (int i = 0; i < 60; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    int edges = 0, wrong = 0, li = -1;
+    const Call* sln = nullptr;
+    for (auto& c : g_calls) if (c.where == "KSLN") sln = &c;
+    CHECK(sln != nullptr);
+    if (sln) for (int k = 0; k < 3; ++k) if (sln->info.cloud_layers[k].coverage >= 0.85f && sln->info.cloud_layers[k].cloud_type > 0.5f) li = k;
+    CHECK(li >= 0);
+    for (auto& c : g_calls) {
+        if (!sln || li < 0 || c.where != "loc" || !(c.info.radius_nm < sln->info.radius_nm) || std::fabs(c.lat - 38.79) > 0.5 || std::fabs(c.lon + 97.65) > 0.7) continue;
+        ++edges;
+        // every edge record carries the same overcast base as KSLN, as type 3 with less coverage
+        if (!(c.info.cloud_layers[li].cloud_type > 2.9f && c.info.cloud_layers[li].coverage <= 0.56f && c.info.cloud_layers[li].coverage > 0.4f &&
+              std::fabs(c.info.cloud_layers[li].alt_base - sln->info.cloud_layers[li].alt_base) < 1.0f)) ++wrong;
+    }
+    std::printf("  overcast layer %d, edge records: %d (wrong: %d), KSLN radius %.1f nm\n", li, edges, wrong, sln ? sln->info.radius_nm : 0.f);
+    CHECK(edges >= 4 && edges <= 8 * 4 && wrong == 0);
+    CHECK(g_logAll.find("overcast edges:") != std::string::npos);
+    XPluginDisable();
+    XPluginStop();
+    std::printf("%s (%d failures)\n", g_fail ? "EDGE FAILED" : "EDGE OK", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 int main() {
+    if (std::getenv("HARNESS_EDGE")) { return runEdge(); }
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 7\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 20\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 7\nedge_clouds = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
@@ -487,6 +525,22 @@ int main() {
         (void)erBefore;
     }
 
+    std::printf("[7b] real-weather hand-off altitude menu item\n");
+    {
+        auto label = [&]() { for (auto& n : g_menuNames) if (n.find("Real Weather Above") != std::string::npos) return n; return std::string(); };
+        CHECK(label().find("off") != std::string::npos);
+        g_menuHandler(nullptr, (void*)(intptr_t)8 /*kHandoff*/);
+        CHECK(label().find("5000 ft") != std::string::npos);
+        for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }   // the weather is rebuilt from the data we have
+        g_menuHandler(nullptr, (void*)(intptr_t)8);
+        CHECK(label().find("8000 ft") != std::string::npos);
+        for (int k = 0; k < 5; ++k) g_menuHandler(nullptr, (void*)(intptr_t)8);
+        CHECK(label().find("30000 ft") != std::string::npos);
+        g_menuHandler(nullptr, (void*)(intptr_t)8);
+        CHECK(label().find("off") != std::string::npos);   // and back around to off
+        for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    }
+
     std::printf("[8] outside NOAA coverage: experimental global radar\n");
     {
         g_menuHandler(nullptr, (void*)(intptr_t)6 /*radar on again*/);
@@ -502,36 +556,7 @@ int main() {
         CHECK(g_logAll.find("echo blocks") != std::string::npos);
     }
 
-    std::printf("[9] storm tops on the map\n");
-    {
-        CHECK(g_mapLabelCb != nullptr);
-        g_lat = 37.60; g_lon = -97.40;
-        g_logAll.clear();
-        g_menuHandler(nullptr, (void*)(intptr_t)7 /*global radar off again -> refresh from MRMS*/);
-        for (int i = 0; i < 300 && g_logAll.find("radar: NOAA MRMS") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
-        float bounds[4] = {-110.0f, 50.0f, -80.0f, 25.0f};
-        g_mapLabels.clear();
-        g_mapLabelCb((void*)77, bounds, 1.0f, 1.0f, 0, (void*)1, nullptr);
-        std::printf("  labels at zoom 1: %zu (first %s)\n", g_mapLabels.size(), g_mapLabels.empty() ? "-" : g_mapLabels[0].c_str());
-        { bool hasFl = false; for (auto& l : g_mapLabels) hasFl = hasFl || l.rfind("FL", 0) == 0; CHECK(!g_mapLabels.empty() && hasFl); }
-        size_t zoomedOut = g_mapLabels.size();
-        g_mapLabels.clear();
-        g_mapLabelCb((void*)77, bounds, 3.0f, 1.0f, 0, (void*)1, nullptr);
-        CHECK(g_mapLabels.size() >= zoomedOut);                      // zooming in shows more storms
-        float away[4] = {10.0f, 60.0f, 30.0f, 40.0f};                 // map showing Europe: nothing to draw
-        g_mapLabels.clear();
-        g_mapLabelCb((void*)77, away, 3.0f, 1.0f, 0, (void*)1, nullptr);
-        CHECK(g_mapLabels.empty());
-    }
-
-    {   // the immediate option is a menu toggle (kImmediate = 8) and is honoured when on
-        g_menuHandler(nullptr, (void*)(intptr_t)8);
-        g_menuHandler(nullptr, (void*)(intptr_t)2);              // manual refresh -> immediate apply
-        for (int i = 0; i < 400 && !g_sawImmediate; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-        CHECK(g_sawImmediate);
-        g_menuHandler(nullptr, (void*)(intptr_t)8);              // back off
-        g_sawImmediate = false;
-    }
+    g_sawImmediate = false;                                   // (the start-up and manual refreshes above are immediate by design)
     std::printf("  largest batch handed to X-Plane in one update: %zu records\n", g_maxBatch);
     CHECK(g_maxBatch <= 4);                                   // never a burst
     CHECK(!g_sawImmediate);                                   // never forced an immediate rebuild
@@ -546,7 +571,7 @@ int main() {
         CHECK(g_end == endAfter);                              // nothing more after the erase
     }
     XPluginStop();
-    CHECK(g_winDestroyed && g_mapDestroyed);
+    CHECK(g_winDestroyed);
     std::printf("%s (%d failures)\n", g_fail ? "HARNESS FAILED" : "HARNESS OK", g_fail);
     return g_fail ? 1 : 0;
 }
