@@ -20,6 +20,7 @@ bool loadConfig(const std::string& path, Config& c) {
     std::ifstream f(path);
     if (!f) return false;
     std::string line;
+    int version = 0;
     while (std::getline(f, line)) {
         line = trim(line);
         if (line.empty() || line[0] == '#' || line[0] == ';') continue;
@@ -27,7 +28,8 @@ bool loadConfig(const std::string& path, Config& c) {
         if (eq == std::string::npos) continue;
         std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
         double d = std::atof(v.c_str());
-        if (k == "enabled") c.enabled = toBool(v);
+        if (k == "config_version") version = (int)d;
+        else if (k == "enabled") c.enabled = toBool(v);
         else if (k == "use_atis") c.useAtis = toBool(v);
         else if (k == "use_aloft") c.useAloft = toBool(v);
         else if (k == "update_minutes") c.updateMinutes = (int)(d < 1 ? 1 : d);
@@ -47,6 +49,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "aloft_fcst_hours") c.aloftFcstHours = (int)d;
         else if (k == "aloft_stations") c.aloftStations = (int)(d < 1 ? 1 : (d > 8 ? 8 : d));
         else if (k == "clear_vis_m") c.clearVisM = d < 10000 ? 10000 : d;
+        else if (k == "vis_scale") c.visScale = d < 0.2 ? 0.2 : (d > 1.5 ? 1.5 : d);
         else if (k == "vis_autocal") c.visAutocal = toBool(v);
         else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
         else if (k == "radar") c.radar = toBool(v);
@@ -60,6 +63,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
         else if (k == "radar_map_tops") c.radarMapTops = toBool(v);
+        else if (k == "first_load_immediate") c.firstLoadImmediate = toBool(v);
         else if (k == "apply_immediately") c.applyImmediately = toBool(v);
         else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 1000 ? 1000 : d));
         else if (k == "fill_gaps") c.fillGaps = toBool(v);
@@ -77,6 +81,17 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "update_transition_s") c.updateTransitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
+    if (version < kConfigVersion) {   // the start-up defaults changed: take the new ones once, keep everything else as the user set it
+        Config d;
+        c.updateMinutes = d.updateMinutes;
+        c.startupDelayS = d.startupDelayS;
+        c.startupMaxWaitS = d.startupMaxWaitS;
+        c.startupRadarDelayS = d.startupRadarDelayS;
+        c.startupStaged = d.startupStaged;
+        c.startupWaitFps = d.startupWaitFps;
+        c.firstLoadImmediate = d.firstLoadImmediate;
+        c.visAutocal = d.visAutocal;     // the self-check turned out to chase X-Plane's slow fade and cut visibility; off by default now
+    }
     return true;
 }
 
@@ -84,6 +99,7 @@ bool saveConfig(const std::string& path, const Config& c) {
     std::ofstream f(path, std::ios::trunc);
     if (!f) return false;
     f << "# WXPlane settings. Edit while X-Plane is closed (menu toggles are saved automatically).\n"
+      << "config_version = " << kConfigVersion << "\n"
       << "enabled = " << (c.enabled ? 1 : 0) << "\n"
       << "use_atis = " << (c.useAtis ? 1 : 0) << "\n"
       << "use_aloft = " << (c.useAloft ? 1 : 0) << "\n"
@@ -104,6 +120,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "aloft_fcst_hours = " << c.aloftFcstHours << "\n"
       << "aloft_stations = " << c.aloftStations << "\n"
       << "clear_vis_m = " << c.clearVisM << "\n"
+      << "vis_scale = " << c.visScale << "\n"
       << "vis_autocal = " << (c.visAutocal ? 1 : 0) << "\n"
       << "vis_check_s = " << c.visCheckS << "\n"
       << "radar = " << (c.radar ? 1 : 0) << "\n"
@@ -117,6 +134,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "radar_map_tops = " << (c.radarMapTops ? 1 : 0) << "\n"
+      << "first_load_immediate = " << (c.firstLoadImmediate ? 1 : 0) << "\n"
       << "apply_immediately = " << (c.applyImmediately ? 1 : 0) << "\n"
       << "apply_per_tick = " << c.applyPerTick << "\n"
       << "fill_gaps = " << (c.fillGaps ? 1 : 0) << "\n"

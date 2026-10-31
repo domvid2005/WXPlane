@@ -65,7 +65,7 @@ No compiler? Push this folder to a GitHub repo; `.github/workflows/build.yml` bu
 
 ## Config keys (`WXPlane.cfg`)
 
-`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `station_radius_auto` (1: each station's radius is limited to 49% of the distance to its nearest neighbour, so no two station records overlap and none dilutes another's weather), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `apply_immediately` (0), `apply_per_tick` (500), `startup_delay_s` (15), `startup_wait_fps` (1), `startup_staged` (1), `startup_radar_delay_s` (8), `startup_max_wait_s` (60), `startup_wait_scenery` (0), `transition_s` (0), `update_transition_s` (0).
+`update_minutes` (30), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `station_radius_auto` (1: each station's radius is limited to 49% of the distance to its nearest neighbour, so no two station records overlap and none dilutes another's weather), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `first_load_immediate` (1), `apply_immediately` (0), `apply_per_tick` (500), `startup_delay_s` (3), `startup_wait_fps` (1), `startup_staged` (0), `startup_radar_delay_s` (8), `startup_max_wait_s` (90), `startup_wait_scenery` (0), `transition_s` (0), `update_transition_s` (0).
 
 ## Limits you should know about
 
@@ -113,7 +113,7 @@ No free global radar data feed offers raw values. With `radar_global = 1` WXPlan
 
 | Data | Source | Requests | When |
 |---|---|---|---|
-| METARs | NOAA AWC | 1 (bounding box) | every `update_minutes` (5) |
+| METARs | NOAA AWC | 1 (bounding box) | every `update_minutes` (30) |
 | ATIS | D-ATIS | 1 per airport, at most `atis_max_airports` (2) within `atis_range_nm` | every update; airports with no ATIS are skipped for 1 hour |
 | Winds/temps aloft | NOAA AWC FD winds | 2 (low + high), plus a one-off coordinate lookup | re-downloaded at most every 30 minutes, cached otherwise; coordinates cached for 6 hours |
 | Radar | NOAA MRMS | 2 files (reflectivity + echo tops, a few MB each) | every update |
@@ -163,3 +163,19 @@ Station records never overlap (see `station_radius_auto`), so the space between 
 ## NOAA cross-check and completing reports
 
 The plugin reads each METAR from NOAA's aviationweather.gov as raw text and also gets NOAA's decoded fields (`visib`, `wdir`, `wspd`, `wgst`, `temp`, `dewp`, `altim`, `clouds`, `vertVis`) in the same response. After parsing the text, the two are compared: elements the text parse missed are filled in and, where they disagree, NOAA's decoded value is used. Anything still missing (wind, visibility, temperature, dew point, pressure) is filled from the nearest stations that have it (inverse-distance weighted, within 80 nm). Both are noted in the METAR/ATIS window ("Completed: ...") and counted in `Log.txt` (`NOAA crosscheck: ...`). Clouds are never guessed from neighbours.
+
+## Start-up fade (patchy clouds)
+
+X-Plane normally fades new weather in over 1-2 minutes. Cloud layers dissolve through a noise mask during that fade, which shows as blotchy, cut-out cloud patches (seen from the cockpit while it loads in). With `first_load_immediate = 1` the start-up updates (the stations, then the radar storms) are applied at once, so the dissolve is over right away; later 5-minute updates still fade in softly. This can cause one short hitch when the first update lands. `apply_immediately = 1` does the same for every update.
+
+## Ready within a minute
+
+Defaults aim for fully loaded weather about 30 to 45 seconds after the plugin loads: the first download starts after `startup_delay_s` (5 s) and a steady frame rate (at most `startup_max_wait_s`, 20 s), and everything (stations, gap fill, radar storms) goes to X-Plane as ONE update that is applied at once (`first_load_immediate`), so there is no second update and no 1-2 minute fade-in. After that the weather is refreshed every `update_minutes` (30; it was 5) and when you have flown `refetch_move_nm` (40 nm), with soft fades for those later changes. Set `update_minutes = 5` to get the old frequent refresh back, and `startup_staged = 1` to split the first load in two. Old config files take the new start-up defaults once (`config_version`); other settings are kept.
+
+## Start-up timing
+
+X-Plane does not run plugin callbacks while it is still loading (often 1 to 2 minutes after the plugin is enabled), so all start-up waits (`startup_delay_s`, the steady-frame-rate wait and its `startup_max_wait_s` limit of 90 s) are counted from the moment the sim starts running. The weather goes in as soon as the frame rate has been steady for 4 s, which is the moment the sim becomes usable, instead of while it is still crawling at a fraction of a frame per second. The `sim stalled` log lines now measure the real gap between frames.
+
+## Visibility scale
+
+`vis_scale` (default 1, range 0.2 to 1.5) multiplies every reported visibility below 10 SM before it is handed to X-Plane (stations, gap-fill and radar storm records alike). At 1 the METAR/ATIS value goes out exactly; 10 SM or more goes out as `clear_vis_m`. A test with a 4 SM report suggested X-Plane's value may look about twice as far as the METAR distance, so 0.5 may look closer to reality in some conditions; this is unconfirmed, so the default is the exact value.

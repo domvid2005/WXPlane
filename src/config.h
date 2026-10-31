@@ -3,11 +3,13 @@
 
 namespace wx {
 
+constexpr int kConfigVersion = 4;   // bumped when defaults change; older config files get the new start-up defaults once
+
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
-    int updateMinutes = 5;        // periodic refresh
+    int updateMinutes = 30;       // periodic refresh
     double searchNm = 120;        // METARs are fetched within this distance of the aircraft
     int maxStations = 40;         // nearest N stations are applied
     double radiusNm = 30;         // influence radius of each report
@@ -24,6 +26,7 @@ struct Config {
     int aloftFcstHours = 6;       // NOAA winds-aloft forecast cycle: 6, 12 or 24
     int aloftStations = 4;        // FD stations blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
+    double visScale = 1.0;        // factor on reported visibility below 10 SM before it goes to X-Plane (1 = exactly the METAR/ATIS value)
     bool visAutocal = false;      // compare what X-Plane reports with the METAR/ATIS and correct our input
     int visCheckS = 100;          // seconds after an update to run that comparison
     // Radar storms (NOAA MRMS mosaic, optional global fallback)
@@ -38,9 +41,10 @@ struct Config {
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud
     bool radarMapTops = true;     // label storm tops (FLxxx) on X-Plane's map
+    bool firstLoadImmediate = true;  // the start-up updates (stations, then radar storms) skip X-Plane's slow fade-in, so the clouds do not dissolve in patches
     bool applyImmediately = false; // true forces X-Plane to rebuild clouds at once (a visible stall); false lets it fade in over 1-2 min
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
-    int startupDelayS = 15;       // wait this long after the plugin loads before the first download
+    int startupDelayS = 3;        // wait this long after the plugin loads before the first download
     bool fillGaps = true;            // fill the gaps between station circles so every point takes the nearest station's weather
     int fillRangeNm = 60;            // ...within this distance of the aircraft
     int fillFarRangeNm = 120;        // coarse fill out to here (never beyond the METAR search radius)
@@ -48,9 +52,9 @@ struct Config {
     int fillCellNm = 12;             // ...using location records on a grid this size
     bool stationRadiusAuto = true;   // shrink each station's radius so close neighbours do not blend into it
     bool startupWaitFps = true;      // hold the first update until the frame rate has been steady for a few seconds (up to 2.5 min)
-    bool startupStaged = true;       // first update = METAR/ATIS/winds only; radar storms follow ~20 s later, once the frame rate is steady
+    bool startupStaged = false;      // true: first update = METAR/ATIS/winds only, radar storms follow startup_radar_delay_s later
     int startupRadarDelayS = 8;      // staged start-up: seconds after the first update before radar storms are added
-    int startupMaxWaitS = 60;        // never hold the first update back longer than this after the plugin loads
+    int startupMaxWaitS = 90;        // never hold the first update back longer than this after the sim starts running
     bool startupWaitScenery = false; // also wait (up to 2.5 min) until X-Plane reports scenery loading finished
     int transitionS = 0;          // first load: release the weather records evenly over this many seconds (0 = all in one update, recommended: each extra update is another hitch)
     int updateTransitionS = 0;    // later updates: same, for the records that changed       

@@ -61,7 +61,7 @@ bool g_pluginEnabled = false;
 unsigned g_viewVersion = 1;     // bumped whenever new data is applied (METAR/ATIS window re-wraps on change)
 wx::FetchResult g_lastRes;      // last applied data, kept so a visibility correction can re-apply without a download
 bool g_haveLast = false;
-float g_visK = 1.0f;            // learned correction between what we send and what X-Plane ends up using
+float g_visK = 1.0f;            // factor between the METAR visibility and what we send (vis_scale; the optional self-check adjusts it)
 bool g_checkPending = false;
 Clock::time_point g_checkAt{};
 int g_calIter = 0;
@@ -123,6 +123,8 @@ std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by 
 // Records are handed to X-Plane a few at a time (nearest stations first, then storms) instead of all at once: every
 // weather update makes the sim rebuild what changed, and doing 100 of them in one frame is what shows up as a stutter.
 bool g_pendingImmediate = false;
+bool g_startupPhase = true;        // true until the start-up updates (stations, then storms) are out
+bool g_pendingStartup = false;
 Clock::time_point g_nextRelease{};   // when the next queued record may be handed to X-Plane
 double g_releaseStepS = 0.0;         // seconds between records, so a whole update spreads over transition_s
 struct Todo { std::string key; Rec rec; };
@@ -158,7 +160,7 @@ void flushPending() {
     for (size_t i = 0; i < n; ++i) sendRec(g_pendingTodo[i]);
     sent = n;
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
-    XPLMEndWeatherUpdate(1 /*incremental*/, (g_cfg.applyImmediately && g_pendingImmediate) ? 1 : 0);
+    XPLMEndWeatherUpdate(1 /*incremental*/, (g_pendingImmediate && (g_cfg.applyImmediately || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued)", ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size());
     if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
@@ -363,6 +365,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             // Haze/rain visibility (5 km and up) belongs to the whole air mass, so storm records within 60 nm carry the station's
             // value. Giving them 40 km instead made X-Plane blend them into the station area and the METAR visibility never showed.
             if (nd > 60.0 || x.visM < 5000.0f) x.visM = (float)g_cfg.clearVisM;
+            if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
             wx::applyStorm(x, c, g_cfg, nearest->elevM, c.lat);
             XPLMWeatherInfo_t info;
             fillInfo(info, x);
@@ -390,7 +393,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (full) g_recs.clear();
     g_pendingTodo = todo;
     g_pendingGone = gone;
-    g_pendingImmediate = res.immediate || !g_firstApplyDone;
+    g_pendingImmediate = res.immediate || !g_firstApplyDone || g_startupPhase;
+    g_pendingStartup = g_startupPhase;
     {   // spread the records evenly over the configured transition time (nearest stations first)
         size_t n = todo.size() + gone.size();
         int T = g_firstApplyDone ? g_cfg.updateTransitionS : g_cfg.transitionS;
@@ -418,6 +422,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     }
     g_lastApplyLogAt = Clock::now();
     if (!g_firstApplyDone) g_firstApplyAt = Clock::now();
+    if (!g_radarDeferred) g_startupPhase = false;     // start-up is over once the storm update (or the only update) is applied
     g_firstApplyDone = true;
     g_lastRes = res;
     g_haveLast = true;
@@ -510,7 +515,7 @@ void visibilityCheck() {
     // something else (other records, its own weather). Lowering further only makes the sky murky for nothing: undo and stop.
     if (g_calIter == 1 && g_visK < 1.0f && g_visBeforeCorr > 0 && info.visibility >= g_visBeforeCorr * 0.9f) {
         logf("visibility check: X-Plane did not follow the lower value (%.0f m before, %.0f m now); restoring the METAR value and stopping", g_visBeforeCorr, info.visibility);
-        g_visK = 1.0f;
+        g_visK = (float)g_cfg.visScale;
         g_calIter = 2;
         wx::FetchResult copy = g_lastRes;
         copy.immediate = true;
@@ -520,7 +525,7 @@ void visibilityCheck() {
     double ratio = x.visM / info.visibility;
     if (std::fabs(ratio - 1.0) <= 0.25) return;
     g_visBeforeCorr = info.visibility;
-    g_visK = (float)std::min(1.5, std::max(0.5, g_visK * std::pow(ratio, 0.8)));
+    g_visK = (float)std::min(1.5, std::max(0.2, g_visK * std::pow(ratio, 0.8)));
     ++g_calIter;
     logf("visibility off by %.0f%%: correction now %.2f, re-applying (pass %d/2)", (ratio - 1.0) * 100.0, g_visK, g_calIter);
     wx::FetchResult copy = g_lastRes;
@@ -603,14 +608,31 @@ bool sceneryReady() {
     return std::chrono::duration<double>(now - g_calmSince).count() >= 3.0;
 }
 
-float flightLoop(float, float sinceLastCall, int, void*) {
-    // Frame stall detector: this callback runs every 0.25 s, so a much longer gap means the whole sim stood still. Logging when
-    // that happened relative to our own work shows whether WXPlane was involved.
-    if (sinceLastCall > 1.5f && g_everRequested) {
-        double sinceApply = g_firstApplyDone ? std::chrono::duration<double>(Clock::now() - g_lastApplyLogAt).count() : -1.0;
-        logf("sim stalled for %.1f s (our last weather update was %s)", sinceLastCall,
-             sinceApply < 0 ? "not yet applied" : (std::to_string((int)sinceApply) + " s ago").c_str());
+Clock::time_point g_lastLoopAt{};
+bool g_loopStarted = false;
+int g_stallLogs = 0;
+Clock::time_point g_lastStallLog{};
+
+float flightLoop(float, float, int, void*) {
+    const auto nowT = Clock::now();
+    if (!g_loopStarted) {
+        // X-Plane does not run flight loops while it is still loading (this can be well over a minute after the plugin was
+        // enabled), so every start-up wait is counted from here, from the moment the sim starts running.
+        g_loopStarted = true;
+        g_enabledAt = nowT;
+    } else if (g_firstApplyDone && g_stallLogs < 20) {
+        // Frame stall detector, measured with our own clock (X-Plane's elapsed-time argument is not the gap between frames):
+        // this callback runs every 0.25 s, so a much longer gap means the whole sim stood still. Logged only after our first
+        // update, at most one line per 10 s, so the log shows whether a freeze came right after one of our updates.
+        double gap = std::chrono::duration<double>(nowT - g_lastLoopAt).count();
+        if (gap > 1.5 && std::chrono::duration<double>(nowT - g_lastStallLog).count() > 10.0) {
+            g_lastStallLog = nowT;
+            ++g_stallLogs;
+            logf("sim stalled for %.1f s (our last weather update was %d s ago)", gap,
+                 (int)std::chrono::duration<double>(nowT - g_lastApplyLogAt).count());
+        }
     }
+    g_lastLoopAt = nowT;
     if (g_checkPending && Clock::now() >= g_checkAt) {
         g_checkPending = false;
         visibilityCheck();
@@ -884,6 +906,8 @@ PLUGIN_API int XPluginEnable(void) {
     wx::httpGlobalInit();
     g_fetcher.start();
     g_enabledAt = Clock::now();
+    g_loopStarted = false;
+    g_visK = (float)g_cfg.visScale;
     g_calm = false;
     if (!g_mapHookRegistered) { XPLMRegisterMapCreationHook(mapCreatedHook, nullptr); g_mapHookRegistered = true; }
     if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayer(XPLM_MAP_USER_INTERFACE, nullptr);
@@ -901,6 +925,7 @@ PLUGIN_API int XPluginEnable(void) {
     g_everRequested = false;
     g_firstApplyDone = false;
     g_radarDeferred = false;
+    g_startupPhase = true;
     setStatus(g_cfg.enabled ? "Waiting for sim..." : "Disabled", "");
     logf("enabled (update every %d min, search %.0f nm)", g_cfg.updateMinutes, g_cfg.searchNm);
     return 1;

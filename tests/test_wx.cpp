@@ -150,6 +150,18 @@ int main() {
     CHECK(t.clouds[0].topM < t.clouds[1].baseM && t.clouds[1].topM < t.clouds[2].baseM);
     CHECK(t.clouds[0].topM > t.clouds[0].baseM && t.clouds[1].topM > t.clouds[1].baseM);
 
+    // --- config migration: an old file (no config_version) takes the new start-up defaults once, other settings stay
+    {
+        const char* fn = "wxplane_cfg_test.cfg";
+        { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\nsearch_nm = 90\n", f); std::fclose(f); }
+        Config old; loadConfig(fn, old);
+        CHECK(old.updateMinutes == 30 && old.startupDelayS == 3 && !old.startupStaged && !old.visAutocal && old.searchNm == 90);
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 4\nupdate_minutes = 10\nstartup_staged = 1\n", f); std::fclose(f); }
+        Config cur; loadConfig(fn, cur);
+        CHECK(cur.updateMinutes == 10 && cur.startupStaged);
+        std::remove(fn);
+    }
+
     // --- NOAA decoded-field crosscheck, neighbour fill and smooth blending
     {
         std::string js = "[{\"icaoId\":\"KTST\",\"rawOb\":\"KTST 301553Z 18010KT 5SM BKN020 15/10 A2992\",\"lat\":30.0,\"lon\":-97.0,\"elev\":100,"
