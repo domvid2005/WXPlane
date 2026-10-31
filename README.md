@@ -195,3 +195,7 @@ X-Plane starts with its own weather and, when a plugin replaces it, fades the cl
 ## The start-up load is always one update
 
 Whatever `apply_per_tick`, `transition_s` or `update_transition_s` say, the start-up load (stations, gap fill and storms) goes to X-Plane as ONE update. A log from a session with `transition_s = 90` left over in the config from an older test build showed the 226 records being fed in over 135 seconds, which looked like two minutes of changing clouds, fog and light. Old config files now get `transition_s = 0`, `update_transition_s = 0` and `apply_per_tick = 500` once (`config_version` 6).
+
+## Staying in control of the weather
+
+X-Plane gives each weather record a weight based on its age, so every record WXPlane sends now has age 0 (a 50-minute-old METAR would otherwise count for less than X-Plane's own weather). The log also gains a `weather watch` line 30 s after each update, then every minute for 10 minutes and every 5 minutes after that: it shows the wind, visibility and cloud X-Plane is using at the aircraft next to what the surrounding stations call for. It only logs. Turn off X-Plane's own real weather as well, since it blends its downloaded METARs with ours.

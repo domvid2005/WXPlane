@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 4;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 6;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -44,14 +44,14 @@ struct Config {
     bool firstLoadImmediate = true;  // the start-up updates (stations, then radar storms) skip X-Plane's slow fade-in, so the clouds do not dissolve in patches
     bool applyImmediately = false; // true forces X-Plane to rebuild clouds at once (a visible stall); false lets it fade in over 1-2 min
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
-    int startupDelayS = 3;        // wait this long after the plugin loads before the first download
+    int startupDelayS = 0;        // wait this long after the plugin loads before the first download
     bool fillGaps = true;            // fill the gaps between station circles so every point takes the nearest station's weather
     int fillRangeNm = 60;            // ...within this distance of the aircraft
     int fillFarRangeNm = 120;        // coarse fill out to here (never beyond the METAR search radius)
     int fillFarCellNm = 30;          // ...on a grid this size
     int fillCellNm = 12;             // ...using location records on a grid this size
     bool stationRadiusAuto = true;   // shrink each station's radius so close neighbours do not blend into it
-    bool startupWaitFps = true;      // hold the first update until the frame rate has been steady for a few seconds (up to 2.5 min)
+    bool startupWaitFps = false;     // true: hold the first update until the frame rate has been steady for a few seconds (up to startup_max_wait_s)
     bool startupStaged = false;      // true: first update = METAR/ATIS/winds only, radar storms follow startup_radar_delay_s later
     int startupRadarDelayS = 8;      // staged start-up: seconds after the first update before radar storms are added
     int startupMaxWaitS = 90;        // never hold the first update back longer than this after the sim starts running

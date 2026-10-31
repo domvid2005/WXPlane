@@ -90,6 +90,9 @@ bool loadConfig(const std::string& path, Config& c) {
         c.startupStaged = d.startupStaged;
         c.startupWaitFps = d.startupWaitFps;
         c.firstLoadImmediate = d.firstLoadImmediate;
+        c.transitionS = d.transitionS;   // drip-feeding records over time (older test builds) made the load-in last minutes
+        c.updateTransitionS = d.updateTransitionS;
+        c.applyPerTick = d.applyPerTick;
         c.visAutocal = d.visAutocal;     // the self-check turned out to chase X-Plane's slow fade and cut visibility; off by default now
     }
     return true;

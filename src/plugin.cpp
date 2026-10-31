@@ -51,6 +51,8 @@ XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
 Clock::time_point g_firstApplyAt{};
+Clock::time_point g_enabledAt{};   // start of the sim's first frame (start-up waits count from here)
+bool g_loopStarted = false;
 Clock::time_point g_lastApplyLogAt{};
 XPLMDataRef g_drFramePeriod = nullptr;
 XPLMDataRef g_drLat = nullptr, g_drLon = nullptr, g_drLevels = nullptr, g_drAgl = nullptr, g_drLoading = nullptr;
@@ -63,6 +65,10 @@ wx::FetchResult g_lastRes;      // last applied data, kept so a visibility corre
 bool g_haveLast = false;
 float g_visK = 1.0f;            // factor between the METAR visibility and what we send (vis_scale; the optional self-check adjusts it)
 bool g_checkPending = false;
+XPLMDataRef g_drElev = nullptr;
+bool g_watchOn = false;
+int g_watchN = 0;
+Clock::time_point g_watchAt{};
 Clock::time_point g_checkAt{};
 int g_calIter = 0;
 int g_checkTries = 0;
@@ -148,8 +154,10 @@ void eraseRec(const std::string& k) {
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
     auto t0 = Clock::now();
-    size_t budget = (size_t)g_cfg.applyPerTick, sent = 0, erased = 0;
-    if (g_releaseStepS > 0.0) {
+    // The start-up load always goes to X-Plane as ONE update, whatever apply_per_tick / transition_s say: every extra update is
+    // another rebuild, and spreading it out was what made the load-in a couple of minutes of changing clouds and light.
+    size_t budget = g_pendingStartup ? g_pendingTodo.size() + g_pendingGone.size() : (size_t)g_cfg.applyPerTick, sent = 0, erased = 0;
+    if (g_releaseStepS > 0.0 && !g_pendingStartup) {
         if (t0 < g_nextRelease) return;
         double behind = std::chrono::duration<double>(t0 - g_nextRelease).count();
         budget = std::min(budget, (size_t)(behind / g_releaseStepS) + 1);
@@ -238,7 +246,7 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
     }
     info.troposphere_alt = 0.0f;   // derive from existing data
     info.troposphere_temp = kUnset;
-    info.age = x.ageS;
+    info.age = 0.0f;   // X-Plane weights a record by its age; an old METAR would count for less than its own weather
     info.radius_nm = (float)g_cfg.radiusNm;
     info.max_altitude_msl_ft = x.maxAltFt;
 }
@@ -399,7 +407,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_pendingManual = res.immediate && !g_startupPhase;
     {   // spread the records evenly over the configured transition time (nearest stations first)
         size_t n = todo.size() + gone.size();
-        int T = g_firstApplyDone ? g_cfg.updateTransitionS : g_cfg.transitionS;
+        int T = g_startupPhase ? 0 : (g_firstApplyDone ? g_cfg.updateTransitionS : g_cfg.transitionS);
         if (g_cfg.applyImmediately && g_pendingImmediate) T = 0;
         g_releaseStepS = (n > 0 && T > 0) ? std::max(0.0625, (double)T / (double)n) : 0.0;
         g_nextRelease = Clock::now();
@@ -407,7 +415,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (res.noaaFixes > 0 || res.filledElements > 0)
         logf("NOAA crosscheck: %d of %zu reports corrected or completed from NOAA's decoded fields, %d missing elements filled from neighbouring stations",
              res.noaaFixes, res.stations.size(), res.filledElements);
-    logf("update: %zu stations, %d gap-fill records, %d storm cells, %zu changed, %zu removed%s%s", res.stations.size(), fillCount, stormCount, todo.size(), gone.size(), full ? " (full)" : "",
+    logf("update (+%d s after the sim started running): %zu stations, %d gap-fill records, %d storm cells, %zu changed, %zu removed%s%s", g_loopStarted ? (int)std::chrono::duration<double>(Clock::now() - g_enabledAt).count() : -1, res.stations.size(), fillCount, stormCount, todo.size(), gone.size(), full ? " (full)" : "",
          (g_pendingTodo.empty() && g_pendingGone.empty()) ? "" : " [queued, sent a few at a time]");
     if (g_cfg.radar) {
         if (res.radar.ok) {
@@ -432,6 +440,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_prevReadVis = 0;
     if (fromFetch) { g_calIter = 0; g_checkTries = 0; }
     g_checkPending = g_cfg.visAutocal && !res.stations.empty();
+    g_watchOn = !res.stations.empty();
+    g_watchN = 0;
+    g_watchAt = Clock::now() + std::chrono::seconds(30);
     g_checkAt = Clock::now() + std::chrono::seconds(res.immediate ? std::min(15, g_cfg.visCheckS) : g_cfg.visCheckS);
 
     char t[16];
@@ -463,6 +474,27 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     for (const auto& s : res.stations) {
         if (s.hasAtis) logf("  %s ATIS %s: %s", s.icao.c_str(), s.atisLetter.c_str(), s.atisText.substr(0, 110).c_str());
     }
+}
+
+// Log-only: what X-Plane is using at the aircraft compared with what the stations around it call for. Shows whether the sim
+// has gone back to its own weather after our update (checked every minute for 10 minutes, then every 5 minutes).
+void weatherWatch() {
+    if (!g_haveLast || g_lastRes.stations.empty() || !g_drElev) return;
+    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), el = XPLMGetDatad(g_drElev);
+    wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
+    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, std::time(nullptr) < g_fogUntil);
+    XPLMWeatherInfo_t info;
+    std::memset(&info, 0, sizeof info);
+    info.structSize = sizeof info;
+    int det = XPLMGetWeatherAtLocation(lat, lon, el + 2.0, &info);
+    float cov = 0, base = 0, xcov = 0, xbase = 0;
+    for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
+        if (info.cloud_layers[i].coverage > cov) { cov = info.cloud_layers[i].coverage; base = info.cloud_layers[i].alt_base; }
+        if (x.clouds[i].coverage > xcov) { xcov = x.clouds[i].coverage; xbase = x.clouds[i].baseM; }
+    }
+    logf("weather watch (%s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
+         b.icao.c_str(), wx::distNm(lat, lon, b.lat, b.lon), info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
+         cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
 }
 
 // Asks X-Plane what visibility it is actually using next to the airport we are at, and compares it with the
@@ -583,7 +615,6 @@ void mapCreatedHook(const char* mapId, void* rc) { if (g_pluginEnabled) createMa
 // ---------------- start-up gating ----------------
 // Scenery loading is the busiest moment of a flight; downloads and weather rebuilds then add to the load. Hold the first
 // update back until the plugin has been up for startup_delay_s and X-Plane reports no scenery loading for a few seconds.
-Clock::time_point g_enabledAt{};
 Clock::time_point g_calmSince{};
 bool g_calm = false;
 
@@ -612,13 +643,12 @@ bool sceneryReady() {
 
 bool g_disableErase = false;   // plugin was disabled: erase our records from the next callback, then stop
 Clock::time_point g_lastLoopAt{};
-bool g_loopStarted = false;
 int g_stallLogs = 0;
 Clock::time_point g_lastStallLog{};
 
 float flightLoop(float, float, int, void*) {
     if (!g_pluginEnabled) {
-        if (g_disableErase) { g_disableErase = false; g_checkPending = false; eraseAll(); }
+        if (g_disableErase) { g_disableErase = false; g_checkPending = false; g_watchOn = false; eraseAll(); }
         return 0.0f;   // stop calling us until the plugin is enabled again
     }
     const auto nowT = Clock::now();
@@ -644,6 +674,11 @@ float flightLoop(float, float, int, void*) {
         g_checkPending = false;
         visibilityCheck();
     }
+    if (g_watchOn && Clock::now() >= g_watchAt) {
+        weatherWatch();
+        ++g_watchN;
+        g_watchAt = Clock::now() + std::chrono::seconds(g_watchN < 10 ? 60 : 300);
+    }
 
     // 1) results from the worker thread
     wx::FetchResult res;
@@ -663,6 +698,7 @@ float flightLoop(float, float, int, void*) {
     if (g_eraseRequested) {
         g_eraseRequested = false;
         g_checkPending = false;
+        g_watchOn = false;
         eraseAll();
         g_haveCenter = false;
         setStatus("Disabled - X-Plane weather in control", "");
@@ -881,6 +917,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_drLon = XPLMFindDataRef("sim/flightmodel/position/longitude");
     g_drLevels = XPLMFindDataRef("sim/weather/region/atmosphere_alt_levels_m");
     g_drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+    g_drElev = XPLMFindDataRef("sim/flightmodel/position/elevation");
     g_drFramePeriod = XPLMFindDataRef("sim/operation/misc/frame_rate_period");
     g_drLoading = XPLMFindDataRef("sim/graphics/scenery/async_scenery_load_in_progress"); // null if this build lacks it
 

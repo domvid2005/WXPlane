@@ -153,10 +153,10 @@ int main() {
     // --- config migration: an old file (no config_version) takes the new start-up defaults once, other settings stay
     {
         const char* fn = "wxplane_cfg_test.cfg";
-        { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\nsearch_nm = 90\n", f); std::fclose(f); }
+        { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\ntransition_s = 90\napply_per_tick = 4\nsearch_nm = 90\n", f); std::fclose(f); }
         Config old; loadConfig(fn, old);
-        CHECK(old.updateMinutes == 30 && old.startupDelayS == 3 && !old.startupStaged && !old.visAutocal && old.searchNm == 90);
-        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 4\nupdate_minutes = 10\nstartup_staged = 1\n", f); std::fclose(f); }
+        CHECK(old.updateMinutes == 30 && old.startupDelayS == 0 && !old.startupStaged && !old.visAutocal && old.transitionS == 0 && old.applyPerTick == 500 && old.searchNm == 90);
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nupdate_minutes = 10\nstartup_staged = 1\n", f); std::fclose(f); }
         Config cur; loadConfig(fn, cur);
         CHECK(cur.updateMinutes == 10 && cur.startupStaged);
         std::remove(fn);
