@@ -328,6 +328,18 @@ int main() {
         CHECK(!k1.empty() && k1 == k2);
         rc.radarMaxCells = 2; RadarResult rr3 = buildRadarCells(refl, nullptr, 38.0, -98.0, rc);
         CHECK(rr3.cells.size() == 2 && rr3.echoBlocks >= 3 && !rr3.topsFromRadar && rr3.cells[0].topM > 3000 && !rr3.cells[0].topKnown);
+        {   // estimated tops (no echo-top grid) vary per block by a fixed amount: not one plateau, stable between builds, bounded
+            Config vc = rc; vc.radarMaxCells = 100; vc.stormSmoothTops = false; vc.stormTopVariationM = 1500;
+            Config fc = vc; fc.stormTopVariationM = 0;
+            RadarResult va = buildRadarCells(refl, nullptr, 38.0, -98.0, vc), vb = buildRadarCells(refl, nullptr, 38.0, -98.0, vc), vf = buildRadarCells(refl, nullptr, 38.0, -98.0, fc);
+            bool same = va.cells.size() == vb.cells.size() && va.cells.size() == vf.cells.size(), bounded = true, differs = false;
+            for (size_t i = 0; same && i < va.cells.size(); ++i) {
+                same = same && va.cells[i].topM == vb.cells[i].topM;
+                bounded = bounded && std::fabs(va.cells[i].topM - vf.cells[i].topM) <= 2000.0f;
+                differs = differs || va.cells[i].topM != vf.cells[i].topM;
+            }
+            CHECK(same && bounded && differs);
+        }
         rc.radarMaxCells = 100; rc.radarRangeNm = 20; RadarResult rr4 = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
         CHECK(rr4.cells.size() < rr.cells.size());                   // range limit applies
         rc.radarRangeNm = 100; rc.radarMinDbz = 40; RadarResult rr5 = buildRadarCells(refl, &tops, 38.0, -98.0, rc);

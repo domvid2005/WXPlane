@@ -217,4 +217,8 @@ Cloud layers at one station never overlap vertically: every top stays at least 1
 
 ## Cloud look: smooth curtains vs billowy
 
-Low and overcast layers used to be sent as X-Plane cloud type 1.0 (stratus), which it draws as a smooth sheet with vertical curtain-like edges; storm clouds (type 3) and cumulus (2) are billowy. Where the two meet in one cloud the left and right halves looked completely different. Low and overcast layers now use `low_cloud_type = 3` (cumulonimbus-style billowy cloud; 2 is cumulus), and every radar storm cloud is type 3 (weak echoes used to ramp down towards smooth type 1). Set `low_cloud_type = 1` for the old smooth sheets; values in between mix the looks.
+Low and overcast layers used to be sent as X-Plane cloud type 1.0 (stratus), which it draws as a smooth sheet with vertical curtain-like edges; storm clouds (type 3) and cumulus (2) are billowy. Where the two meet in one cloud the left and right halves looked completely different. Every non-cirrus layer (overcast, broken, scattered and few, plus towering cumulus) now uses `low_cloud_type = 3` (cumulonimbus-style billowy cloud; 2 is cumulus), and every radar storm cloud is type 3 (weak echoes used to ramp down towards smooth type 1). Set `low_cloud_type = 1` for the old smooth sheets; values in between mix the looks.
+
+## Varying storm tops
+
+Storm blocks without a measured echo top got one estimated height per intensity, so many storms topped out at exactly the same altitude (a flat plateau with straight walls at its edge). Each estimated top now varies by up to +/- `storm_top_variation_m` (1500 m; 0 turns it off). The offset is derived from the block's key, so it is the same on every update and storms don't change height from one refresh to the next. Measured echo tops are not varied. The map's FL labels use the same values.

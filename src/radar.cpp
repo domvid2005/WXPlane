@@ -126,6 +126,16 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         c.frac = std::max(0.25f, std::round(clampf((float)(a.n / std::max(1.0, pxPerBlock)), 0.0f, 1.0f) * 4.0f) / 4.0f);
         c.topKnown = a.top > 0;
         c.topM = c.topKnown ? std::round(a.top * 2.0f) * 500.0f : std::round(estimateTopM(c.dbz, c.lat) / 500.0f) * 500.0f;
+        if (!c.topKnown && cfg.stormTopVariationM > 0) {
+            // one estimate per intensity makes every such storm the same height (a flat plateau with straight walls): vary each
+            // block by a fixed amount derived from its key, so the height does not change from one update to the next
+            char hk[48];
+            std::snprintf(hk, sizeof hk, "R%ld:%ld", kv.first.first, kv.first.second);
+            unsigned h = 2166136261u;
+            for (const char* q = hk; *q; ++q) { h ^= (unsigned char)*q; h *= 16777619u; }
+            const double v = (double)(h % 2001u) / 1000.0 - 1.0;   // -1 .. +1
+            c.topM = std::max(3000.0f, std::round((c.topM + (float)(v * cfg.stormTopVariationM)) / 500.0f) * 500.0f);
+        }
         c.rateMmH = rateFromDbz(c.dbz);
         c.distNm = distNm(lat, lon, c.lat, c.lon);
         char key[48];
