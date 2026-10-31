@@ -324,15 +324,20 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             for (int i = 0; i < 3; ++i) {
                 auto& L = e.info.cloud_layers[i];
                 if (!ovc(i)) continue;
-                float ceilM = 1e9f;   // base of the next layer above this one
-                for (int j = 0; j < 3; ++j)
-                    if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
+                float ceilM = 1e9f;   // base of the next layer above this one (not counting the thin cap layer sitting on the deck)
+                int cap = -1;
+                for (int j = 0; j < 3; ++j) {
+                    if (j == i || !(info.cloud_layers[j].coverage > 0) || !(info.cloud_layers[j].alt_base > L.alt_top)) continue;
+                    if (info.cloud_layers[j].alt_base - L.alt_top < 100.0f && info.cloud_layers[j].alt_top - info.cloud_layers[j].alt_base < 150.0f) { cap = j; continue; }
+                    ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
+                }
                 const float thick = L.alt_top - L.alt_base;
                 const float rise = std::min((float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), std::max(0.0f, ceilM - L.alt_top - 120.0f));
                 L.cloud_type = 3.0f;
                 L.coverage = (float)std::min(0.95, g_cfg.bumpCoverage * (0.8 + 0.4 * ((h1 / 3600) % 1000) / 1000.0));
                 L.alt_base = L.alt_base + thick * 0.6f;
                 L.alt_top = L.alt_top + rise;
+                if (cap >= 0) { e.info.cloud_layers[cap].alt_base += rise; e.info.cloud_layers[cap].alt_top += rise; }
             }
             e.info.age = 0.0f;
             const std::string key = "bump:" + id + ":" + std::to_string(k);
@@ -418,10 +423,16 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                             // Tops vary too: some edge clouds stand above the deck, some below, so the rim is uneven. A rise is kept
                             // clear of the layer above.
                             float ceilM = 1e9f;
-                            for (int j = 0; j < 3; ++j)
-                                if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > e.info.cloud_layers[i].alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
+                            int cap = -1;   // the thin cap layer on the deck is not a ceiling; it moves with the top
+                            for (int j = 0; j < 3; ++j) {
+                                if (j == i || !(info.cloud_layers[j].coverage > 0) || !(info.cloud_layers[j].alt_base > e.info.cloud_layers[i].alt_top)) continue;
+                                if (info.cloud_layers[j].alt_base - e.info.cloud_layers[i].alt_top < 100.0f && info.cloud_layers[j].alt_top - info.cloud_layers[j].alt_base < 150.0f) { cap = j; continue; }
+                                ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
+                            }
                             const float up = std::min((float)(g_cfg.topBumps ? g_cfg.bumpHeightM * 0.6 : 0.0) * (float)((h / 3500) % 100) / 100.0f, std::max(0.0f, ceilM - e.info.cloud_layers[i].alt_top - 120.0f));
-                            e.info.cloud_layers[i].alt_top += ((h / 7) % 3 == 0) ? up : -dTop;
+                            const float dTopMove = ((h / 7) % 3 == 0) ? up : -dTop;
+                            e.info.cloud_layers[i].alt_top += dTopMove;
+                            if (cap >= 0) { e.info.cloud_layers[cap].alt_base += dTopMove; e.info.cloud_layers[cap].alt_top += dTopMove; }
                         }
                     e.info.age = 0.0f;
                     const std::string key = "edge:" + s.icao + ":" + std::to_string(k);

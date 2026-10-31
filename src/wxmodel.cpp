@@ -278,6 +278,27 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     } else {
         for (size_t i = 0; i < 3 && i < layers.size(); ++i) x.clouds[i] = layers[i];
     }
+    // A very thin billowy (type 3) layer sitting just above every thick overcast: the top of a flat deck then breaks into cloud
+    // instead of ending in one clean plane. Only in a free slot (never slot 0 when it is reserved for ground fog, because that
+    // slot is blended between stations) and only when there is room below the next layer.
+    if (cfg.capLayer) {
+        for (int i = 0; i < 3; ++i) {
+            const XpCloud d = x.clouds[i];
+            if (!(d.coverage >= 0.85f && d.type > 0.5f) || (i == 0 && x.fogLayerApplied)) continue;
+            const float base = d.topM + (float)cfg.capGapM, top = base + (float)cfg.capThickM;
+            int slot = -1;
+            for (int k = (fogSlot ? 1 : 0); k < 3 && slot < 0; ++k)
+                if (x.clouds[k].coverage <= 0.0f) slot = k;
+            if (slot < 0) break;
+            bool room = true;
+            for (int k = 0; k < 3; ++k)
+                if (k != slot && x.clouds[k].coverage > 0 && x.clouds[k].baseM > d.topM && x.clouds[k].baseM < top + 100.0f) room = false;
+            if (!room) continue;
+            XpCloud c;
+            c.type = 3.0f; c.coverage = (float)cfg.capCoverage; c.baseM = base; c.topM = top;
+            x.clouds[slot] = c;
+        }
+    }
     if (cfg.handoffAltFt > 0) applyHandoff(x, cfg);
     x.cloudCount = 0;
     for (const auto& c : x.clouds)

@@ -156,7 +156,7 @@ int main() {
         { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\ntransition_s = 90\napply_per_tick = 4\nsearch_nm = 90\n", f); std::fclose(f); }
         Config old; loadConfig(fn, old);
         CHECK(old.updateMinutes == 30 && old.startupDelayS == 0 && !old.startupStaged && old.visAutocal && old.transitionS == 0 && old.applyPerTick == 500 && old.searchNm == 90);
-        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 10\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 11\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
         Config cur; loadConfig(fn, cur);
         CHECK(cur.updateMinutes == 10 && cur.startupStaged && cur.lowCloudType == 2.0 && cur.stationRadiusFactor == 0.65);   // current files keep their values
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
@@ -324,12 +324,15 @@ int main() {
         parseReport("KAAA 301553Z 00000KT 1/4SM FG OVC001 08/08 A3010", fogS.report);
         parseReport("KBBB 301553Z 18010KT 10SM FEW030 BKN080 15/05 A3010", clearS.report);
         CHECK(stationHasFog(fogS, cfg) && !stationHasFog(clearS, cfg));
-        XpWx f = buildXp(fogS, cfg, now, nullptr, true), c = buildXp(clearS, cfg, now, nullptr, true);
+        Config cfgNc = cfg; cfgNc.capLayer = false;   // these checks are about slot packing, not the thin cap layer
+        XpWx f = buildXp(fogS, cfgNc, now, nullptr, true), c = buildXp(clearS, cfgNc, now, nullptr, true);
         CHECK(f.clouds[0].type == 1.0f && f.clouds[0].coverage == 1.0f && f.clouds[0].topM - f.clouds[0].baseM >= 120);
         CHECK(c.clouds[0].coverage == 0);                          // reserved, empty
         CHECK(c.clouds[1].coverage > 0 && c.clouds[2].coverage > 0 && c.cloudCount == 2);
         CHECK(f.clouds[1].coverage > 0 && f.clouds[2].coverage == 0);  // OVC001 in slot 1
-        XpWx c2 = buildXp(clearS, cfg, now, nullptr, false);       // no fog anywhere: normal packing, nothing reserved
+        XpWx fCap = buildXp(fogS, cfg, now, nullptr, true);       // thin type-3 cap layer just above the overcast, never in slot 0
+        CHECK(fCap.clouds[0].coverage > 0 && fCap.clouds[2].type == 3.0f && fCap.clouds[2].coverage > 0 && fCap.clouds[2].baseM > fCap.clouds[1].topM + 20 && fCap.clouds[2].topM - fCap.clouds[2].baseM < 100);
+        XpWx c2 = buildXp(clearS, cfgNc, now, nullptr, false);       // no fog anywhere: normal packing, nothing reserved
         CHECK(c2.clouds[0].coverage > 0 && c2.cloudCount == 2);
         CHECK(describeXp(f, 100).find("FOG stratus") != std::string::npos);
         CHECK(describeXp(c, 100).find("vis 40000 m") != std::string::npos);

@@ -55,6 +55,10 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "edge_coverage") c.edgeCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
         else if (k == "edge_radius_factor") c.edgeRadiusFactor = d < 0.1 ? 0.1 : (d > 1.0 ? 1.0 : d);
         else if (k == "edge_points") c.edgePoints = (int)(d < 3 ? 3 : (d > 24 ? 24 : d));
+        else if (k == "cap_layer") c.capLayer = toBool(v);
+        else if (k == "cap_coverage") c.capCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
+        else if (k == "cap_thick_m") c.capThickM = d < 20 ? 20 : (d > 400 ? 400 : d);
+        else if (k == "cap_gap_m") c.capGapM = d < 10 ? 10 : (d > 300 ? 300 : d);
         else if (k == "top_bumps") c.topBumps = toBool(v);
         else if (k == "bump_count") c.bumpCount = (int)(d < 0 ? 0 : (d > 40 ? 40 : d));
         else if (k == "bump_fill_count") c.bumpFillCount = (int)(d < 0 ? 0 : (d > 10 ? 10 : d));
@@ -163,6 +167,10 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "edge_radius_factor = " << c.edgeRadiusFactor << "\n"
       << "edge_points = " << c.edgePoints << "\n"
       << "edge_max = " << c.edgeMax << "\n"
+      << "cap_layer = " << (c.capLayer ? 1 : 0) << "\n"
+      << "cap_coverage = " << c.capCoverage << "\n"
+      << "cap_thick_m = " << c.capThickM << "\n"
+      << "cap_gap_m = " << c.capGapM << "\n"
       << "top_bumps = " << (c.topBumps ? 1 : 0) << "\n"
       << "bump_count = " << c.bumpCount << "\n"
       << "bump_max = " << c.bumpMax << "\n"

@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 10;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 11;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -38,6 +38,10 @@ struct Config {
     double edgeRadiusFactor = 0.6; // edge record radius = this x the station record radius
     int edgePoints = 8;           // edge records per overcast station
     int edgeMax = 120;            // most edge records in one update
+    bool capLayer = true;         // very thin type-3 layer just above every thick overcast (breaks up the flat top)
+    double capCoverage = 0.5;     // its coverage
+    double capThickM = 70;        // its thickness (m)
+    double capGapM = 40;          // clear gap between the overcast top and the cap layer (m)
     bool topBumps = true;         // scatter billowy records over thick overcasts so the top is uneven, not one flat sheet
     int bumpCount = 14;           // rough-top records per overcast station
     int bumpMax = 320;            // most of them in one update
