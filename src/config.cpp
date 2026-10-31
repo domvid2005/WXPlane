@@ -99,6 +99,14 @@ bool loadConfig(const std::string& path, Config& c) {
         c.transitionS = d.transitionS;   // drip-feeding records over time (older test builds) made the load-in last minutes
         c.updateTransitionS = d.updateTransitionS;
         c.applyPerTick = d.applyPerTick;
+        // The plugin writes every setting to the file on start-up, so values from earlier test builds stick even after the default
+        // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
+        c.lowCloudType = d.lowCloudType;
+        c.stationRadiusFactor = d.stationRadiusFactor;
+        c.fillRadiusFactor = d.fillRadiusFactor;
+        c.stormSmoothTops = d.stormSmoothTops;
+        c.stormTopVariationM = d.stormTopVariationM;
+        c.radarMinutes = d.radarMinutes;
         c.visAutocal = d.visAutocal;     // the self-check turned out to chase X-Plane's slow fade and cut visibility; off by default now
     }
     return true;

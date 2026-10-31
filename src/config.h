@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 6;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 7;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)

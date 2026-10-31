@@ -222,3 +222,7 @@ Low and overcast layers used to be sent as X-Plane cloud type 1.0 (stratus), whi
 ## Varying storm tops
 
 Storm blocks without a measured echo top got one estimated height per intensity, so many storms topped out at exactly the same altitude (a flat plateau with straight walls at its edge). Each estimated top now varies by up to +/- `storm_top_variation_m` (1500 m; 0 turns it off). The offset is derived from the block's key, so it is the same on every update and storms don't change height from one refresh to the next. Measured echo tops are not varied. The map's FL labels use the same values.
+
+## Old settings stick (config version 7)
+
+WXPlane writes every setting to `WXPlane.cfg` when it starts, so a value saved by an earlier test build stays even after the default changes. A leftover `low_cloud_type = 2` kept the layers at type 2 and a leftover `station_radius_factor = 0.65` kept the record overlap. Config files older than version 7 now get `low_cloud_type`, `station_radius_factor`, `fill_radius_factor`, `storm_smooth_tops`, `storm_top_variation_m` and `radar_minutes` reset to their defaults once; every other setting is kept.
