@@ -374,7 +374,7 @@ int main() {
         }
         XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
         applyStorm(w2, cell, sc, 400, 38);
-        CHECK(w2.clouds[2].type < 1.5f && w2.clouds[2].coverage < 0.8f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
+        CHECK(w2.clouds[2].type == 3.0f && w2.clouds[2].coverage < 0.8f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
         XpWx w3 = base; cell.topM = 99000; cell.dbz = 45; cell.topKnown = true; applyStorm(w3, cell, sc, 400, 38);
         CHECK(w3.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1);   // absurd tops are clamped
         XpWx w4 = base; sc.radarTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);

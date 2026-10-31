@@ -217,4 +217,4 @@ Cloud layers at one station never overlap vertically: every top stays at least 1
 
 ## Cloud look: smooth curtains vs billowy
 
-Low and overcast layers used to be sent as X-Plane cloud type 1.0 (stratus), which it draws as a smooth sheet with vertical curtain-like edges; storm clouds (type 3) and cumulus (2) are billowy. Where the two meet in one cloud the left and right halves looked completely different. Low and overcast layers now use `low_cloud_type = 2` (billowy). Set it to 1 for the old smooth sheets; values between 1 and 2 mix the two.
+Low and overcast layers used to be sent as X-Plane cloud type 1.0 (stratus), which it draws as a smooth sheet with vertical curtain-like edges; storm clouds (type 3) and cumulus (2) are billowy. Where the two meet in one cloud the left and right halves looked completely different. Low and overcast layers now use `low_cloud_type = 3` (cumulonimbus-style billowy cloud; 2 is cumulus), and every radar storm cloud is type 3 (weak echoes used to ramp down towards smooth type 1). Set `low_cloud_type = 1` for the old smooth sheets; values in between mix the looks.

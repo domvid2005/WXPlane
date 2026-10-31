@@ -9,7 +9,7 @@ struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
-    double lowCloudType = 2.0;    // X-Plane cloud type for low/overcast layers: 1 = smooth stratus sheet (curtain-like edges), 2 = billowy cumulus
+    double lowCloudType = 3.0;    // X-Plane cloud type for low/overcast layers: 1 = smooth stratus sheet (curtain-like edges), 2 = cumulus, 3 = billowy cumulonimbus
     double radarMinutes = 5;         // storm radar (MRMS publishes every ~2 min) is refetched this often, on its own
     bool stormSmoothTops = true;  // tame lone tall echo tops that render as thin spikes
     int updateMinutes = 30;       // periodic refresh

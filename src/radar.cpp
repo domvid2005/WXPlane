@@ -252,7 +252,7 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
         if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
     float topM = stormTopM(c, cfg, baseM);
     XpCloud& cl = x.clouds[2];
-    cl.type = clampf(1.0f + (dbz - 20.0f) / 10.0f, 1.0f, 3.0f);               // full cumulonimbus (3.0) from 40 dBZ
+    cl.type = 3.0f;   // always full cumulonimbus: weaker echoes used to ramp down towards 1.0 (smooth stratus sheets with curtain edges)
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
     cl.baseM = baseM;
