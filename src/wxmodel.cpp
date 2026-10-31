@@ -14,7 +14,7 @@ float coverageFor(int cover) {
         case CloudGroup::FEW: return 0.20f;
         case CloudGroup::SCT: return 0.40f;
         case CloudGroup::BKN: return 0.70f;
-        default: return 1.0f;
+        default: return 0.94f;   // a fully closed sheet renders as a dense, dark-topped slab; a little texture lets the sun light the top
     }
 }
 
@@ -177,19 +177,29 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         else if (g.kind == 2) { c.type = 2.6f; thick = 4000; }
         else if (g.baseFtAgl >= 20000) { c.type = 0.0f; thick = 1200; }
         else if ((g.baseFtAgl < 2000 && g.cover >= CloudGroup::BKN) || (g.cover == CloudGroup::OVC && g.baseFtAgl < 12000)) {
-            // Thin solid layers render as a black void from below, so overcast gets real depth.
+            // Very thin solid layers render as a black void from below, very thick ones as a dark slab from above: moderate depth.
             c.type = 1.0f;
-            thick = g.cover == CloudGroup::OVC ? 2200 : (g.cover == CloudGroup::BKN ? 1600 : 900);
+            thick = g.cover == CloudGroup::OVC ? 1400 : (g.cover == CloudGroup::BKN ? 1100 : 800);
         }
-        else { c.type = 2.0f; thick = g.cover == CloudGroup::OVC ? 2200 : (g.cover == CloudGroup::BKN ? 1800 : 1000); }
+        else { c.type = 2.0f; thick = g.cover == CloudGroup::OVC ? 1600 : (g.cover == CloudGroup::BKN ? 1300 : 900); }
         c.topM = (float)(c.baseM + thick);
         layers.push_back(c);
     }
-    // Layers must not overlap: a lower layer whose top reaches into the one above it is shaded by it and renders dark.
-    // Keep a gap below the next layer's base (but never thinner than 250 m).
-    for (size_t i = 0; i + 1 < layers.size(); ++i) {
-        float limit = layers[i + 1].baseM - 100.0f;
-        if (layers[i].topM > limit) layers[i].topM = std::max(layers[i].baseM + 250.0f, limit);
+    // Layers must never overlap vertically: a lower layer whose top reaches into the one above it is shaded by it and renders
+    // dark. Keep a clear gap between every top and the next base. The lower layer is trimmed first (never thinner than
+    // kMinThick); if the two bases are so close that even that is not enough, the upper layer is lifted just far enough.
+    {
+        const float kGap = 150.0f, kMinThick = 120.0f;
+        for (size_t i = 0; i + 1 < layers.size(); ++i) {
+            float limit = layers[i + 1].baseM - kGap;
+            if (layers[i].topM > limit) layers[i].topM = std::max(layers[i].baseM + kMinThick, limit);
+            float need = layers[i].topM + kGap;
+            if (layers[i + 1].baseM < need) {
+                float thick = layers[i + 1].topM - layers[i + 1].baseM;
+                layers[i + 1].baseM = need;
+                layers[i + 1].topM = need + std::max(thick, kMinThick);
+            }
+        }
     }
     if (fogSlot) {
         // slot 0 = ground fog (or empty); the two lowest real cloud layers follow in slots 1 and 2
