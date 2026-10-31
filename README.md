@@ -203,9 +203,3 @@ X-Plane gives each weather record a weight based on its age, so every record WXP
 ## Cloud edges between records
 
 Each station's circle stops at 0.49 x the distance to its nearest neighbour (`station_radius_factor`) and gap-fill tiles at 0.8 x their cell size (`fill_radius_factor`), so neighbours only touch. Making them overlap (tried 0.65 / 0.95) softens the cloud walls where two reports differ, but X-Plane then stacks the overlapping cloud layers and the tops go dark grey, so the defaults stay at touching-only. Raise them in `WXPlane.cfg` if you prefer soft edges over clean tops.
-
-## Overcast that looked dark from above
-
-A solid, thick, fully closed sheet rendered with a dark grey-blue top when seen from above. Overcast is now 94% coverage and thinner: stratus 1400 m (overcast) / 1100 m (broken) / 800 m (scattered), cumuliform 1600 / 1300 / 900 m (it was 2200 / 1600 / 900 and 2200 / 1800 / 1000). The sheet stays deep enough not to go black from below.
-
-Cloud layers at one station never overlap vertically: every top stays at least 150 m below the next layer's base. The lower layer is trimmed first (never under 120 m thick); if two bases are closer together than that allows, the upper layer is lifted just enough to keep the gap.

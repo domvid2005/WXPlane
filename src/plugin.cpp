@@ -495,6 +495,10 @@ void weatherWatch() {
     logf("weather watch (%s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
          b.icao.c_str(), wx::distNm(lat, lon, b.lat, b.lon), info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
          cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
+    for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
+        logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
+             info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
+             x.clouds[i].type, x.clouds[i].coverage, x.clouds[i].baseM, x.clouds[i].topM, el);
 }
 
 // Asks X-Plane what visibility it is actually using next to the airport we are at, and compares it with the

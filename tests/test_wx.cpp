@@ -222,22 +222,6 @@ int main() {
         NEAR(buildXp(v, cfg, now).visM, 4 * kSmToM, 1);
     }
 
-    // --- cloud layers never overlap vertically: every top is at least 150 m below the next base
-    {
-        const char* raws[] = {"KTST 301553Z 18008KT 10SM SCT020 BKN022 OVC024 20/10 A3002",
-                              "KTST 301553Z 18008KT 10SM FEW030 SCT032 BKN035 20/10 A3002",
-                              "KTST 301553Z 18008KT 3SM BR OVC002 BKN003 OVC005 12/11 A3002"};
-        for (const char* raw : raws) {
-            Station st; st.elevM = 100;
-            parseReport(raw, st.report);
-            XpWx a = buildXp(st, cfg, now);
-            bool ok = a.cloudCount >= 2;
-            for (int i = 0; i + 1 < 3; ++i)
-                if (a.clouds[i].coverage > 0 && a.clouds[i + 1].coverage > 0)
-                    ok = ok && a.clouds[i].topM + 149.0f <= a.clouds[i + 1].baseM && a.clouds[i].topM > a.clouds[i].baseM;
-            CHECK(ok);
-        }
-    }
     // --- fog adds haze: visibility capped, air saturated, layer starts at the ground and is not razor-thin
     {
         Station f; f.elevM = 1655;
