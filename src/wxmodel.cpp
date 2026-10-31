@@ -178,7 +178,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         else if (g.baseFtAgl >= 20000) { c.type = 0.0f; thick = 1200; }
         else if ((g.baseFtAgl < 2000 && g.cover >= CloudGroup::BKN) || (g.cover == CloudGroup::OVC && g.baseFtAgl < 12000)) {
             // Very thin solid layers render as a black void from below, very thick ones as a dark slab from above: moderate depth.
-            c.type = 1.0f;
+            c.type = (float)cfg.lowCloudType;   // 1.0 renders as a smooth sheet with vertical curtain edges; 2.0 gives billowy cloud
             thick = g.cover == CloudGroup::OVC ? 1400 : (g.cover == CloudGroup::BKN ? 1100 : 800);
         }
         else { c.type = 2.0f; thick = g.cover == CloudGroup::OVC ? 1600 : (g.cover == CloudGroup::BKN ? 1300 : 900); }

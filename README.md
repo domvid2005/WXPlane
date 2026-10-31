@@ -214,3 +214,7 @@ Cloud layers at one station never overlap vertically: every top stays at least 1
 
 * **Radar refresh:** NOAA's MRMS mosaic is republished about every 2 minutes, so the storm radar is now refetched on its own every `radar_minutes` (5; minimum 0.1 for testing). A radar refresh downloads only the MRMS grids, keeps the stations and winds aloft from the last full update, and sends X-Plane only the storm records that changed (plus erases storms that ended). It is applied without the "immediate" flag, so X-Plane fades the change in over its usual 1-2 minutes. METARs, ATIS and winds aloft still refresh every `update_minutes` (30).
 * **Spikes:** a radar block whose echo top is far above its neighbours (or that has no neighbours) rendered as a thin tower. With `storm_smooth_tops = 1` each measured top is limited to the mean of the neighbouring blocks' tops plus 2 km, and a lone block to 8 km. Tops are only ever lowered, and the map's FL labels use the same smoothed values. Set `storm_smooth_tops = 0` for the raw radar tops.
+
+## Cloud look: smooth curtains vs billowy
+
+Low and overcast layers used to be sent as X-Plane cloud type 1.0 (stratus), which it draws as a smooth sheet with vertical curtain-like edges; storm clouds (type 3) and cumulus (2) are billowy. Where the two meet in one cloud the left and right halves looked completely different. Low and overcast layers now use `low_cloud_type = 2` (billowy). Set it to 1 for the old smooth sheets; values between 1 and 2 mix the two.
