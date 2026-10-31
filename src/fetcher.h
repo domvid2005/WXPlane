@@ -27,6 +27,8 @@ struct FetchResult {
     std::vector<Station> stations; // nearest first
     int metarCount = 0;
     int atisCount = 0;
+    int noaaFixes = 0;       // reports where NOAA's decoded fields corrected or completed the text parse
+    int filledElements = 0;  // elements filled from neighbouring stations
     std::vector<AloftStation> aloft; // FD stations with coordinates, near the aircraft
     std::string aloftNote;           // why winds aloft are missing, if they are
     RadarResult radar;               // storm cells from radar (MRMS mosaic or experimental global tiles)

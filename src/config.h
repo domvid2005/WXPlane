@@ -24,7 +24,7 @@ struct Config {
     int aloftFcstHours = 6;       // NOAA winds-aloft forecast cycle: 6, 12 or 24
     int aloftStations = 4;        // FD stations blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
-    bool visAutocal = true;       // compare what X-Plane reports with the METAR/ATIS and correct our input
+    bool visAutocal = false;      // compare what X-Plane reports with the METAR/ATIS and correct our input
     int visCheckS = 100;          // seconds after an update to run that comparison
     // Radar storms (NOAA MRMS mosaic, optional global fallback)
     bool radar = true;            // turn radar echoes into storm cells
@@ -36,15 +36,21 @@ struct Config {
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
-    double stormCoverageMax = 0.7;  // densest storm cloud (1.0 makes solid slabs; lower looks like separate towers)
-    double stormTopJitterM = 1500;  // random-looking (but stable) top variation per block, breaks up flat tops
+    double stormCoverageMax = 0.95; // coverage of the densest storm cloud
     bool radarMapTops = true;     // label storm tops (FLxxx) on X-Plane's map
     bool applyImmediately = false; // true forces X-Plane to rebuild clouds at once (a visible stall); false lets it fade in over 1-2 min
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
     int startupDelayS = 15;       // wait this long after the plugin loads before the first download
+    bool fillGaps = true;            // fill the gaps between station circles so every point takes the nearest station's weather
+    int fillRangeNm = 60;            // ...within this distance of the aircraft
+    int fillFarRangeNm = 120;        // coarse fill out to here (never beyond the METAR search radius)
+    int fillFarCellNm = 30;          // ...on a grid this size
+    int fillCellNm = 12;             // ...using location records on a grid this size
+    bool stationRadiusAuto = true;   // shrink each station's radius so close neighbours do not blend into it
     bool startupWaitFps = true;      // hold the first update until the frame rate has been steady for a few seconds (up to 2.5 min)
     bool startupStaged = true;       // first update = METAR/ATIS/winds only; radar storms follow ~20 s later, once the frame rate is steady
-    int startupRadarDelayS = 20;     // staged start-up: seconds after the first update before radar storms are added
+    int startupRadarDelayS = 8;      // staged start-up: seconds after the first update before radar storms are added
+    int startupMaxWaitS = 60;        // never hold the first update back longer than this after the plugin loads
     bool startupWaitScenery = false; // also wait (up to 2.5 min) until X-Plane reports scenery loading finished
     int transitionS = 0;          // first load: release the weather records evenly over this many seconds (0 = all in one update, recommended: each extra update is another hitch)
     int updateTransitionS = 0;    // later updates: same, for the records that changed       

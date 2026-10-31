@@ -23,6 +23,85 @@ std::string awcMetarUrl(double lat, double lon, double searchNm) {
 
 std::string datisUrl(const std::string& icao) { return "https://datis.clowd.io/api/" + icao; }
 
+// NOAA publishes each METAR both as raw text and as decoded fields. The plugin parses the text; this compares the result with
+// NOAA's decoded fields. Elements the text parse missed are filled in, and where the two disagree NOAA's decoded value wins.
+// Returns a short note ("" when they agree), e.g. "NOAA decoded data: visibility corrected, clouds filled".
+static std::string crossCheckAwc(const Json& o, Report& r) {
+    std::vector<std::string> notes;
+    auto add = [&](const char* w) { notes.push_back(w); };
+    if (const Json* v = o.get("visib")) {
+        if (v->type == Json::Num || v->type == Json::Str) {
+            std::string t = v->asString();
+            double sm = std::atof(t.c_str());
+            if (sm > 0.0 || t == "0") {
+                double m = sm * 1609.344;
+                if (!r.hasVis && !r.cavok) { r.hasVis = true; r.visM = m; add("visibility filled"); }
+                else if (!r.cavok && r.hasVis && std::fabs(r.visM - m) > 0.1 * m + 200.0 && !(r.visM >= 9999.0 && r.visM <= 10000.5 && sm >= 6.0)) {
+                    r.visM = m; add("visibility corrected");
+                }
+            }
+        }
+    }
+    const Json* ws = o.get("wspd");
+    if (ws && ws->type == Json::Num) {
+        const Json* wd = o.get("wdir");
+        const Json* wg = o.get("wgst");
+        double kt = ws->num;
+        bool vrb = wd && wd->type == Json::Str && wd->str == "VRB";
+        int dir = (wd && wd->type == Json::Num) ? (int)std::lround(wd->num) : 0;
+        double gust = (wg && wg->type == Json::Num) ? wg->num : 0.0;
+        if (!r.hasWind) {
+            r.hasWind = true; r.windKt = kt; r.windDir = dir; r.windVariable = vrb; r.gustKt = gust; add("wind filled");
+        } else {
+            double dd = std::fabs(std::fmod(std::fabs((double)(r.windDir - dir)) + 180.0, 360.0) - 180.0);
+            if (std::fabs(r.windKt - kt) >= 1.0 || std::fabs(r.gustKt - gust) >= 1.0 || (!vrb && !r.windVariable && kt >= 3 && dd >= 10.0)) {
+                r.windKt = kt; r.gustKt = gust; if (!vrb) { r.windDir = dir; r.windVariable = false; } else r.windVariable = true;
+                add("wind corrected");
+            }
+        }
+    }
+    if (const Json* v = o.get("temp")) if (v->type == Json::Num) {
+        if (!r.hasTemp) { r.hasTemp = true; r.tempC = v->num; add("temperature filled"); }
+        else if (std::fabs(r.tempC - v->num) > 0.9) { r.tempC = v->num; add("temperature corrected"); }
+    }
+    if (const Json* v = o.get("dewp")) if (v->type == Json::Num) {
+        if (!r.hasDewp) { r.hasDewp = true; r.dewpC = v->num; add("dew point filled"); }
+        else if (std::fabs(r.dewpC - v->num) > 0.9) { r.dewpC = v->num; add("dew point corrected"); }
+    }
+    if (const Json* v = o.get("altim")) if (v->type == Json::Num && v->num > 850 && v->num < 1100) {
+        if (!r.hasAltim) { r.hasAltim = true; r.altimHpa = v->num; add("pressure filled"); }
+        else if (std::fabs(r.altimHpa - v->num) > 1.0) { r.altimHpa = v->num; add("pressure corrected"); }
+    }
+    if (r.clouds.empty() && !r.clearSky && !r.cavok) {
+        if (const Json* cl = o.get("clouds")) if (cl->type == Json::Arr) {
+            bool any = false;
+            for (const Json& c : cl->arr) {
+                const Json* cv = c.get("cover");
+                const Json* bs = c.get("base");
+                if (!cv) continue;
+                std::string cover = cv->asString();
+                CloudGroup g;
+                if (cover == "FEW") g.cover = CloudGroup::FEW;
+                else if (cover == "SCT") g.cover = CloudGroup::SCT;
+                else if (cover == "BKN") g.cover = CloudGroup::BKN;
+                else if (cover == "OVC") g.cover = CloudGroup::OVC;
+                else if (cover == "OVX") {
+                    const Json* vv = o.get("vertVis");
+                    g.cover = CloudGroup::VV; g.baseFtAgl = vv ? (int)vv->asNum(0) : 0; r.clouds.push_back(g); any = true; continue;
+                }
+                else if (cover == "CLR" || cover == "CAVOK") { r.clearSky = true; any = true; continue; }
+                else continue;
+                g.baseFtAgl = bs ? (int)bs->asNum(0) : 0;
+                r.clouds.push_back(g); any = true;
+            }
+            if (any) add("clouds filled");
+        }
+    }
+    std::string out;
+    for (const auto& n : notes) out += (out.empty() ? "NOAA decoded data: " : ", ") + n;
+    return out;
+}
+
 std::vector<Station> parseAwcMetarJson(const std::string& body, std::string* error) {
     std::vector<Station> out;
     Json root;
@@ -40,6 +119,7 @@ std::vector<Station> parseAwcMetarJson(const std::string& body, std::string* err
         Station s;
         s.rawMetar = raw->asString();
         if (!parseReport(s.rawMetar, s.report, false)) continue;
+        s.filled = crossCheckAwc(o, s.report);
         const Json* id = o.get("icaoId");
         if (id) s.icao = id->asString();
         if (s.icao.empty()) s.icao = s.report.icao;

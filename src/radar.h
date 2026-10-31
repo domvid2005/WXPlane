@@ -18,7 +18,6 @@ struct RadarCell {
     float topM = 0;            // echo top, metres MSL; 0 = unknown (estimated later)
     bool topKnown = false;
     float rateMmH = 0;         // rain rate for dbz
-    int neighbors = 8;         // neighbouring blocks (of 8) that also have echo: 8 = storm core, few = storm edge
     double distNm = 0;         // from the aircraft when built
     std::string key;           // stable per block, used to diff updates
 };
@@ -66,7 +65,7 @@ void tileRange(double lat, double lon, double rangeNm, int z, int& x0, int& x1, 
 
 // Applies a storm cell on top of the weather built for the nearest station.
 // Top (MSL, metres) of the storm cloud applied for a cell, and the value the map label shows: the measured radar echo top when
-// there is one (capped at tropopause + 2.5 km), otherwise a shaped estimate. baseM is the cloud base (MSL) it will sit on.
+// there is one (capped at tropopause + 2.5 km), otherwise an estimate from reflectivity. baseM is the cloud base (MSL) it will sit on.
 float stormTopM(const RadarCell& c, const Config& cfg, float baseM);
 
 void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElevM, double lat);

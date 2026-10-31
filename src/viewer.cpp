@@ -50,6 +50,7 @@ std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, cons
         add(LineKind::Header, head);
         add(LineKind::Metar, st.rawMetar.empty() ? std::string("(no METAR text)") : "METAR  " + st.rawMetar);
         if (st.hasAtis) add(LineKind::Atis, "ATIS   " + st.atisText);
+        if (!st.filled.empty()) add(LineKind::Note, "Completed: " + st.filled);
         XpWx x = buildXp(st, cfg, now, &res.aloft, true);
         add(LineKind::Applied, "Applied  " + describeXp(x, st.elevM));
         add(LineKind::Blank, "");

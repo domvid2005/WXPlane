@@ -59,13 +59,19 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_turbulence") c.radarTurbulence = d < 0 ? 0 : (d > 2 ? 2 : d);
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
-        else if (k == "storm_top_jitter_m") c.stormTopJitterM = d < 0 ? 0 : (d > 3000 ? 3000 : d);
         else if (k == "radar_map_tops") c.radarMapTops = toBool(v);
         else if (k == "apply_immediately") c.applyImmediately = toBool(v);
         else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 1000 ? 1000 : d));
+        else if (k == "fill_gaps") c.fillGaps = toBool(v);
+        else if (k == "fill_range_nm") c.fillRangeNm = (int)(d < 10 ? 10 : (d > 150 ? 150 : d));
+        else if (k == "fill_cell_nm") c.fillCellNm = (int)(d < 6 ? 6 : (d > 30 ? 30 : d));
+        else if (k == "fill_far_range_nm") c.fillFarRangeNm = (int)(d < 20 ? 20 : (d > 250 ? 250 : d));
+        else if (k == "fill_far_cell_nm") c.fillFarCellNm = (int)(d < 12 ? 12 : (d > 60 ? 60 : d));
+        else if (k == "station_radius_auto") c.stationRadiusAuto = toBool(v);
         else if (k == "startup_wait_fps") c.startupWaitFps = toBool(v);
         else if (k == "startup_radar_delay_s") c.startupRadarDelayS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "startup_staged") c.startupStaged = toBool(v);
+        else if (k == "startup_max_wait_s") c.startupMaxWaitS = (int)(d < 5 ? 5 : (d > 600 ? 600 : d));
         else if (k == "startup_wait_scenery") c.startupWaitScenery = toBool(v);
         else if (k == "transition_s") c.transitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "update_transition_s") c.updateTransitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
@@ -110,13 +116,19 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_turbulence = " << c.radarTurbulence << "\n"
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
-      << "storm_top_jitter_m = " << c.stormTopJitterM << "\n"
       << "radar_map_tops = " << (c.radarMapTops ? 1 : 0) << "\n"
       << "apply_immediately = " << (c.applyImmediately ? 1 : 0) << "\n"
       << "apply_per_tick = " << c.applyPerTick << "\n"
+      << "fill_gaps = " << (c.fillGaps ? 1 : 0) << "\n"
+      << "fill_range_nm = " << c.fillRangeNm << "\n"
+      << "fill_cell_nm = " << c.fillCellNm << "\n"
+      << "fill_far_range_nm = " << c.fillFarRangeNm << "\n"
+      << "fill_far_cell_nm = " << c.fillFarCellNm << "\n"
+      << "station_radius_auto = " << (c.stationRadiusAuto ? 1 : 0) << "\n"
       << "startup_wait_fps = " << (c.startupWaitFps ? 1 : 0) << "\n"
       << "startup_radar_delay_s = " << c.startupRadarDelayS << "\n"
       << "startup_staged = " << (c.startupStaged ? 1 : 0) << "\n"
+      << "startup_max_wait_s = " << c.startupMaxWaitS << "\n"
       << "startup_wait_scenery = " << (c.startupWaitScenery ? 1 : 0) << "\n"
       << "transition_s = " << c.transitionS << "\n"
       << "update_transition_s = " << c.updateTransitionS << "\n"

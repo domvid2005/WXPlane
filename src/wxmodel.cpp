@@ -1,5 +1,7 @@
 #include "wxmodel.h"
 
+#include "geo.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -226,6 +228,136 @@ std::string describeXp(const XpWx& x, double elevM) {
         out += b;
     }
     if (x.aloft) { std::snprintf(b, sizeof b, " | NOAA winds aloft to FL%.0f", x.winds.back().altMsl / kFtToM / 100.0f); out += b; }
+    return out;
+}
+
+
+namespace {
+constexpr double kPiW = 3.14159265358979323846;
+double idwWeight(double dNm) { double d = dNm < 0.5 ? 0.5 : dNm; return 1.0 / (d * d * d); }
+double effectiveVisM(const Report& r) { return r.cavok ? 40000.0 : (r.visM >= 16000.0 ? 40000.0 : r.visM); }
+bool hasVisAny(const Report& r) { return r.hasVis || r.cavok; }
+} // namespace
+
+int fillMissing(std::vector<Station>& st, double rangeNm) {
+    int filled = 0;
+    for (size_t i = 0; i < st.size(); ++i) {
+        Station& a = st[i];
+        struct Near { const Station* s; double w; };
+        std::vector<Near> order;
+        for (size_t j = 0; j < st.size(); ++j) {
+            if (j == i) continue;
+            double d = distNm(a.lat, a.lon, st[j].lat, st[j].lon);
+            if (d <= rangeNm) order.push_back({&st[j], d});
+        }
+        std::sort(order.begin(), order.end(), [](const Near& x, const Near& y) { return x.w < y.w; });   // w holds the distance for now
+        auto pick = [&](auto has) {
+            std::vector<Near> v;
+            for (const auto& n : order) if (has(n.s->report)) { v.push_back({n.s, idwWeight(n.w)}); if (v.size() >= 4) break; }
+            return v;
+        };
+        auto note = [&](const char* what, const std::vector<Near>& v) {
+            if (!a.filled.empty()) a.filled += ", ";
+            a.filled += std::string(what) + " from " + v[0].s->icao;
+            ++filled;
+        };
+        Report& r = a.report;
+        if (!r.hasWind) {
+            auto v = pick([](const Report& q) { return q.hasWind; });
+            if (!v.empty()) {
+                double sw = 0, u = 0, w = 0, g = 0;
+                for (const auto& n : v) {
+                    const Report& q = n.s->report;
+                    double rad = q.windDir * kPiW / 180.0;
+                    u += n.w * q.windKt * std::sin(rad); w += n.w * q.windKt * std::cos(rad);
+                    g += n.w * std::max(q.gustKt, q.windKt); sw += n.w;
+                }
+                u /= sw; w /= sw; g /= sw;
+                double kt = std::sqrt(u * u + w * w);
+                r.hasWind = true; r.windVariable = false;
+                r.windKt = kt;
+                r.windDir = kt < 0.5 ? 0 : (int)std::lround(std::fmod(std::atan2(u, w) * 180.0 / kPiW + 360.0, 360.0));
+                r.gustKt = g > kt + 3.0 ? g : 0;
+                note("wind", v);
+            }
+        }
+        if (!hasVisAny(r)) {
+            auto v = pick([](const Report& q) { return hasVisAny(q); });
+            if (!v.empty()) {
+                double sw = 0, m = 0;
+                for (const auto& n : v) { m += n.w * effectiveVisM(n.s->report); sw += n.w; }
+                r.hasVis = true; r.visM = m / sw;
+                note("visibility", v);
+            }
+        }
+        if (!r.hasTemp) {
+            auto v = pick([](const Report& q) { return q.hasTemp; });
+            if (!v.empty()) { double sw = 0, m = 0; for (const auto& n : v) { m += n.w * n.s->report.tempC; sw += n.w; } r.hasTemp = true; r.tempC = m / sw; note("temperature", v); }
+        }
+        if (!r.hasDewp && r.hasTemp) {
+            auto v = pick([](const Report& q) { return q.hasDewp && q.hasTemp; });
+            if (!v.empty()) {   // dew point depression of the neighbours, applied to this station's temperature
+                double sw = 0, m = 0; for (const auto& n : v) { m += n.w * (n.s->report.tempC - n.s->report.dewpC); sw += n.w; }
+                r.hasDewp = true; r.dewpC = r.tempC - m / sw; note("dew point", v);
+            }
+        }
+        if (!r.hasAltim) {
+            auto v = pick([](const Report& q) { return q.hasAltim; });
+            if (!v.empty()) { double sw = 0, m = 0; for (const auto& n : v) { m += n.w * n.s->report.altimHpa; sw += n.w; } r.hasAltim = true; r.altimHpa = m / sw; note("pressure", v); }
+        }
+    }
+    return filled;
+}
+
+Station blendAt(const std::vector<Station>& st, double lat, double lon) {
+    struct Near { const Station* s; double d; };
+    std::vector<Near> order;
+    for (const auto& s : st) order.push_back({&s, distNm(lat, lon, s.lat, s.lon)});
+    std::sort(order.begin(), order.end(), [](const Near& x, const Near& y) { return x.d < y.d; });
+    Station out = *order[0].s;
+    out.lat = lat; out.lon = lon;
+    out.hasAtis = false;                         // the blend is not any one airport's ATIS
+    out.report.fog = out.report.shallowFog = out.report.patchyFog = false;   // ground fog stays at its airport
+    const double d0 = order[0].d;
+    std::vector<Near> use;
+    for (const auto& n : order) {
+        if (use.size() >= 4) break;
+        if (use.empty() || n.d <= d0 * 2.5 + 5.0) use.push_back(n);
+    }
+    if (use.size() < 2) return out;
+    for (auto& n : use) n.d = idwWeight(n.d);    // d now holds the weight
+    Report& r = out.report;
+    auto sumW = [&](auto has) { double sw = 0; for (const auto& n : use) if (has(n.s->report)) sw += n.d; return sw; };
+    if (r.hasWind && !r.windVariable) {
+        double sw = 0, u = 0, w = 0, g = 0;
+        for (const auto& n : use) {
+            const Report& q = n.s->report;
+            if (!q.hasWind) continue;
+            double rad = q.windDir * kPiW / 180.0, kt = q.windKt;
+            u += n.d * kt * std::sin(rad); w += n.d * kt * std::cos(rad); g += n.d * std::max(q.gustKt, q.windKt); sw += n.d;
+        }
+        if (sw > 0) {
+            u /= sw; w /= sw; g /= sw;
+            double kt = std::sqrt(u * u + w * w);
+            r.windKt = kt;
+            if (kt >= 0.5) r.windDir = (int)std::lround(std::fmod(std::atan2(u, w) * 180.0 / kPiW + 360.0, 360.0));
+            r.gustKt = g > kt + 3.0 ? g : 0;
+        }
+    }
+    if (hasVisAny(r)) {
+        double sw = sumW([](const Report& q) { return hasVisAny(q); }), m = 0;
+        if (sw > 0) {
+            for (const auto& n : use) if (hasVisAny(n.s->report)) m += n.d * effectiveVisM(n.s->report);
+            r.hasVis = true; r.cavok = false; r.visM = m / sw;
+        }
+    }
+    if (r.hasTemp) { double sw = sumW([](const Report& q) { return q.hasTemp; }), m = 0; if (sw > 0) { for (const auto& n : use) if (n.s->report.hasTemp) m += n.d * n.s->report.tempC; r.tempC = m / sw; } }
+    if (r.hasDewp && r.hasTemp) {
+        double sw = 0, m = 0;
+        for (const auto& n : use) if (n.s->report.hasDewp && n.s->report.hasTemp) { m += n.d * (n.s->report.tempC - n.s->report.dewpC); sw += n.d; }
+        if (sw > 0) r.dewpC = r.tempC - m / sw;
+    }
+    if (r.hasAltim) { double sw = sumW([](const Report& q) { return q.hasAltim; }), m = 0; if (sw > 0) { for (const auto& n : use) if (n.s->report.hasAltim) m += n.d * n.s->report.altimHpa; r.altimHpa = m / sw; } }
     return out;
 }
 

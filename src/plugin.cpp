@@ -51,6 +51,7 @@ XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
 Clock::time_point g_firstApplyAt{};
+Clock::time_point g_lastApplyLogAt{};
 XPLMDataRef g_drFramePeriod = nullptr;
 XPLMDataRef g_drLat = nullptr, g_drLon = nullptr, g_drLevels = nullptr, g_drAgl = nullptr, g_drLoading = nullptr;
 float g_levelsM[XPLM_NUM_TEMPERATURE_LAYERS];
@@ -66,6 +67,7 @@ Clock::time_point g_checkAt{};
 int g_calIter = 0;
 int g_checkTries = 0;
 float g_prevReadVis = 0;
+float g_visBeforeCorr = 0;
 bool g_manualRefresh = false;
 bool g_eraseRequested = false;
 bool g_firstApplyDone = false;
@@ -258,12 +260,23 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (fogNow) g_fogUntil = now + 1800;
     const bool anyFog = now < g_fogUntil;
     std::map<std::string, wx::XpWx> baseWx;   // weather built per station, reused for storm cells
+    std::map<std::string, float> stationRadius;
     for (const auto& s : res.stations) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         baseWx[s.icao] = x;
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
         fillInfo(info, x);
+        if (g_cfg.stationRadiusAuto) {
+            // Station records never overlap: each one reaches at most 49% of the distance to its nearest other station, so for any
+            // two stations the two radii add up to less than the distance between them. X-Plane then never blends one station's
+            // weather into another's, and at a station you get exactly that station's METAR/ATIS.
+            double nn = 1e9;
+            for (const auto& o : res.stations)
+                if (&o != &s) nn = std::min(nn, wx::distNm(s.lat, s.lon, o.lat, o.lon));
+            info.radius_nm = (float)std::min(g_cfg.radiusNm, std::max(0.5, nn * 0.49));
+        }
+        stationRadius[s.icao] = info.radius_nm;
         if (x.fogLayerApplied) ++fogCount;
         if (x.aloft) ++aloftCount;
         Rec r;
@@ -278,6 +291,62 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         r.info.age = info.age; // keep the real age for the call itself
         todo.push_back({s.icao, r});
     }
+    // Gap fill: the station circles do not overlap, so between them X-Plane would fall back to its own weather. Location records
+    // on fixed grids cover everything around the aircraft: a fine grid close by and a coarse one further out (up to the METAR
+    // search radius). Each record holds a smooth inverse-distance blend of the nearest stations (the closest one dominates), so
+    // the weather changes gradually from airport to airport and no two stations compete over the same spot.
+    int fillCount = 0;
+    if (g_cfg.fillGaps && g_cfg.stationRadiusAuto && !res.stations.empty()) {
+        auto addGrid = [&](int cellNm, double rMin, double rMax, const char* tag) {
+            const double stepLat = cellNm / 60.0;
+            const double rangeDeg = rMax / 60.0;
+            const long j0 = (long)std::floor((res.centerLat - rangeDeg) / stepLat), j1 = (long)std::floor((res.centerLat + rangeDeg) / stepLat);
+            for (long j = j0; j <= j1; ++j) {
+                const double latc = (j + 0.5) * stepLat;
+                if (latc < -85 || latc > 85) continue;
+                const double cosL = std::max(0.2, std::cos(latc * 3.14159265358979 / 180.0));
+                const double stepLon = stepLat / cosL;
+                const double rangeLon = rangeDeg / cosL;
+                const long i0 = (long)std::floor((res.centerLon - rangeLon) / stepLon), i1 = (long)std::floor((res.centerLon + rangeLon) / stepLon);
+                for (long i = i0; i <= i1; ++i) {
+                    const double lonc = (i + 0.5) * stepLon;
+                    const double dc = wx::distNm(res.centerLat, res.centerLon, latc, lonc);
+                    if (dc > rMax || dc <= rMin) continue;
+                    const wx::Station* nearest = &res.stations[0];
+                    double nd = 1e9;
+                    for (const auto& s : res.stations) {
+                        double d = wx::distNm(latc, lonc, s.lat, s.lon);
+                        if (d < nd) { nd = d; nearest = &s; }
+                    }
+                    auto rit = stationRadius.find(nearest->icao);
+                    if (rit != stationRadius.end() && nd <= rit->second * 0.9) continue;   // inside the station's own circle
+                    wx::Station syn = wx::blendAt(res.stations, latc, lonc);
+                    wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
+                    if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
+                    if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
+                    XPLMWeatherInfo_t info;
+                    fillInfo(info, x);
+                    info.radius_nm = (float)(cellNm * 0.8);   // a little more than half the cell diagonal: tiles without gaps
+                    Rec r;
+                    r.airport = false;
+                    r.lat = latc; r.lon = lonc; r.elev = nearest->elevM;
+                    r.info = info;
+                    r.info.age = 0.0f;
+                    const std::string key = std::string("fill") + tag + ":" + std::to_string(j) + ":" + std::to_string(i);
+                    seen[key] = true;
+                    ++fillCount;
+                    auto it = g_recs.find(key);
+                    if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
+                    r.info.age = info.age;
+                    todo.push_back({key, r});
+                }
+            }
+        };
+        const double nearR = g_cfg.fillRangeNm;
+        const double farR = std::min((double)g_cfg.fillFarRangeNm, g_cfg.searchNm * 1.0);
+        addGrid(g_cfg.fillCellNm, -1.0, nearR, "n");
+        if (farR > nearR) addGrid(g_cfg.fillFarCellNm, nearR, farR, "f");
+    }
     // Radar storm cells: the weather of the nearest station with the storm applied on top, as location records.
     int stormCount = 0;
     if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
@@ -291,11 +360,13 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             wx::XpWx x = baseWx[nearest->icao];
             // A station's ground fog and low visibility are local; do not project them onto storms far from it.
             if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
-            if (nd > 15.0 || x.visM < 5000.0f) x.visM = (float)g_cfg.clearVisM;
+            // Haze/rain visibility (5 km and up) belongs to the whole air mass, so storm records within 60 nm carry the station's
+            // value. Giving them 40 km instead made X-Plane blend them into the station area and the METAR visibility never showed.
+            if (nd > 60.0 || x.visM < 5000.0f) x.visM = (float)g_cfg.clearVisM;
             wx::applyStorm(x, c, g_cfg, nearest->elevM, c.lat);
             XPLMWeatherInfo_t info;
             fillInfo(info, x);
-            info.radius_nm = (float)std::max(5.0, g_cfg.radarCellNm * 0.75);   // smaller than the block so towers keep gaps instead of merging
+            info.radius_nm = (float)std::max(6.0, g_cfg.radarCellNm * 0.9);
             Rec r;
             r.airport = false;
             r.lat = c.lat; r.lon = c.lon; r.elev = nearest->elevM;
@@ -327,7 +398,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         g_releaseStepS = (n > 0 && T > 0) ? std::max(0.0625, (double)T / (double)n) : 0.0;
         g_nextRelease = Clock::now();
     }
-    logf("update: %zu stations, %d storm cells, %zu changed, %zu removed%s%s", res.stations.size(), stormCount, todo.size(), gone.size(), full ? " (full)" : "",
+    if (res.noaaFixes > 0 || res.filledElements > 0)
+        logf("NOAA crosscheck: %d of %zu reports corrected or completed from NOAA's decoded fields, %d missing elements filled from neighbouring stations",
+             res.noaaFixes, res.stations.size(), res.filledElements);
+    logf("update: %zu stations, %d gap-fill records, %d storm cells, %zu changed, %zu removed%s%s", res.stations.size(), fillCount, stormCount, todo.size(), gone.size(), full ? " (full)" : "",
          (g_pendingTodo.empty() && g_pendingGone.empty()) ? "" : " [queued, sent a few at a time]");
     if (g_cfg.radar) {
         if (res.radar.ok) {
@@ -342,6 +416,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         else
             logf("radar: none (%s)", res.radar.note.c_str());
     }
+    g_lastApplyLogAt = Clock::now();
     if (!g_firstApplyDone) g_firstApplyAt = Clock::now();
     g_firstApplyDone = true;
     g_lastRes = res;
@@ -431,9 +506,21 @@ void visibilityCheck() {
             return;
         }
     }
+    // If the last correction lowered our value but X-Plane's reading did not come down with it, the reading is being driven by
+    // something else (other records, its own weather). Lowering further only makes the sky murky for nothing: undo and stop.
+    if (g_calIter == 1 && g_visK < 1.0f && g_visBeforeCorr > 0 && info.visibility >= g_visBeforeCorr * 0.9f) {
+        logf("visibility check: X-Plane did not follow the lower value (%.0f m before, %.0f m now); restoring the METAR value and stopping", g_visBeforeCorr, info.visibility);
+        g_visK = 1.0f;
+        g_calIter = 2;
+        wx::FetchResult copy = g_lastRes;
+        copy.immediate = true;
+        applyResult(copy, false);
+        return;
+    }
     double ratio = x.visM / info.visibility;
     if (std::fabs(ratio - 1.0) <= 0.25) return;
-    g_visK = (float)std::min(1.5, std::max(0.3, g_visK * std::pow(ratio, 0.8)));
+    g_visBeforeCorr = info.visibility;
+    g_visK = (float)std::min(1.5, std::max(0.5, g_visK * std::pow(ratio, 0.8)));
     ++g_calIter;
     logf("visibility off by %.0f%%: correction now %.2f, re-applying (pass %d/2)", (ratio - 1.0) * 100.0, g_visK, g_calIter);
     wx::FetchResult copy = g_lastRes;
@@ -509,14 +596,21 @@ bool sceneryReady() {
     auto now = Clock::now();
     double up = std::chrono::duration<double>(now - g_enabledAt).count();
     if (up < g_cfg.startupDelayS) return false;
-    if (g_cfg.startupWaitFps && up < 150.0 && !framesSteady()) return false;
-    if (!g_cfg.startupWaitScenery || up > 150.0 || !g_drLoading) return true;           // never wait forever; without the dataref the delay alone applies
+    if (g_cfg.startupWaitFps && up < g_cfg.startupMaxWaitS && !framesSteady()) return false;
+    if (!g_cfg.startupWaitScenery || up > std::max(150.0, (double)g_cfg.startupMaxWaitS) || !g_drLoading) return true;           // never wait forever; without the dataref the delay alone applies
     if (XPLMGetDatai(g_drLoading) != 0) { g_calm = false; return false; }
     if (!g_calm) { g_calm = true; g_calmSince = now; }
     return std::chrono::duration<double>(now - g_calmSince).count() >= 3.0;
 }
 
-float flightLoop(float, float, int, void*) {
+float flightLoop(float, float sinceLastCall, int, void*) {
+    // Frame stall detector: this callback runs every 0.25 s, so a much longer gap means the whole sim stood still. Logging when
+    // that happened relative to our own work shows whether WXPlane was involved.
+    if (sinceLastCall > 1.5f && g_everRequested) {
+        double sinceApply = g_firstApplyDone ? std::chrono::duration<double>(Clock::now() - g_lastApplyLogAt).count() : -1.0;
+        logf("sim stalled for %.1f s (our last weather update was %s)", sinceLastCall,
+             sinceApply < 0 ? "not yet applied" : (std::to_string((int)sinceApply) + " s ago").c_str());
+    }
     if (g_checkPending && Clock::now() >= g_checkAt) {
         g_checkPending = false;
         visibilityCheck();

@@ -19,6 +19,7 @@ struct Station {
     bool hasAtis = false;
     std::string atisLetter;
     std::string atisText;
+    std::string filled;      // what was corrected from NOAA's decoded fields or filled in from neighbouring stations
 };
 
 struct XpCloud {
@@ -70,5 +71,14 @@ std::string describeXp(const XpWx& x, double elevM);
 
 // ATIS values override the METAR where the ATIS actually provides them.
 void mergeAtis(Station& st, const Report& atis, const std::string& atisText);
+
+// Gaps in a station's report (no wind, temperature, dew point, pressure or visibility) are filled from the nearest stations that
+// have the element (inverse-distance weighted, within rangeNm). Returns how many elements were filled; notes go to Station::filled.
+int fillMissing(std::vector<Station>& stations, double rangeNm = 80.0);
+
+// Smooth weather at any point: scalar elements (wind, visibility, temperature, dew point, pressure) are an inverse-distance
+// (power 3) blend of the nearest stations, so the closest station dominates and borders blend gradually instead of stepping.
+// Clouds and weather phenomena come from the nearest station; ground fog stays at its airport.
+Station blendAt(const std::vector<Station>& stations, double lat, double lon);
 
 } // namespace wx

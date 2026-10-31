@@ -116,21 +116,6 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         c.key = key;
         all.push_back(c);
     }
-    // Core / edge: blocks with echo all around them are tall, blocks at the edge of an echo area are lower. Gives storms a
-    // dome profile instead of one flat top over the whole area.
-    for (auto& c : all) {
-        long bj = (long)std::floor((90.0 - c.lat) / blockLat);
-        double step = blocks[{bj, (long)std::floor((c.lon + 180.0) / std::max(blockLat, std::round(blockLat / std::max(0.2, std::cos(c.lat * kPi / 180.0)) * 100.0) / 100.0))}].step;
-        int n = 0;
-        for (int dj = -1; dj <= 1; ++dj)
-            for (int di = -1; di <= 1; ++di) {
-                if (!dj && !di) continue;
-                double la2 = c.lat - dj * blockLat;
-                double step2 = std::max(blockLat, std::round(blockLat / std::max(0.2, std::cos(la2 * kPi / 180.0)) * 100.0) / 100.0);
-                if (blocks.count({bj + dj, (long)std::floor((c.lon + di * step + 180.0) / step2)})) ++n;
-            }
-        c.neighbors = n;
-    }
     res.echoBlocks = (int)all.size();
     // Keep the most relevant: close and intense first.
     std::set<std::string> prevKeys = prev ? *prev : std::set<std::string>();
@@ -223,28 +208,10 @@ bool tilesToField(const std::vector<TileImage>& tiles, const GribWindow& win, Gr
 
 // ---------------------------------------------------------------------------------------------------------
 
-float stormTopM(const RadarCell& c, const Config& cfg, float baseM) {
+float stormTopM(const RadarCell& c, const Config&, float baseM) {
+    // The radar echo top (or, without echo-top data, an estimate from reflectivity), capped at the tropopause + 2.5 km.
     const float limit = tropopauseKm(c.lat) * 1000.0f + 2500.0f;
-    float topM;
-    if (c.topKnown && c.topM > 0) {
-        // Measured echo top: use it as it is, so the cloud matches the FLxxx label on the map.
-        topM = std::min(c.topM, limit);
-    } else {
-        // Estimated from reflectivity: shape it so storms are not slabs (weaker/edge cells lower, stable per-block jitter).
-        const float dbz = c.dbz;
-        topM = c.topM > 0 ? c.topM : estimateTopM(dbz, c.lat);
-        float intensity = clampf((dbz - 20.0f) / 20.0f, 0.0f, 1.0f);
-        float depth = std::max(0.0f, topM - baseM);
-        depth *= (0.6f + 0.4f * intensity) * (0.8f + 0.2f * c.frac);
-        depth *= c.neighbors >= 7 ? 1.0f : (c.neighbors >= 4 ? 0.8f : 0.6f);
-        topM = baseM + depth;
-        uint32_t h = 2166136261u;
-        for (char ch : c.key) { h ^= (uint8_t)ch; h *= 16777619u; }
-        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; h *= 3266489917u; h ^= h >> 16;
-        float j = ((float)(h & 0xFFFFu) / 32767.5f) - 1.0f;
-        topM += j * (float)cfg.stormTopJitterM * (0.4f + 0.6f * intensity);
-        topM = std::min(topM, limit);
-    }
+    float topM = std::min(c.topM > 0 ? c.topM : estimateTopM(c.dbz, c.lat), limit);
     if (topM < baseM + 1500.0f) topM = baseM + 1500.0f;
     return topM;
 }
@@ -262,8 +229,6 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     x.visM = std::min(x.visM, cap);
 
     // Storm cloud in slot 2 (slot 0 may hold ground fog; slot 1 the station's own cloud).
-    // Real storms are not slabs: tops differ from tower to tower, weaker and edge cells are lower, and the cloud is
-    // not solid. Uniform tops and full coverage in neighbouring blocks merge into a flat-topped mesa.
     float baseM = (float)fieldElevM + (dbz >= 40 ? 900.0f : 600.0f);
     for (int i = 0; i < 3; ++i)    // do not float above the station's own lowest layer
         if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);

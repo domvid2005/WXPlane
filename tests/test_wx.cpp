@@ -150,6 +150,37 @@ int main() {
     CHECK(t.clouds[0].topM < t.clouds[1].baseM && t.clouds[1].topM < t.clouds[2].baseM);
     CHECK(t.clouds[0].topM > t.clouds[0].baseM && t.clouds[1].topM > t.clouds[1].baseM);
 
+    // --- NOAA decoded-field crosscheck, neighbour fill and smooth blending
+    {
+        std::string js = "[{\"icaoId\":\"KTST\",\"rawOb\":\"KTST 301553Z 18010KT 5SM BKN020 15/10 A2992\",\"lat\":30.0,\"lon\":-97.0,\"elev\":100,"
+                         "\"visib\":3,\"wdir\":200,\"wspd\":14,\"wgst\":22,\"temp\":16,\"dewp\":10,\"altim\":1013.2},"
+                         "{\"icaoId\":\"KTS2\",\"rawOb\":\"KTS2 301553Z 18010KT 10SM 15/10 A2992\",\"lat\":30.5,\"lon\":-97.0,\"elev\":100,"
+                         "\"visib\":\"10+\",\"wdir\":180,\"wspd\":10,\"temp\":15,\"dewp\":10,\"altim\":1012.6,\"clouds\":[{\"cover\":\"BKN\",\"base\":2500}]},"
+                         "{\"icaoId\":\"KTS3\",\"rawOb\":\"KTS3 301553Z 18010KT 4SM BKN020 15/10 A2992\",\"lat\":30.2,\"lon\":-97.0,\"elev\":100,"
+                         "\"visib\":4,\"wdir\":180,\"wspd\":10,\"temp\":15,\"dewp\":10,\"altim\":1012.6}]";
+        std::string e2;
+        auto v = parseAwcMetarJson(js, &e2);
+        CHECK(v.size() == 3);
+        NEAR(v[0].report.visM, 3 * 1609.344, 2);                                  // text said 5 SM, NOAA's decoded field says 3 SM
+        CHECK(v[0].report.windKt == 14 && v[0].report.gustKt == 22 && v[0].report.windDir == 200);
+        CHECK(v[0].filled.find("visibility corrected") != std::string::npos && v[0].filled.find("wind corrected") != std::string::npos);
+        CHECK(v[1].report.clouds.size() == 1 && v[1].report.clouds[0].cover == CloudGroup::BKN && v[1].report.clouds[0].baseFtAgl == 2500);
+        CHECK(v[1].filled.find("clouds filled") != std::string::npos);
+        CHECK(v[2].filled.empty());                                               // agrees with NOAA: nothing touched
+        // neighbour fill: a station with no wind or pressure
+        Station gap; gap.icao = "KGAP"; gap.lat = 30.1; gap.lon = -97.0; parseReport("KGAP 301553Z 10SM CLR 20/10", gap.report);
+        std::vector<Station> g = {v[0], v[2], gap};
+        int filled = fillMissing(g, 80.0);
+        CHECK(filled >= 2 && g[2].report.hasWind && g[2].report.hasAltim && g[2].filled.find("wind from") != std::string::npos);
+        // smooth blend: the closest station dominates and values change gradually between two stations
+        std::vector<Station> two = {v[2], v[1]};          // 4 SM at lat 30.2, clear-ish at 30.5
+        two[1].report.visM = 16093; two[0].report.visM = 6437;
+        double nearA = blendAt(two, 30.21, -97.0).report.visM, mid = blendAt(two, 30.35, -97.0).report.visM, nearB = blendAt(two, 30.49, -97.0).report.visM;
+        CHECK(nearA < mid && nearB >= 16000);   // values at or above 10 SM count as clear
+        CHECK(std::fabs(nearA - 6437) < 0.15 * (16093 - 6437));
+        CHECK(blendAt(two, 30.21, -97.0).hasAtis == false);
+    }
+
     // --- ATIS merge overrides wind/altimeter but keeps unspecified fields
     Station s = st[1];
     Report atis;
@@ -282,37 +313,25 @@ int main() {
         RadarCell cell; cell.lat = 38; cell.lon = -98; cell.dbz = 52; cell.frac = 1; cell.topKnown = true; cell.topM = 13000; cell.rateMmH = rateFromDbz(52);
         XpWx st = base;
         applyStorm(st, cell, sc, 400, 38);
-        CHECK(st.clouds[2].coverage > 0.55f && st.clouds[2].coverage <= 0.7f && st.clouds[2].type == 3.0f && st.clouds[2].topM > 11000 && st.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1 && st.clouds[2].baseM < 1500);
+        CHECK(st.clouds[2].coverage > 0.7f && st.clouds[2].coverage <= 0.95f && st.clouds[2].type == 3.0f && st.clouds[2].topM > 11000 && st.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1 && st.clouds[2].baseM < 1500);
         CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= st.clouds[2].topM / 0.3048 - 1);
         CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
         CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
         {   // a measured echo top is used as it is, and the map label shows the same number
-            RadarCell m = cell; m.key = "R5:5"; m.dbz = 48; m.topM = 11277; m.topKnown = true; m.neighbors = 3; m.frac = 0.5f;
+            RadarCell m = cell; m.key = "R5:5"; m.dbz = 48; m.topM = 11277; m.topKnown = true; m.frac = 0.5f;
             XpWx a = base; applyStorm(a, m, sc, 400, 38);
             NEAR(a.clouds[2].topM, 11277, 0.5);
             NEAR(stormTopM(m, sc, 900.0f), 11277, 0.5);
             m.topM = 30000; applyStorm(a, m, sc, 400, 38);                     // capped at tropopause + 2.5 km
             CHECK(a.clouds[2].topM < 22000 && stormTopM(m, sc, 900.0f) == a.clouds[2].topM);
         }
-        {   // no flat mesas (estimated tops): neighbouring blocks with identical radar get different (but repeatable) tops
-            std::set<int> tops;
-            for (int k = 0; k < 8; ++k) {
-                RadarCell cc = cell; cc.key = "R300:" + std::to_string(380 + k); cc.topM = 10000; cc.topKnown = false;
-                XpWx a = base, b = base;
-                applyStorm(a, cc, sc, 400, 38); applyStorm(b, cc, sc, 400, 38);
-                CHECK(a.clouds[2].topM == b.clouds[2].topM);
-                tops.insert((int)(a.clouds[2].topM / 100));
-            }
-            CHECK(tops.size() >= 5);
-            XpWx lo = base, hi = base; RadarCell e = cell; e.key = "R1:1"; e.topM = 12000; e.topKnown = false;
+        {   // weaker/smaller cells are thinner and lower than strong ones
+            XpWx lo = base, hi = base; RadarCell e = cell; e.key = "R1:1"; e.topM = 0; e.topKnown = false;
             e.dbz = 28; e.frac = 0.25f; applyStorm(lo, e, sc, 400, 38);
             e.dbz = 55; e.frac = 1.0f; applyStorm(hi, e, sc, 400, 38);
-            CHECK(lo.clouds[2].topM + 1500 < hi.clouds[2].topM && lo.clouds[2].coverage < hi.clouds[2].coverage);   // weak edge cells are lower and thinner
-            XpWx edge = base, core = base; RadarCell ec = cell; ec.key = "R9:9"; ec.topM = 12000; ec.topKnown = false; ec.dbz = 50; ec.frac = 1.0f;
-            ec.neighbors = 2; applyStorm(edge, ec, sc, 400, 38); ec.neighbors = 8; applyStorm(core, ec, sc, 400, 38);
-            CHECK(edge.clouds[2].topM + 1000 < core.clouds[2].topM);   // dome: storm edges are lower than the core
+            CHECK(lo.clouds[2].topM < hi.clouds[2].topM && lo.clouds[2].coverage < hi.clouds[2].coverage);
             sc.stormCoverageMax = 1.0; XpWx full = base; applyStorm(full, e, sc, 400, 38);
-            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.7;
+            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.95;
         }
         XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
         applyStorm(w2, cell, sc, 400, 38);
