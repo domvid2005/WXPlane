@@ -1,6 +1,6 @@
 # WXPlane for X-Plane 12
 
-Replaces X-Plane 12's flawed weather with live **NOAA** data, refreshed every **5 minutes**:
+Replaces X-Plane 12's flawed weather with live **NOAA** data, refreshed every **30 minutes** by default (`update_minutes`) and whenever you fly 40 nm:
 
 * **METARs** from NOAA's Aviation Weather Center (surface wind, visibility, fog, clouds, precipitation, temperature, pressure)
 * **ATIS** (D-ATIS) merged over the METAR for airports near you
@@ -26,7 +26,7 @@ Settings are saved to `Output/preferences/WXPlane.cfg`.
 
 ## How it works
 
-1. Every 5 minutes (or when you move 40 nm from the last download point) a background thread asks NOAA for all METARs within 120 nm **of the aircraft**, so the data follows you along your route. The sim is never blocked by the network.
+1. Every `update_minutes` (30; or when you move 40 nm from the last download point) a background thread asks NOAA for all METARs within 120 nm **of the aircraft**, so the data follows you along your route. The sim is never blocked by the network.
 2. The nearest 40 reports are applied with `XPLMSetWeatherAtAirport` (replacing the sim's own METAR for that airport) or `XPLMSetWeatherAtLocation`. Only changed stations are re-sent and stations that left range are erased, so stale stations never linger.
 3. If an ATIS exists for one of the 2 nearest airports within 35 nm, its values override that airport's METAR values.
 4. **Winds/temps aloft:** NOAA FD winds (3,000–39,000 ft, ~175 US stations plus Alaska/Hawaii) are downloaded every 30 minutes. For each weather report, the 4 nearest FD stations are blended by inverse-distance-squared on the wind *vectors* (so opposing winds cancel instead of averaging compass numbers). The report then carries a surface wind layer plus the aloft layers, and a temperature profile anchored to the airport's own METAR temperature. The highest NOAA wind is held up to FL600 so the sim's own winds never take over above FL390. X-Plane interpolates between reports and layers.
@@ -83,7 +83,7 @@ X-Plane blends cloud layers between neighbouring reports slot by slot. When any 
 
 X-Plane's weather API cannot take a radar image, so WXPlane builds the storms from radar data instead. The aircraft's weather radar draws what the sim simulates, so if the sim's storms match the real ones, the radar picture does too.
 
-Every update (about 5 minutes) a background thread downloads:
+Every update (`update_minutes`, 30 by default) a background thread downloads:
 
 * **MergedReflectivityQCComposite** from NOAA's MRMS system (`mrms.ncep.noaa.gov`), a quality-controlled mosaic of the whole US radar network at about 1 km, valid within a couple of minutes.
 * **EchoTop_18**, the height in km MSL of the 18 dBZ echo, used as the storm top.
@@ -99,7 +99,7 @@ The echoes are grouped into blocks of about `radar_cell_nm`; the strongest and n
 
 Only cells that changed are re-sent, and cells with no echo left are erased, so storms move and fade between updates. The window under "Show Local METAR/ATIS Data..." lists the radar source, its age and the strongest cells.
 
-**Limits:** radar mosaics are 2D, so the base height and the shape of a storm are estimated; reflectivity above 70 dBZ is capped (hail and clutter); the API is limited to a few hundred records; the data is a few minutes old when you get it; and cells are only applied where at least one METAR station is within the search radius. The MRMS file layout (grid, PNG/simple packing) was built from the GRIB2 specification and has been tested with generated files, not yet against live NOAA data.
+**Limits:** radar mosaics are 2D, so the base height and the shape of a storm are estimated; reflectivity above 70 dBZ is capped (hail and clutter); the API is limited to a few hundred records; the data is a few minutes old when you get it; and cells are only applied where at least one METAR station is within the search radius. The MRMS file layout (grid, PNG/simple packing) was built from the GRIB2 specification and tested with generated files; it has since decoded live NOAA CONUS data in real X-Plane sessions (the log showed e.g. 122 echo blocks, 120 cells, echo tops up to 12 000 m from radar). Not yet seen live: the Alaska/Hawaii/Caribbean/Guam products and the experimental global RainViewer fallback.
 
 ### Outside the US (experimental)
 
@@ -121,7 +121,7 @@ No free global radar data feed offers raw values. With `radar_global = 1` WXPlan
 
 An update also happens early when you move more than `refetch_move_nm` (40 nm; at most once a minute), and when you press "Refresh Weather Data Now" or toggle a data option. Applying is incremental: only records that changed are sent to X-Plane.
 
-**Start-up.** The first download starts `startup_delay_s` (15 s) after the plugin loads and, with `startup_wait_fps = 1`, only once the frame time has stayed under 50 ms for 4 seconds (so not while the sim is still loading; it stops waiting after `startup_max_wait_s`, 60 s, so the weather is in about 1.5 minutes after the plugin loads). With `startup_staged = 1` the first update contains only METAR, ATIS and winds aloft; the radar storms follow `startup_radar_delay_s` (8 s) later in a second update, once the frame rate is steady again, so the sim never has to rebuild everything at once. Set `startup_wait_scenery = 1` to also wait until X-Plane reports no scenery loading (up to 2.5 minutes); it is off by default. The first weather goes to X-Plane as a single update, which X-Plane then fades in over 1-2 minutes. Every weather update makes X-Plane rebuild, so one update is smoother than many small ones. `transition_s` / `update_transition_s` (both 0) can spread the records over time, but each step is another rebuild and causes repeated hitches, so leave them at 0 unless you are experimenting. Downloads and radar decoding run on a background thread at lower priority.
+**Start-up.** See "Start-up timing" and "Ready within a minute" below: the plugin waits for the sim to run at a steady frame rate (counted from the first frame), then fetches everything and applies it as ONE update, at once.
 
 ## Storm tops on the map
 
@@ -179,3 +179,11 @@ X-Plane does not run plugin callbacks while it is still loading (often 1 to 2 mi
 ## Visibility scale
 
 `vis_scale` (default 1, range 0.2 to 1.5) multiplies every reported visibility below 10 SM before it is handed to X-Plane (stations, gap-fill and radar storm records alike). At 1 the METAR/ATIS value goes out exactly; 10 SM or more goes out as `clear_vis_m`. A test with a 4 SM report suggested X-Plane's value may look about twice as far as the METAR distance, so 0.5 may look closer to reality in some conditions; this is unconfirmed, so the default is the exact value.
+
+## Disabling and refreshing
+
+Switching the plugin off (menu or Plugin Admin) removes our weather records from the next pre-flight-model callback, the only place X-Plane's weather API is meant to be used, and hands the weather back to X-Plane's own system. "Refresh Weather Data Now" downloads fresh data and applies it at once (it does not fade in over 1-2 minutes).
+
+## What this is not
+
+WXPlane injects METAR, ATIS, winds-aloft and radar observations into X-Plane's weather engine; it does not replace that engine. X-Plane still blends and smooths the records it is given, so what you see can differ somewhat from the numbers sent (visibility and clouds especially). A compiled `WXPlane.xpl` is produced by the GitHub Actions build; the source zip alone cannot be loaded by X-Plane. Treat this as an experimental build: only the logic is covered by tests, not X-Plane's rendering.

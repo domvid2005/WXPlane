@@ -125,6 +125,7 @@ std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by 
 bool g_pendingImmediate = false;
 bool g_startupPhase = true;        // true until the start-up updates (stations, then storms) are out
 bool g_pendingStartup = false;
+bool g_pendingManual = false;       // the pending update was asked for with "Refresh Weather Data Now"
 Clock::time_point g_nextRelease{};   // when the next queued record may be handed to X-Plane
 double g_releaseStepS = 0.0;         // seconds between records, so a whole update spreads over transition_s
 struct Todo { std::string key; Rec rec; };
@@ -160,7 +161,7 @@ void flushPending() {
     for (size_t i = 0; i < n; ++i) sendRec(g_pendingTodo[i]);
     sent = n;
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
-    XPLMEndWeatherUpdate(1 /*incremental*/, (g_pendingImmediate && (g_cfg.applyImmediately || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
+    XPLMEndWeatherUpdate(1 /*incremental*/, (g_pendingImmediate && (g_cfg.applyImmediately || g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued)", ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size());
     if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
@@ -395,6 +396,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_pendingGone = gone;
     g_pendingImmediate = res.immediate || !g_firstApplyDone || g_startupPhase;
     g_pendingStartup = g_startupPhase;
+    g_pendingManual = res.immediate && !g_startupPhase;
     {   // spread the records evenly over the configured transition time (nearest stations first)
         size_t n = todo.size() + gone.size();
         int T = g_firstApplyDone ? g_cfg.updateTransitionS : g_cfg.transitionS;
@@ -608,12 +610,17 @@ bool sceneryReady() {
     return std::chrono::duration<double>(now - g_calmSince).count() >= 3.0;
 }
 
+bool g_disableErase = false;   // plugin was disabled: erase our records from the next callback, then stop
 Clock::time_point g_lastLoopAt{};
 bool g_loopStarted = false;
 int g_stallLogs = 0;
 Clock::time_point g_lastStallLog{};
 
 float flightLoop(float, float, int, void*) {
+    if (!g_pluginEnabled) {
+        if (g_disableErase) { g_disableErase = false; g_checkPending = false; eraseAll(); }
+        return 0.0f;   // stop calling us until the plugin is enabled again
+    }
     const auto nowT = Clock::now();
     if (!g_loopStarted) {
         // X-Plane does not run flight loops while it is still loading (this can be well over a minute after the plugin was
@@ -898,6 +905,11 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
 }
 
 PLUGIN_API void XPluginStop(void) {
+    if (g_loop) {
+        if (g_disableErase) { eraseAll(); g_disableErase = false; }   // no frame came after disabling: last chance
+        XPLMDestroyFlightLoop(g_loop);
+        g_loop = nullptr;
+    }
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
     if (g_menu) { XPLMDestroyMenu(g_menu); g_menu = nullptr; }
 }
@@ -912,13 +924,16 @@ PLUGIN_API int XPluginEnable(void) {
     if (!g_mapHookRegistered) { XPLMRegisterMapCreationHook(mapCreatedHook, nullptr); g_mapHookRegistered = true; }
     if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayer(XPLM_MAP_USER_INTERFACE, nullptr);
 
-    XPLMCreateFlightLoop_t p;
-    std::memset(&p, 0, sizeof p);
-    p.structSize = sizeof p;
-    p.phase = xplm_FlightLoop_Phase_BeforeFlightModel; // the weather API must be used before the flight model
-    p.callbackFunc = flightLoop;
-    p.refcon = nullptr;
-    g_loop = XPLMCreateFlightLoop(&p);
+    g_disableErase = false;
+    if (!g_loop) {
+        XPLMCreateFlightLoop_t p;
+        std::memset(&p, 0, sizeof p);
+        p.structSize = sizeof p;
+        p.phase = xplm_FlightLoop_Phase_BeforeFlightModel; // the weather API must be used before the flight model
+        p.callbackFunc = flightLoop;
+        p.refcon = nullptr;
+        g_loop = XPLMCreateFlightLoop(&p);
+    }
     XPLMScheduleFlightLoop(g_loop, 2.0f, 1);
 
     g_pluginEnabled = true;
@@ -934,11 +949,13 @@ PLUGIN_API int XPluginEnable(void) {
 PLUGIN_API void XPluginDisable(void) {
     g_pluginEnabled = false;
     if (g_mapLayer) { XPLMDestroyMapLayer(g_mapLayer); g_mapLayer = nullptr; }
-    if (g_loop) { XPLMDestroyFlightLoop(g_loop); g_loop = nullptr; }
     g_fetcher.stop();
     wx::httpGlobalCleanup();
-    // Give weather back to X-Plane so our fog/cloud records don't outlive the plugin.
-    eraseAll();
+    // Give weather back to X-Plane so our fog/cloud records don't outlive the plugin. The weather API may only be used from the
+    // pre-flight-model callback, so the erase is done there on the next frame (the loop stays alive until XPluginStop); only if
+    // the sim is going away before another frame does XPluginStop erase directly.
+    g_disableErase = true;
+    if (g_loop) XPLMScheduleFlightLoop(g_loop, -1.0f, 1);   // negative = every frame; the callback stops itself after the erase
 }
 
 PLUGIN_API void XPluginReceiveMessage(XPLMPluginID, int, void*) {}

@@ -533,6 +533,15 @@ int main() {
     CHECK(g_maxBatch <= 4);                                   // never a burst
     CHECK(!g_sawImmediate);                                   // never forced an immediate rebuild
     XPluginDisable();
+    {   // records are removed from the next pre-flight-model callback, once, and the loop then stops itself
+        int erasedBefore = g_erases, endBefore = g_end;
+        float next = g_cb(1, 1, 99999, nullptr);
+        CHECK(g_end == endBefore + 1 && next == 0.0f);
+        (void)erasedBefore;
+        int endAfter = g_end;
+        g_cb(1, 1, 100000, nullptr);
+        CHECK(g_end == endAfter);                              // nothing more after the erase
+    }
     XPluginStop();
     CHECK(g_winDestroyed && g_mapDestroyed);
     std::printf("%s (%d failures)\n", g_fail ? "HARNESS FAILED" : "HARNESS OK", g_fail);
