@@ -50,8 +50,8 @@ struct Config {
     int fillFarRangeNm = 120;        // coarse fill out to here (never beyond the METAR search radius)
     int fillFarCellNm = 30;          // ...on a grid this size
     int fillCellNm = 12;             // ...using location records on a grid this size
-    double stationRadiusFactor = 0.65; // station radius = this x distance to nearest neighbour (0.49 = circles just touch; above that they overlap and X-Plane blends the edge)
-    double fillRadiusFactor = 0.95;    // gap-fill record radius = this x grid cell size (0.8 = barely touching)
+    double stationRadiusFactor = 0.49; // station radius = this x distance to nearest neighbour (0.49 = circles just touch; above that they overlap and X-Plane blends the edge)
+    double fillRadiusFactor = 0.8;    // gap-fill record radius = this x grid cell size (0.8 = barely touching)
     bool stationRadiusAuto = true;   // shrink each station's radius so close neighbours do not blend into it
     bool startupWaitFps = false;     // true: hold the first update until the frame rate has been steady for a few seconds (up to startup_max_wait_s)
     bool startupStaged = false;      // true: first update = METAR/ATIS/winds only, radar storms follow startup_radar_delay_s later
