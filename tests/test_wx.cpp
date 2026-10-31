@@ -155,8 +155,8 @@ int main() {
         const char* fn = "wxplane_cfg_test.cfg";
         { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\ntransition_s = 90\napply_per_tick = 4\nsearch_nm = 90\n", f); std::fclose(f); }
         Config old; loadConfig(fn, old);
-        CHECK(old.updateMinutes == 30 && old.startupDelayS == 0 && !old.startupStaged && !old.visAutocal && old.transitionS == 0 && old.applyPerTick == 500 && old.searchNm == 90);
-        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 7\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
+        CHECK(old.updateMinutes == 30 && old.startupDelayS == 0 && !old.startupStaged && old.visAutocal && old.transitionS == 0 && old.applyPerTick == 500 && old.searchNm == 90);
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 8\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
         Config cur; loadConfig(fn, cur);
         CHECK(cur.updateMinutes == 10 && cur.startupStaged && cur.lowCloudType == 2.0 && cur.stationRadiusFactor == 0.65);   // current files keep their values
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
@@ -237,7 +237,7 @@ int main() {
             bool ok = a.cloudCount >= 2;
             for (int i = 0; i + 1 < 3; ++i)
                 if (a.clouds[i].coverage > 0 && a.clouds[i + 1].coverage > 0)
-                    ok = ok && a.clouds[i].topM + 149.0f <= a.clouds[i + 1].baseM && a.clouds[i].topM > a.clouds[i].baseM;
+                    ok = ok && a.clouds[i].topM + (a.clouds[i].baseM - 100.0f < 100.0f ? 39.0f : 149.0f) <= a.clouds[i + 1].baseM && a.clouds[i].topM > a.clouds[i].baseM;
             CHECK(ok);
         }
     }
@@ -266,6 +266,21 @@ int main() {
         for (const auto& c : cut.clouds) CHECK(c.coverage <= 0 || c.topM <= 10000 * 0.3048f + 1);
         Config off = cfg; off.handoffAltFt = 0;
         CHECK(buildXp(st, off, now).cloudCount == 3);                       // 0 = our weather all the way up
+    }
+    // --- mist with a low ceiling: the ceiling stays where it is reported and all three decks are kept
+    {
+        Station st; st.elevM = 132;
+        parseReport("KSEA 301739Z 28003KT 1SM BR BKN001 BKN050 BKN120 06/06 A3001", st.report);
+        XpWx a = buildXp(st, cfg, now, nullptr, true);        // fog slot layout, as when fog is reported nearby
+        CHECK(!a.fogLayerApplied && a.cloudCount == 3);
+        NEAR(a.clouds[0].baseM, 132 + 100 * 0.3048, 1);       // BKN001 at 100 ft AGL, not lifted above a mist layer
+        NEAR(a.clouds[1].baseM, 132 + 5000 * 0.3048, 1);
+        NEAR(a.clouds[2].baseM, 132 + 12000 * 0.3048, 1);
+        NEAR(a.visM, 1609, 2);
+        Station fg; fg.elevM = 132;
+        parseReport("KSEA 301739Z 28003KT 1/4SM FG BKN002 BKN050 06/06 A3001", fg.report);
+        XpWx b = buildXp(fg, cfg, now, nullptr, true);
+        CHECK(b.fogLayerApplied && b.clouds[1].baseM < b.clouds[0].topM + 41.0f);   // only a 40 m gap above the ground fog, not 150 m
     }
     // --- mist (BR) shows as a thin ground layer, and not only as reduced visibility
     {

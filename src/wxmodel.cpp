@@ -206,7 +206,13 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         if (g.cover == CloudGroup::VV) vv = &g;
 
     bool anyFog = r.fog || r.shallowFog || r.patchyFog || r.mist || vv != nullptr;
-    if (cfg.fogLayer && anyFog) {
+    // Mist (BR) together with a low broken/overcast ceiling: the ceiling layer is the low cloud. A separate mist layer would take
+    // the lowest slot and push the real ceiling up by the layer gap (100 ft showing as 800 ft), and cost a slot for the third deck.
+    bool ceilingInsteadOfMist = false;
+    if (r.mist && !r.fog && !r.shallowFog && !r.patchyFog && !vv)
+        for (const auto& g : r.clouds)
+            if (g.cover != CloudGroup::VV && g.cover >= CloudGroup::BKN && g.baseFtAgl < 600) ceilingInsteadOfMist = true;
+    if (cfg.fogLayer && anyFog && !ceilingInsteadOfMist) {
         XpCloud f;
         f.type = 1.0f;
         f.baseM = (float)st.elevM; // starts at the ground, so it is part of the surface weather
@@ -246,8 +252,10 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     // dark. Keep a clear gap between every top and the next base. The lower layer is trimmed first (never thinner than
     // kMinThick); if the two bases are so close that even that is not enough, the upper layer is lifted just far enough.
     {
-        const float kGap = 150.0f, kMinThick = 120.0f;
+        const float kMinThick = 120.0f;
         for (size_t i = 0; i + 1 < layers.size(); ++i) {
+            // right at the ground (fog, a 100 ft ceiling) a 150 m gap would lift the next layer far above where it is reported
+            const float kGap = (layers[i].baseM - (float)st.elevM < 100.0f) ? 40.0f : 150.0f;
             float limit = layers[i + 1].baseM - kGap;
             if (layers[i].topM > limit) layers[i].topM = std::max(layers[i].baseM + kMinThick, limit);
             float need = layers[i].topM + kGap;
@@ -262,6 +270,10 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         // slot 0 = ground fog (or empty); the two lowest real cloud layers follow in slots 1 and 2
         size_t first = x.fogLayerApplied ? 1 : 0;
         if (x.fogLayerApplied) x.clouds[0] = layers[0];
+        if (ceilingInsteadOfMist && !layers.empty()) {   // the low ceiling takes the ground slot; the next two decks follow
+            x.clouds[0] = layers[0];
+            first = 1;
+        }
         for (size_t i = 0; i < 2 && first + i < layers.size(); ++i) x.clouds[1 + i] = layers[first + i];
     } else {
         for (size_t i = 0; i < 3 && i < layers.size(); ++i) x.clouds[i] = layers[i];

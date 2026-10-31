@@ -246,3 +246,9 @@ The "Apply Weather Immediately" menu option and the `apply_immediately` setting 
 ## Mist (BR)
 
 A METAR with BR (mist) used to change only the visibility, so nothing was visible on the ground. It now also gets a thin ground layer (90 m deep, 45% coverage), in addition to the exact reported visibility. Fog, shallow fog and patchy fog are unchanged.
+
+## Low ceilings and mist
+
+* Mist (BR) with a broken/overcast ceiling below 600 ft AGL gets no separate mist layer: the ceiling layer takes the ground slot and sits at its reported height (a 100 ft ceiling stays at 100 ft), and the next two decks keep their slots, so BKN001 / BKN050 / BKN120 all appear. The reduced visibility still comes from the reported value.
+* Layers whose base is within 100 m of the ground (ground fog, a very low ceiling) keep a 40 m gap to the next layer instead of 150 m.
+* `vis_autocal` is on by default: on the ground, within 15 nm of a station, once X-Plane's visibility reading has stopped moving and is more than 25% off the report, the records are resent with a corrected visibility (two tries at most). It restores the plain value if X-Plane does not follow.

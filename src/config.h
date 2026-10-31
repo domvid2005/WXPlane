@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 7;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 8;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -41,7 +41,7 @@ struct Config {
     int handoffAltFt = 0;         // above this altitude (ft MSL) X-Plane's own weather takes over from ours; 0 = our weather all the way up
     int handoffBandFt = 3000;     // our clouds fade out over this many feet below the hand-off altitude
     double visScale = 1.0;        // factor on reported visibility below 10 SM before it goes to X-Plane (1 = exactly the METAR/ATIS value)
-    bool visAutocal = false;      // compare what X-Plane reports with the METAR/ATIS and correct our input
+    bool visAutocal = true;       // compare what X-Plane reports with the METAR/ATIS and correct our input
     int visCheckS = 100;          // seconds after an update to run that comparison
     // Radar storms (NOAA MRMS mosaic, optional global fallback)
     bool radar = true;            // turn radar echoes into storm cells
