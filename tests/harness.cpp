@@ -95,9 +95,10 @@ void XPLMSetWeatherAtAirport(const char* id, XPLMWeatherInfo_t* i) { if (std::st
 // ---------------- mock window / drawing ----------------
 static XPLMDrawWindow_f g_drawCb = nullptr;
 static XPLMHandleMouseWheel_f g_wheelCb = nullptr;
+static XPLMHandleMouseClick_f g_mouseCb = nullptr;
 static bool g_winVisible = false, g_winDestroyed = false;
 static std::string g_drawn;
-XPLMWindowID XPLMCreateWindowEx(XPLMCreateWindow_t* p) { g_drawCb = p->drawWindowFunc; g_wheelCb = p->handleMouseWheelFunc; g_winVisible = p->visible; return (void*)99; }
+XPLMWindowID XPLMCreateWindowEx(XPLMCreateWindow_t* p) { g_drawCb = p->drawWindowFunc; g_wheelCb = p->handleMouseWheelFunc; g_mouseCb = p->handleMouseClickFunc; g_winVisible = p->visible; return (void*)99; }
 void XPLMDestroyWindow(XPLMWindowID) { g_winDestroyed = true; }
 void XPLMGetScreenBoundsGlobal(int* l, int* t, int* r, int* b) { *l = 0; *t = 1080; *r = 1920; *b = 0; }
 void XPLMGetWindowGeometry(XPLMWindowID, int* l, int* t, int* r, int* b) { *l = 100; *t = 900; *r = 960; *b = 300; }
@@ -525,20 +526,33 @@ int main() {
         (void)erBefore;
     }
 
-    std::printf("[7b] real-weather hand-off altitude menu item\n");
+    std::printf("[7b] real-weather hand-off slider window\n");
     {
         auto label = [&]() { for (auto& n : g_menuNames) if (n.find("Real Weather Above") != std::string::npos) return n; return std::string(); };
         CHECK(label().find("off") != std::string::npos);
-        g_menuHandler(nullptr, (void*)(intptr_t)8 /*kHandoff*/);
-        CHECK(label().find("5000 ft") != std::string::npos);
-        for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }   // the weather is rebuilt from the data we have
-        g_menuHandler(nullptr, (void*)(intptr_t)8);
-        CHECK(label().find("8000 ft") != std::string::npos);
-        for (int k = 0; k < 5; ++k) g_menuHandler(nullptr, (void*)(intptr_t)8);
-        CHECK(label().find("30000 ft") != std::string::npos);
-        g_menuHandler(nullptr, (void*)(intptr_t)8);
-        CHECK(label().find("off") != std::string::npos);   // and back around to off
-        for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        g_menuHandler(nullptr, (void*)(intptr_t)8 /*kHandoff*/);   // opens the slider window
+        CHECK(g_mouseCb != nullptr);
+        CHECK(label().find("off") != std::string::npos);            // opening it changes nothing
+        if (g_mouseCb) {
+            // window geometry in the mock: l=100 t=900 r=960 b=300 -> bar from x 124 to 936 at y 832, 40000 ft full scale
+            g_mouseCb((void*)99, 327, 832, xplm_MouseDown, nullptr);   // 10000 ft
+            g_mouseCb((void*)99, 500, 832, xplm_MouseDrag, nullptr);
+            CHECK(label().find("off") != std::string::npos);        // nothing applied while dragging
+            g_mouseCb((void*)99, 530, 832, xplm_MouseUp, nullptr);     // 20000 ft
+            CHECK(label().find("20000 ft") != std::string::npos);
+            for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+            g_mouseCb((void*)99, 220, 330, xplm_MouseDown, nullptr);   // the "+ 1000" button
+            g_mouseCb((void*)99, 220, 330, xplm_MouseUp, nullptr);
+            CHECK(label().find("21000 ft") != std::string::npos);
+            g_mouseCb((void*)99, 150, 330, xplm_MouseDown, nullptr);   // the "- 1000" button
+            CHECK(label().find("20000 ft") != std::string::npos);
+            g_mouseCb((void*)99, 5000, 832, xplm_MouseDown, nullptr);  // far right of the bar
+            g_mouseCb((void*)99, 5000, 832, xplm_MouseUp, nullptr);
+            CHECK(label().find("40000 ft") != std::string::npos);      // clamped to the top
+            g_mouseCb((void*)99, 290, 330, xplm_MouseDown, nullptr);   // the "Off" button
+            CHECK(label().find("off") != std::string::npos);
+            for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        }
     }
 
     std::printf("[8] outside NOAA coverage: experimental global radar\n");

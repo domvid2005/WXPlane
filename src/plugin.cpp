@@ -120,8 +120,8 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     {
         char b[96];
-        if (g_cfg.handoffAltFt > 0) std::snprintf(b, sizeof b, "X-Plane Real Weather Above %d ft (click to change)", g_cfg.handoffAltFt);
-        else std::snprintf(b, sizeof b, "X-Plane Real Weather Above: off (click to change)");
+        if (g_cfg.handoffAltFt > 0) std::snprintf(b, sizeof b, "X-Plane Real Weather Above %d ft (click to adjust)", g_cfg.handoffAltFt);
+        else std::snprintf(b, sizeof b, "X-Plane Real Weather Above: off (click to adjust)");
         XPLMSetMenuItemName(g_menu, g_idxHandoff, b, 0);
     }
 }
@@ -959,6 +959,122 @@ void showWindow() {
     }
 }
 
+// ---------------- "X-Plane Real Weather Above" slider window ----------------
+// A menu item can only cycle through presets, so the hand-off altitude gets its own small window: drag the bar, or use the
+// buttons for 1000 ft steps. The new altitude is applied when the mouse is released, not while dragging, because every
+// change rebuilds the weather.
+XPLMWindowID g_hoWin = nullptr;
+bool g_hoDrag = false;
+int g_hoValue = 0;                       // altitude shown on the bar (ft); 0 = off
+constexpr int kHoMaxFt = 40000, kHoStepFt = 1000;
+
+struct HoGeom { int x0, x1, yTop, yBot, btnTop, btnBot; };
+HoGeom hoGeom(int l, int t, int r, int b) {
+    HoGeom g;
+    g.x0 = l + 24; g.x1 = r - 24;
+    g.yTop = t - 62; g.yBot = t - 74;
+    g.btnTop = b + 40; g.btnBot = b + 14;
+    return g;
+}
+int hoFromX(const HoGeom& g, int x) {
+    double f = (double)(x - g.x0) / std::max(1, g.x1 - g.x0);
+    f = std::max(0.0, std::min(1.0, f));
+    return (int)(f * (kHoMaxFt / kHoStepFt) + 0.5) * kHoStepFt;
+}
+void setHandoff(int ft) {
+    ft = std::max(0, std::min(kHoMaxFt, ft));
+    g_hoValue = ft;
+    if (ft == g_cfg.handoffAltFt) return;
+    g_cfg.handoffAltFt = ft;
+    g_reapplyRequested = true;
+    syncMenu();
+    wx::saveConfig(g_cfgPath, g_cfg);
+}
+
+void drawHoWin(XPLMWindowID w, void*) {
+    int l, t, r, b;
+    XPLMGetWindowGeometry(w, &l, &t, &r, &b);
+    const HoGeom g = hoGeom(l, t, r, b);
+    float white[3] = {1, 1, 1}, grey[3] = {0.75f, 0.75f, 0.75f};
+    char buf[160];
+    if (g_hoValue > 0) std::snprintf(buf, sizeof buf, "X-Plane real weather above %d ft", g_hoValue);
+    else std::snprintf(buf, sizeof buf, "X-Plane real weather above: off (WXPlane weather at all altitudes)");
+    XPLMDrawString(white, l + 14, t - 28, buf, nullptr, xplmFont_Proportional);
+    char hint[] = "Below it, WXPlane's weather; above it, X-Plane's own, faded in over a band.";
+    XPLMDrawString(grey, l + 14, t - 46, hint, nullptr, xplmFont_Proportional);
+    XPLMDrawTranslucentDarkBox(g.x0, g.yTop, g.x1, g.yBot);                       // track
+    const int tx = g.x0 + (int)((double)(g.x1 - g.x0) * g_hoValue / kHoMaxFt);
+    if (tx > g.x0) XPLMDrawTranslucentDarkBox(g.x0, g.yTop, tx, g.yBot);          // filled part (darker)
+    XPLMDrawTranslucentDarkBox(tx - 3, g.yTop + 5, tx + 3, g.yBot - 5);           // handle
+    XPLMDrawTranslucentDarkBox(tx - 3, g.yTop + 5, tx + 3, g.yBot - 5);
+    char lo[] = "off", hi[] = "40000 ft";
+    XPLMDrawString(grey, g.x0, g.yBot - 18, lo, nullptr, xplmFont_Proportional);
+    XPLMDrawString(grey, g.x1 - 40, g.yBot - 18, hi, nullptr, xplmFont_Proportional);
+    const int bw = 64, gap = 10;
+    const char* names[3] = {"- 1000", "+ 1000", "Off"};
+    for (int i = 0; i < 3; ++i) {
+        const int bl = l + 14 + i * (bw + gap);
+        XPLMDrawTranslucentDarkBox(bl, g.btnTop, bl + bw, g.btnBot);
+        XPLMDrawString(white, bl + 10, g.btnBot + 9, const_cast<char*>(names[i]), nullptr, xplmFont_Proportional);
+    }
+}
+
+int clickHoWin(XPLMWindowID w, int x, int y, XPLMMouseStatus st, void*) {
+    int l, t, r, b;
+    XPLMGetWindowGeometry(w, &l, &t, &r, &b);
+    const HoGeom g = hoGeom(l, t, r, b);
+    if (st == xplm_MouseDown) {
+        if (y >= g.btnBot && y <= g.btnTop) {
+            const int bw = 64, gap = 10;
+            for (int i = 0; i < 3; ++i) {
+                const int bl = l + 14 + i * (bw + gap);
+                if (x >= bl && x <= bl + bw) {
+                    if (i == 0) setHandoff(g_hoValue - kHoStepFt);
+                    else if (i == 1) setHandoff(g_hoValue + kHoStepFt);
+                    else setHandoff(0);
+                }
+            }
+        } else if (y >= g.yBot - 10 && y <= g.yTop + 10) {
+            g_hoDrag = true;
+            g_hoValue = hoFromX(g, x);
+        }
+    } else if (st == xplm_MouseDrag) {
+        if (g_hoDrag) g_hoValue = hoFromX(g, x);
+    } else if (st == xplm_MouseUp) {
+        if (g_hoDrag) { g_hoDrag = false; setHandoff(hoFromX(g, x)); }
+    }
+    return 1;
+}
+
+void showHandoffWindow() {
+    if (!g_hoWin) {
+        int sl, st, sr, sb;
+        XPLMGetScreenBoundsGlobal(&sl, &st, &sr, &sb);
+        XPLMCreateWindow_t p;
+        std::memset(&p, 0, sizeof p);
+        p.structSize = sizeof p;
+        p.left = sl + 120; p.right = sl + 120 + 480;
+        p.top = st - 140;  p.bottom = st - 140 - 150;
+        p.visible = 1;
+        p.drawWindowFunc = drawHoWin;
+        p.handleMouseClickFunc = clickHoWin;
+        p.handleRightClickFunc = clickWin;
+        p.handleKeyFunc = keyWin;
+        p.handleCursorFunc = cursorWin;
+        p.handleMouseWheelFunc = wheelWin;
+        p.refcon = nullptr;
+        p.decorateAsFloatingWindow = xplm_WindowDecorationRoundRectangle;
+        p.layer = xplm_WindowLayerFloatingWindows;
+        g_hoWin = XPLMCreateWindowEx(&p);
+        if (g_hoWin) XPLMSetWindowTitle(g_hoWin, "WXPlane - real weather hand-off");
+    }
+    if (g_hoWin) {
+        g_hoValue = g_cfg.handoffAltFt;
+        XPLMSetWindowIsVisible(g_hoWin, 1);
+        XPLMBringWindowToFront(g_hoWin);
+    }
+}
+
 void menuHandler(void*, void* item) {
     switch ((int)(intptr_t)item) {
         case kEnabled:
@@ -986,15 +1102,9 @@ void menuHandler(void*, void* item) {
             g_cfg.radarGlobal = !g_cfg.radarGlobal;
             if (g_cfg.enabled && g_cfg.radar) g_manualRefresh = true;
             break;
-        case kHandoff: {   // cycle through the presets; our weather fades out below the chosen altitude and X-Plane's takes over
-            static const int kSteps[] = {0, 5000, 8000, 10000, 15000, 18000, 24000, 30000};
-            size_t next = 0;
-            for (size_t i = 0; i < sizeof kSteps / sizeof kSteps[0]; ++i)
-                if (kSteps[i] > g_cfg.handoffAltFt) { next = i; break; }
-            g_cfg.handoffAltFt = kSteps[next];
-            g_reapplyRequested = true;
+        case kHandoff:   // opens the slider window
+            showHandoffWindow();
             break;
-        }
         case kAloft:
             g_cfg.useAloft = !g_cfg.useAloft;
             if (g_cfg.enabled) g_manualRefresh = true;
@@ -1055,6 +1165,7 @@ PLUGIN_API void XPluginStop(void) {
         g_loop = nullptr;
     }
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
+    if (g_hoWin) { XPLMDestroyWindow(g_hoWin); g_hoWin = nullptr; }
     if (g_menu) { XPLMDestroyMenu(g_menu); g_menu = nullptr; }
 }
 
