@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 11;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 12;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -38,6 +38,12 @@ struct Config {
     double edgeRadiusFactor = 0.6; // edge record radius = this x the station record radius
     int edgePoints = 8;           // edge records per overcast station
     int edgeMax = 120;            // most edge records in one update
+    double roughMinCoverage = 0.65; // layers at least this solid get rough tops, edges and the cap layer (0.65 = broken and overcast; 0.85 = overcast only)
+    bool stormRough = true;       // ring and cap strong storm cells with turret/tower records so they are not straight-walled tabletops
+    int stormRoughCount = 5;      // records per storm cell (every third one is a tower above the top, the rest short turrets round the rim)
+    int stormRoughMax = 220;      // most of them in one update
+    double stormRoughMinDbz = 35; // only cells at least this strong
+    double stormRoughHeightM = 1800; // how far a tower stands above the cell top (m)
     bool capLayer = true;         // very thin type-3 layer just above every thick overcast (breaks up the flat top)
     double capCoverage = 0.5;     // its coverage
     double capThickM = 70;        // its thickness (m)

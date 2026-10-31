@@ -284,7 +284,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     if (cfg.capLayer) {
         for (int i = 0; i < 3; ++i) {
             const XpCloud d = x.clouds[i];
-            if (!(d.coverage >= 0.85f && d.type > 0.5f) || (i == 0 && x.fogLayerApplied)) continue;
+            if (!(d.coverage >= (float)cfg.roughMinCoverage && d.type > 0.5f) || (i == 0 && x.fogLayerApplied)) continue;
             const float base = d.topM + (float)cfg.capGapM, top = base + (float)cfg.capThickM;
             int slot = -1;
             for (int k = (fogSlot ? 1 : 0); k < 3 && slot < 0; ++k)

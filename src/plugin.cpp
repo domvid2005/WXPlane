@@ -65,6 +65,7 @@ wx::FetchResult g_lastRes;      // last applied data, kept so a visibility corre
 bool g_haveLast = false;
 float g_visK = 1.0f;            // factor between the METAR visibility and what we send (vis_scale; the optional self-check adjusts it)
 bool g_checkPending = false;
+bool g_loggedNoNearStation = false;
 std::string g_checkedIcao;       // station the visibility check last looked at; a different one nearby (moved, reloaded) restarts it
 Clock::time_point g_moveScanAt{};
 Clock::time_point g_lastRadarRequest{};
@@ -303,7 +304,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     auto addBumps = [&](const wx::XpWx& x, const XPLMWeatherInfo_t& info, double cLat, double cLon, double radNm, double elev,
                         const std::string& id, int count, double fracMin, double fracMax) {
         if (!g_cfg.topBumps || bumpCount >= g_cfg.bumpMax) return;
-        auto ovc = [&](int i) { return x.clouds[i].coverage >= 0.85f && x.clouds[i].type > 0.5f && !(i == 0 && x.fogLayerApplied); };
+        auto ovc = [&](int i) { return x.clouds[i].coverage >= (float)g_cfg.roughMinCoverage && x.clouds[i].type > 0.5f && !(i == 0 && x.fogLayerApplied); };
         bool any = false;
         for (int i = 0; i < 3; ++i) any = any || ovc(i);
         if (!any) return;
@@ -377,7 +378,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             // A thick overcast ends at its record's edge in a smooth wall. Around its rim, place small records whose overcast layer is
             // thinner and billowy (type 3), so the sheet breaks up into cloud instead of stopping dead. Points that lie inside the
             // overcast of the nearest other station (the sheet continues there) get none.
-            auto isOvc = [&](const wx::XpWx& w, int i) { return w.clouds[i].coverage >= 0.85f && w.clouds[i].type > 0.5f && !(i == 0 && w.fogLayerApplied); };
+            auto isOvc = [&](const wx::XpWx& w, int i) { return w.clouds[i].coverage >= (float)g_cfg.roughMinCoverage && w.clouds[i].type > 0.5f && !(i == 0 && w.fogLayerApplied); };
             bool anyOvc = false;
             for (int i = 0; i < 3; ++i) anyOvc = anyOvc || isOvc(x, i);
             if (anyOvc && edgeCount < g_cfg.edgeMax) {
@@ -511,6 +512,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     }
     // Radar storm cells: the weather of the nearest station with the storm applied on top, as location records.
     int stormCount = 0;
+    int stormRoughCount = 0;
     if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
         for (const auto& c : res.radar.cells) {
             const wx::Station* nearest = &res.stations[0];
@@ -538,6 +540,43 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const std::string key = "radar:" + c.key;
             seen[key] = true;
             ++stormCount;
+            if (g_cfg.stormRough && c.dbz >= g_cfg.stormRoughMinDbz && stormRoughCount < g_cfg.stormRoughMax) {
+                // One record is a cylinder with straight walls and a flat top, which renders as a tabletop. Ring and cap it with
+                // smaller records of the same storm cloud whose tops differ: short turrets round the rim (stepped, ragged
+                // edge) and a few towers standing above the top.
+                const XPLMWeatherInfoClouds_t& core = r.info.cloud_layers[2];
+                const unsigned seed = (unsigned)std::fabs(c.lat * 1000.0) * 2654435761u + (unsigned)std::fabs(c.lon * 1000.0) * 40503u;
+                auto hash = [](unsigned v) { v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16; return v; };
+                if (core.coverage > 0 && core.alt_top > core.alt_base + 500.0f) {
+                    for (int k = 0; k < g_cfg.stormRoughCount && stormRoughCount < g_cfg.stormRoughMax; ++k) {
+                        const unsigned h1 = hash(seed + (unsigned)k * 7919u), h2 = hash(h1 + 17u), h3 = hash(h2 + 31u);
+                        const bool tower = (k % 3 == 2);
+                        const double ang = 6.283185307179586 * (h1 % 3600) / 3600.0;
+                        const double frac = tower ? 0.1 + 0.5 * ((h2 % 1000) / 1000.0) : 0.7 + 0.3 * ((h2 % 1000) / 1000.0);
+                        const double rNm = r.info.radius_nm * frac;
+                        Rec q;
+                        q.airport = false;
+                        q.lat = c.lat + rNm / 60.0 * std::cos(ang);
+                        q.lon = c.lon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(c.lat * 3.14159265358979 / 180.0));
+                        q.elev = nearest->elevM;
+                        q.info = r.info;
+                        q.info.radius_nm = (float)std::max(1.0, r.info.radius_nm * (0.3 + 0.3 * ((h3 % 1000) / 1000.0)));
+                        auto& L = q.info.cloud_layers[2];
+                        const float height = core.alt_top - core.alt_base;
+                        if (tower) L.alt_top = core.alt_top + (float)g_cfg.stormRoughHeightM * (0.3f + 0.7f * (float)((h3 / 1000) % 1000) / 1000.0f);
+                        else L.alt_top = core.alt_base + height * (0.45f + 0.5f * (float)((h3 / 1000) % 1000) / 1000.0f);
+                        L.coverage = std::min(0.95f, core.coverage * (tower ? 1.0f : 0.9f));
+                        q.info.age = 0.0f;
+                        const std::string qkey = "stormrough:" + c.key + ":" + std::to_string(k);
+                        seen[qkey] = true;
+                        ++stormRoughCount;
+                        auto qit = g_recs.find(qkey);
+                        if (!full && qit != g_recs.end() && std::memcmp(&qit->second.info, &q.info, sizeof q.info) == 0) continue;
+                        q.info.age = info.age;
+                        todo.push_back({qkey, q});
+                    }
+                }
+            }
             auto it = g_recs.find(key);
             if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
             r.info.age = info.age;
@@ -617,6 +656,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         std::snprintf(l2, sizeof l2, "No stations in range");
     g_lastGoodStatus = l1;
     setStatus(l1, l2);
+    if (g_cfg.stormRough) logf("storm shape: %d turret/tower records around storm cells", stormRoughCount);
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
     if (g_cfg.edgeClouds) logf("overcast edges: %d billowy edge records around thick overcast decks", edgeCount);
     logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
@@ -673,7 +713,13 @@ void visibilityCheck() {
         double d = wx::distNm(lat, lon, s.lat, s.lon);
         if (d < bestD) { bestD = d; best = &s; }
     }
-    if (!best || bestD > 15.0) return; // only meaningful close to a station
+    // Only meaningful at a station we have a report for. A station 10 nm away says nothing about the airport you are at (a
+    // small field without a METAR gets the blend of its neighbours), and "correcting" against it only made the sky murky.
+    if (!best || bestD > 4.0) {
+        if (!g_loggedNoNearStation) { g_loggedNoNearStation = true; logf("visibility check: no METAR station within 4 nm (nearest %s, %.0f nm), nothing to compare against", best ? best->icao.c_str() : "none", best ? bestD : 0.0); }
+        return;
+    }
+    g_loggedNoNearStation = false;
     g_checkedIcao = best->icao;
     const bool anyFog = std::time(nullptr) < g_fogUntil;
     wx::XpWx x = wx::buildXp(*best, g_cfg, std::time(nullptr), &g_lastRes.aloft, anyFog);
@@ -715,7 +761,7 @@ void visibilityCheck() {
         g_visK = (float)g_cfg.visScale;
         g_calIter = 2;
         wx::FetchResult copy = g_lastRes;
-        copy.immediate = true;
+        copy.immediate = false;   // an immediate update freezes the sim for 10+ s while X-Plane rebuilds; it fades in on its own
         applyResult(copy, false);
         return;
     }
@@ -726,7 +772,7 @@ void visibilityCheck() {
     ++g_calIter;
     logf("visibility off by %.0f%%: correction now %.2f, re-applying (pass %d/2)", (ratio - 1.0) * 100.0, g_visK, g_calIter);
     wx::FetchResult copy = g_lastRes;
-    copy.immediate = true;
+    copy.immediate = false;   // see above: no freeze
     applyResult(copy, false);
 }
 
@@ -804,7 +850,7 @@ float flightLoop(float, float, int, void*) {
                 double d = wx::distNm(la, lo, st.lat, st.lon);
                 if (d < nd) { nd = d; nb = &st; }
             }
-            if (nb && nd <= 15.0 && nb->icao != g_checkedIcao && !g_checkedIcao.empty()) {
+            if (nb && nd <= 4.0 && nb->icao != g_checkedIcao && !g_checkedIcao.empty()) {
                 logf("visibility check: now at %s (was %s), checking its visibility again", nb->icao.c_str(), g_checkedIcao.c_str());
                 g_checkedIcao = nb->icao;
                 g_visK = (float)g_cfg.visScale;
