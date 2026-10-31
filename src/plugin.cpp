@@ -65,6 +65,8 @@ wx::FetchResult g_lastRes;      // last applied data, kept so a visibility corre
 bool g_haveLast = false;
 float g_visK = 1.0f;            // factor between the METAR visibility and what we send (vis_scale; the optional self-check adjusts it)
 bool g_checkPending = false;
+std::string g_checkedIcao;       // station the visibility check last looked at; a different one nearby (moved, reloaded) restarts it
+Clock::time_point g_moveScanAt{};
 Clock::time_point g_lastRadarRequest{};
 XPLMDataRef g_drElev = nullptr;
 bool g_watchOn = false;
@@ -357,6 +359,15 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                         if (isOvc(x, i)) {
                             e.info.cloud_layers[i].cloud_type = 3.0f;
                             e.info.cloud_layers[i].coverage = (float)std::min((double)e.info.cloud_layers[i].coverage, g_cfg.edgeCoverage);
+                            // A copy of the parent's exact base and top puts two flat surfaces on one plane, which X-Plane draws as a
+                            // seam or speckle. Shrink each edge cloud a little, by a different amount per record, so no two coincide
+                            // (only inward, so the gap to the next layer is never reduced).
+                            const unsigned h = (unsigned)(k * 2654435761u + (unsigned)i * 40503u + (unsigned)std::fabs(s.lat * 1000.0));
+                            const float room = std::max(0.0f, e.info.cloud_layers[i].alt_top - e.info.cloud_layers[i].alt_base - 150.0f);
+                            const float dBase = std::min(room * 0.4f, 20.0f + (float)(h % 50));
+                            const float dTop = std::min(room * 0.4f, 25.0f + (float)((h / 50) % 70));
+                            e.info.cloud_layers[i].alt_base += dBase;
+                            e.info.cloud_layers[i].alt_top -= dTop;
                         }
                     e.info.age = 0.0f;
                     const std::string key = "edge:" + s.icao + ":" + std::to_string(k);
@@ -565,8 +576,14 @@ void weatherWatch() {
         if (info.cloud_layers[i].coverage > cov) { cov = info.cloud_layers[i].coverage; base = info.cloud_layers[i].alt_base; }
         if (x.clouds[i].coverage > xcov) { xcov = x.clouds[i].coverage; xbase = x.clouds[i].baseM; }
     }
-    logf("weather watch (%s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
-         b.icao.c_str(), wx::distNm(lat, lon, b.lat, b.lon), info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
+    const wx::Station* nearSt = nullptr;
+    double nearD = 1e9;
+    for (const auto& st : g_lastRes.stations) {
+        double d = wx::distNm(lat, lon, st.lat, st.lon);
+        if (d < nearD) { nearD = d; nearSt = &st; }
+    }
+    logf("weather watch (nearest %s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
+         nearSt ? nearSt->icao.c_str() : "?", nearSt ? nearD : 0.0, info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
          cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
@@ -589,6 +606,7 @@ void visibilityCheck() {
         if (d < bestD) { bestD = d; best = &s; }
     }
     if (!best || bestD > 15.0) return; // only meaningful close to a station
+    g_checkedIcao = best->icao;
     const bool anyFog = std::time(nullptr) < g_fogUntil;
     wx::XpWx x = wx::buildXp(*best, g_cfg, std::time(nullptr), &g_lastRes.aloft, anyFog);
     XPLMWeatherInfo_t info;
@@ -705,6 +723,29 @@ float flightLoop(float, float, int, void*) {
     if (g_checkPending && Clock::now() >= g_checkAt) {
         g_checkPending = false;
         visibilityCheck();
+    }
+    // Moved to another airport (flight reload, reposition, long taxi): the visibility check and its correction belong to the
+    // station it looked at, so start them again for the new one, against the station's own value rather than the old correction.
+    if (g_haveLast && g_cfg.visAutocal && !g_lastRes.stations.empty() && !g_checkPending && Clock::now() >= g_moveScanAt) {
+        g_moveScanAt = Clock::now() + std::chrono::seconds(5);
+        if (!(g_drAgl && XPLMGetDataf(g_drAgl) > 1000.0f)) {
+            const double la = XPLMGetDatad(g_drLat), lo = XPLMGetDatad(g_drLon);
+            const wx::Station* nb = nullptr;
+            double nd = 1e9;
+            for (const auto& st : g_lastRes.stations) {
+                double d = wx::distNm(la, lo, st.lat, st.lon);
+                if (d < nd) { nd = d; nb = &st; }
+            }
+            if (nb && nd <= 15.0 && nb->icao != g_checkedIcao && !g_checkedIcao.empty()) {
+                logf("visibility check: now at %s (was %s), checking its visibility again", nb->icao.c_str(), g_checkedIcao.c_str());
+                g_checkedIcao = nb->icao;
+                g_visK = (float)g_cfg.visScale;
+                g_calIter = 0; g_checkTries = 0; g_prevReadVis = 0;
+                g_checkPending = true;
+                g_checkAt = Clock::now() + std::chrono::seconds(std::max(20, g_cfg.visCheckS));
+                g_watchOn = true; g_watchN = 0; g_watchAt = g_checkAt;
+            }
+        }
     }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();

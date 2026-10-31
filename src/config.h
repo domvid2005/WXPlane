@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 8;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 9;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -34,9 +34,9 @@ struct Config {
     int aloftStations = 4;        // FD stations blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
     bool edgeClouds = true;       // ring of type-3 clouds around the edge of every overcast so its edge is billowy, not a smooth wall
-    double edgeCoverage = 0.55;   // coverage of the overcast layer in those edge records
-    double edgeRadiusFactor = 0.4; // edge record radius = this x the station record radius
-    int edgePoints = 10;          // edge records per overcast station
+    double edgeCoverage = 0.8;    // coverage of the overcast layer in those edge records
+    double edgeRadiusFactor = 0.6; // edge record radius = this x the station record radius
+    int edgePoints = 8;           // edge records per overcast station
     int edgeMax = 120;            // most edge records in one update
     int handoffAltFt = 0;         // above this altitude (ft MSL) X-Plane's own weather takes over from ours; 0 = our weather all the way up
     int handoffBandFt = 3000;     // our clouds fade out over this many feet below the hand-off altitude

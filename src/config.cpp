@@ -52,7 +52,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "vis_scale") c.visScale = d < 0.2 ? 0.2 : (d > 1.5 ? 1.5 : d);
         else if (k == "vis_autocal") c.visAutocal = toBool(v);
         else if (k == "edge_clouds") c.edgeClouds = toBool(v);
-        else if (k == "edge_coverage") c.edgeCoverage = d < 0.1 ? 0.1 : (d > 0.9 ? 0.9 : d);
+        else if (k == "edge_coverage") c.edgeCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
         else if (k == "edge_radius_factor") c.edgeRadiusFactor = d < 0.1 ? 0.1 : (d > 1.0 ? 1.0 : d);
         else if (k == "edge_points") c.edgePoints = (int)(d < 3 ? 3 : (d > 24 ? 24 : d));
         else if (k == "edge_max") c.edgeMax = (int)(d < 0 ? 0 : (d > 400 ? 400 : d));
@@ -110,6 +110,7 @@ bool loadConfig(const std::string& path, Config& c) {
         // The plugin writes every setting to the file on start-up, so values from earlier test builds stick even after the default
         // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
         c.startupCalmS = d.startupCalmS;
+        c.edgeCoverage = d.edgeCoverage; c.edgeRadiusFactor = d.edgeRadiusFactor; c.edgePoints = d.edgePoints;   // sparse edge clouds sparkled
         c.regenWaitS = d.regenWaitS;
         c.lowCloudType = d.lowCloudType;
         c.stationRadiusFactor = d.stationRadiusFactor;
