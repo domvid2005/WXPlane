@@ -63,6 +63,13 @@ float profileTemp(const std::vector<std::pair<float, float>>& p, float altM);
 XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft = nullptr,
              bool fogSlot = false);
 
+// Sanity checks on a built weather record, fixing what X-Plane would otherwise render as artefacts: coverage outside 0..1, a top at or
+// below its base, a layer thinner than 30 m, absurd thickness (over 16 km, more than any real cloud), non-empty layers out of vertical
+// order or overlapping (unless allowOverlap: radar storm records deliberately run through the station's own layers), and a record whose
+// maximum altitude lies below its highest cloud top. Deep convection and layered frontal decks are untouched. Returns the number of
+// adjustments; the first one is described in *note (if given).
+int validateXp(XpWx& x, bool allowOverlap, std::string* note = nullptr);
+
 // True if this station's report calls for a fog layer under the given config.
 bool stationHasFog(const Station& st, const Config& cfg);
 

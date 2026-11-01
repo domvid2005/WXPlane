@@ -156,7 +156,7 @@ int main() {
         { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\ntransition_s = 90\napply_per_tick = 4\nsearch_nm = 90\n", f); std::fclose(f); }
         Config old; loadConfig(fn, old);
         CHECK(old.updateMinutes == 30 && old.startupDelayS == 0 && !old.startupStaged && old.visAutocal && old.transitionS == 0 && old.applyPerTick == 500 && old.searchNm == 90);
-        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 17\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 18\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
         Config cur; loadConfig(fn, cur);
         CHECK(cur.updateMinutes == 10 && cur.startupStaged && cur.lowCloudType == 2.0 && cur.stationRadiusFactor == 0.65);   // current files keep their values
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
@@ -549,6 +549,41 @@ int main() {
 
     CHECK(windTempUrl("all", "low", 6) == "https://aviationweather.gov/api/data/windtemp?region=all&level=low&fcst=06");
     { std::string rg; char pf; aloftRegionFor(61.2, -149.9, rg, pf); CHECK(rg == "alaska" && pf == 'P'); aloftRegionFor(21.3, -157.9, rg, pf); CHECK(rg == "hawaii"); aloftRegionFor(40, -100, rg, pf); CHECK(rg == "all" && pf == 'K'); }
+
+    // ---- validateXp: sanity fixes that must leave legitimate weather alone
+    {
+        auto mk = [](float cov, float b, float tp) { XpCloud c; c.type = 1; c.coverage = cov; c.baseM = b; c.topM = tp; return c; };
+        XpWx ok; ok.clouds[1] = mk(0.4f, 1300, 1500); ok.clouds[2] = mk(0.94f, 3000, 4200); ok.maxAltFt = 20000;
+        XpWx ref = ok;
+        CHECK(validateXp(ok, false) == 0 && ok.clouds[2].topM == ref.clouds[2].topM && ok.clouds[1].baseM == ref.clouds[1].baseM);   // widespread overcast over broken: untouched
+        XpWx bad; bad.clouds[1] = mk(1.4f, 2000, 1900); bad.maxAltFt = 1000;
+        std::string note;
+        CHECK(validateXp(bad, false, &note) >= 3 && bad.clouds[1].coverage <= 1.0f && bad.clouds[1].topM > bad.clouds[1].baseM && bad.maxAltFt >= bad.clouds[1].topM / 0.3048f - 1 && !note.empty());
+        XpWx ov; ov.clouds[1] = mk(0.7f, 1000, 2000); ov.clouds[2] = mk(0.7f, 1500, 2500);   // overlapping layers
+        CHECK(validateXp(ov, false) >= 1 && ov.clouds[2].baseM >= ov.clouds[1].topM + 40 - 0.5f && ov.clouds[2].topM - ov.clouds[2].baseM >= 999);
+        XpWx ov2; ov2.clouds[1] = mk(0.7f, 1000, 2000); ov2.clouds[2] = mk(0.7f, 1500, 2500); ov2.maxAltFt = 20000; CHECK(validateXp(ov2, true) == 0 && ov2.clouds[2].baseM == 1500);  // storms may overlap on purpose
+        XpWx deep; deep.clouds[2] = mk(0.9f, 600, 13000); deep.clouds[2].type = 3; deep.maxAltFt = 50000;   // deep convection is legitimate
+        CHECK(validateXp(deep, true) == 0 && deep.clouds[2].topM == 13000);
+        XpWx fogOver; fogOver.clouds[0] = mk(0.9f, 0, 80); fogOver.clouds[1] = mk(0.94f, 150, 900); fogOver.maxAltFt = 5000;   // fog beneath overcast
+        CHECK(validateXp(fogOver, false) == 0);
+        XpWx thin; thin.clouds[1] = mk(0.5f, 1000, 1005); thin.maxAltFt = 9000;
+        CHECK(validateXp(thin, false) == 1 && thin.clouds[1].topM - thin.clouds[1].baseM >= 30);
+    }
+    // ---- applyStorm keeps the station's own layers when a slot is free, and embeds the storm in an overcast
+    {
+        Station os; os.elevM = 300;
+        parseReport("KOOO 301553Z 18010KT 6SM OVC020", os.report);
+        Config oc;
+        XpWx ob = buildXp(os, oc, now, nullptr, true);
+        const XpCloud deckBefore = ob.clouds[2].coverage > 0 ? ob.clouds[2] : ob.clouds[1];
+        RadarCell cc; cc.lat = 38; cc.lon = -98; cc.dbz = 45; cc.frac = 1; cc.topKnown = true; cc.topM = 11000; cc.rateMmH = rateFromDbz(45);
+        XpWx es = ob; applyStorm(es, cc, oc, 300, 38);
+        int deckSlot = -1, stormSlot = -1;
+        for (int i = 0; i < 3; ++i) { if (es.clouds[i].type == 3.0f && es.clouds[i].topM > 9000) stormSlot = i; else if (es.clouds[i].coverage > 0.9f) deckSlot = i; }
+        CHECK(stormSlot >= 1 && deckSlot >= 1 && deckSlot != stormSlot && es.clouds[deckSlot].baseM == deckBefore.baseM && es.clouds[deckSlot].topM == deckBefore.topM);   // overcast survives next to the storm
+        CHECK(es.clouds[stormSlot].topM == 11000 && es.clouds[stormSlot].baseM <= deckBefore.baseM + 1);                                    // genuine deep convection is not capped
+        CHECK(validateXp(es, true) == 0);
+    }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

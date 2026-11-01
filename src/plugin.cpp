@@ -290,6 +290,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     std::map<std::string, wx::XpWx> baseWx;   // weather built per station, reused for storm cells
     std::map<std::string, float> stationRadius;
     int bumpCount = 0;
+    int valFixes = 0;           // adjustments made by validateXp across all records this update
+    std::string valNote;        // first of them, for the log
+    int stormClash = 0;         // storm records whose own layers had to replace a station layer
     // Rough tops: scatter small billowy records over a thick overcast so its top is uneven instead of one flat sheet. Each keeps only
     // the upper 40% of the deck and stands up to bump_height_m above its top, at a different height each time, capped to stay clear
     // of the layer above. Used for the station decks and for the overcast that continues over the gap-fill tiles between stations.
@@ -306,14 +309,17 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const unsigned h1 = hash(seed + (unsigned)k * 7919u), h2 = hash(h1 + 17u), h3 = hash(h2 + 31u);
             const double ang = 6.283185307179586 * (h1 % 3600) / 3600.0;
             const double frac = fracMin + (fracMax - fracMin) * ((h2 % 1000) / 1000.0);
-            const double rNm = radNm * frac;
+            // Footprint: the bump record's circle must lie inside the parent record (centre + radius <= 0.9 R), so a bump never
+            // sticks out past the deck it belongs to as a detached tower over a neighbouring station's weather.
+            const double bumpR = std::min(radNm * 0.35, std::max(0.5, radNm * g_cfg.bumpRadiusFactor * (0.6 + 0.8 * ((h3 % 1000) / 1000.0))));
+            const double rNm = std::max(0.0, std::min(radNm * frac, radNm * 0.9 - bumpR));
             Rec e;
             e.airport = false;
             e.lat = cLat + rNm / 60.0 * std::cos(ang);
             e.lon = cLon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(cLat * 3.14159265358979 / 180.0));
             e.elev = elev;
             e.info = info;
-            e.info.radius_nm = (float)std::max(0.5, radNm * g_cfg.bumpRadiusFactor * (0.6 + 0.8 * ((h3 % 1000) / 1000.0)));
+            e.info.radius_nm = (float)bumpR;
             for (int i = 0; i < 3; ++i) {
                 auto& L = e.info.cloud_layers[i];
                 if (!ovc(i)) continue;
@@ -321,7 +327,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 for (int j = 0; j < 3; ++j)
                     if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
                 const float thick = L.alt_top - L.alt_base;
-                const float rise = std::min((float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), std::max(0.0f, ceilM - L.alt_top - 120.0f));
+                // The rise is tied to the deck: at most 45% of its thickness, so a thin deck gets a gentle swell and a thick one a real billow.
+                const float rise = std::min({(float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), 0.45f * thick, std::max(0.0f, ceilM - L.alt_top - 120.0f)});
+                if (thick < 120.0f || rise < 20.0f) continue;   // too thin to carry a bump: leave this layer as the parent has it
                 L.cloud_type = 3.0f;
                 L.coverage = (float)std::min(0.95, g_cfg.bumpCoverage * (0.8 + 0.4 * ((h1 / 3600) % 1000) / 1000.0));
                 L.alt_base = L.alt_base + thick * 0.6f;
@@ -339,6 +347,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     };
     for (const auto& s : res.stations) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
+        valFixes += wx::validateXp(x, false, &valNote);
         baseWx[s.icao] = x;
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
@@ -400,6 +409,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     wx::Station syn = wx::blendAt(res.stations, latc, lonc);
                     wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
                     if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
+                    valFixes += wx::validateXp(x, false, &valNote);
                     if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
                     XPLMWeatherInfo_t info;
                     fillInfo(info, x);
@@ -442,7 +452,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             // value. Giving them 40 km instead made X-Plane blend them into the station area and the METAR visibility never showed.
             if (nd > 60.0 || x.visM < 5000.0f) x.visM = (float)g_cfg.clearVisM;
             if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
+            const int layersBefore = x.cloudCount;
             wx::applyStorm(x, c, g_cfg, nearest->elevM, c.lat);
+            if (layersBefore >= 3) ++stormClash;
+            valFixes += wx::validateXp(x, true, &valNote);   // storms may overlap the station's layers on purpose; only sanity-checked
             XPLMWeatherInfo_t info;
             fillInfo(info, x);
             info.radius_nm = (float)std::max(6.0, g_cfg.radarCellNm * 0.9);
@@ -534,6 +547,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_lastGoodStatus = l1;
     setStatus(l1, l2);
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
+    logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer",
+         (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash);
     logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
          res.immediate ? " [immediate]" : "");
@@ -545,6 +560,28 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
 
 // Log-only: what X-Plane is using at the aircraft compared with what the stations around it call for. Shows whether the sim
 // has gone back to its own weather after our update (checked every minute for 10 minutes, then every 5 minutes).
+// Lists (up to 8) of OUR submitted records whose circle contains this point, nearest first: what we sent, as opposed to what
+// X-Plane reports there. When the read-back differs from the station's own values this shows which overlapping records (station,
+// gap fill, radar storm, rough-top bump) X-Plane is blending at that spot.
+void logCoveringRecords(double lat, double lon, const char* label) {
+    struct Hit { double d; const std::string* key; const Rec* r; };
+    std::vector<Hit> hits;
+    for (const auto& kv : g_recs) {
+        const double d = wx::distNm(lat, lon, kv.second.lat, kv.second.lon);
+        if (d <= kv.second.info.radius_nm) hits.push_back({d, &kv.first, &kv.second});
+    }
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.d < b.d; });
+    logf("  records we submitted that cover %s: %zu", label, hits.size());
+    for (size_t i = 0; i < hits.size() && i < 8; ++i) {
+        const auto& L = hits[i].r->info.cloud_layers;
+        char buf[256]; int n = 0;
+        buf[0] = 0;
+        for (int j = 0; j < XPLM_NUM_CLOUD_LAYERS && n < 200; ++j)
+            if (L[j].coverage > 0) n += std::snprintf(buf + n, sizeof buf - n, " [%d: t%.0f %.0f%% %.0f-%.0f m]", j, L[j].cloud_type, L[j].coverage * 100, L[j].alt_base, L[j].alt_top);
+        logf("    %s  %.1f nm of r=%.1f nm:%s", hits[i].key->c_str(), hits[i].d, hits[i].r->info.radius_nm, buf);
+    }
+}
+
 void weatherWatch() {
     if (!g_haveLast || g_lastRes.stations.empty() || !g_drElev) return;
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), el = XPLMGetDatad(g_drElev);
@@ -572,6 +609,7 @@ void weatherWatch() {
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].type, x.clouds[i].coverage, x.clouds[i].baseM, x.clouds[i].topM, el);
+    logCoveringRecords(lat, lon, "the aircraft");
 }
 
 // Asks X-Plane what visibility it is actually using next to the airport we are at, and compares it with the
@@ -609,6 +647,7 @@ void visibilityCheck() {
         logf("    layer %d: type %.1f coverage %.2f base %.0f m top %.0f m (we set: %s)", i, info.cloud_layers[i].cloud_type,
              info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].coverage > 0 ? "coverage>0" : "none");
+    logCoveringRecords(best->lat, best->lon, best->icao.c_str());
     if (!g_cfg.visAutocal || x.visM >= 20000.0f || info.visibility < 100.0f || g_calIter >= 2) return;
     // X-Plane fades new weather in over minutes (longer while it is busy loading), so right after an update the read-back
     // still shows the OLD weather. Calibrating against it drives our visibility far too low. Wait until the value has

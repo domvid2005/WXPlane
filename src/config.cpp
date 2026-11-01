@@ -112,7 +112,7 @@ bool loadConfig(const std::string& path, Config& c) {
         // The plugin writes every setting to the file on start-up, so values from earlier test builds stick even after the default
         // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
         c.startupCalmS = d.startupCalmS;
-        c.bumpCount = d.bumpCount; c.bumpMax = d.bumpMax; c.bumpHeightM = d.bumpHeightM; c.bumpRadiusFactor = d.bumpRadiusFactor;
+        c.bumpCount = d.bumpCount; c.bumpFillCount = d.bumpFillCount; c.bumpMax = d.bumpMax; c.bumpHeightM = d.bumpHeightM; c.bumpRadiusFactor = d.bumpRadiusFactor;
         c.regenWaitS = d.regenWaitS;
         c.lowCloudType = d.lowCloudType;
         c.stationRadiusFactor = d.stationRadiusFactor;

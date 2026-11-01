@@ -261,7 +261,13 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     for (int i = 0; i < 3; ++i)    // do not float above the station's own lowest layer
         if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
     float topM = stormTopM(c, cfg, baseM);
-    XpCloud& cl = x.clouds[2];
+    // Slot choice: the station's own layers must survive. Use the top slot if it is free, else the middle one; only when all
+    // are taken does the storm replace the highest of them (slot 0 may hold ground fog and is never used).
+    int slot = 2;
+    if (x.clouds[2].coverage > 0) {
+        if (x.clouds[1].coverage <= 0) slot = 1;   // else every slot is taken: the highest layer (slot 2, layers are packed bottom-up) is the one replaced
+    }
+    XpCloud& cl = x.clouds[slot];
     cl.type = 3.0f;   // always full cumulonimbus: weaker echoes used to ramp down towards 1.0 (smooth stratus sheets with curtain edges)
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);

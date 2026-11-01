@@ -228,6 +228,43 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     return x;
 }
 
+int validateXp(XpWx& x, bool allowOverlap, std::string* note) {
+    int fixes = 0;
+    auto say = [&](const char* what, int slot) {
+        ++fixes;
+        if (note && note->empty()) { char b[96]; std::snprintf(b, sizeof b, "%s (slot %d)", what, slot); *note = b; }
+    };
+    for (int i = 0; i < 3; ++i) {
+        XpCloud& c = x.clouds[i];
+        if (!(c.coverage > 0.0f)) { if (c.coverage != 0.0f) { c = XpCloud(); say("invalid coverage", i); } continue; }
+        if (c.coverage > 1.0f) { c.coverage = 1.0f; say("coverage above 1", i); }
+        if (!(c.topM > c.baseM)) { c.topM = c.baseM + 60.0f; say("top at or below base", i); }
+        else if (c.topM - c.baseM < 30.0f) { c.topM = c.baseM + 30.0f; say("layer thinner than 30 m", i); }
+        else if (c.topM - c.baseM > 16000.0f) { c.topM = c.baseM + 16000.0f; say("layer thicker than 16 km", i); }
+    }
+    if (!allowOverlap) {
+        // vertical order of the non-empty layers (slot 0 may be an empty fog slot)
+        int prev = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (!(x.clouds[i].coverage > 0.0f)) continue;
+            if (prev >= 0 && x.clouds[i].baseM < x.clouds[prev].topM + 40.0f) {
+                const float thick = x.clouds[i].topM - x.clouds[i].baseM;
+                x.clouds[i].baseM = x.clouds[prev].topM + 40.0f;
+                x.clouds[i].topM = x.clouds[i].baseM + thick;
+                say("layers overlapping or out of order", i);
+            }
+            prev = i;
+        }
+    }
+    float highestFt = 0;
+    for (const auto& c : x.clouds)
+        if (c.coverage > 0 && c.topM / 0.3048f > highestFt) highestFt = c.topM / 0.3048f;
+    if (x.maxAltFt < highestFt) { x.maxAltFt = highestFt; say("record ceiling below its highest cloud", 0); }
+    x.cloudCount = 0;
+    for (const auto& c : x.clouds) if (c.coverage > 0) ++x.cloudCount;
+    return fixes;
+}
+
 std::string describeXp(const XpWx& x, double elevM) {
     char b[256];
     std::string out;
