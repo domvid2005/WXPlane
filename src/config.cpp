@@ -58,7 +58,6 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "bump_fill_count") c.bumpFillCount = (int)(d < 0 ? 0 : (d > 10 ? 10 : d));
         else if (k == "bump_max") c.bumpMax = (int)(d < 0 ? 0 : (d > 800 ? 800 : d));
         else if (k == "bump_height_m") c.bumpHeightM = d < 50 ? 50 : (d > 1500 ? 1500 : d);
-        else if (k == "bump_coverage") c.bumpCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
         else if (k == "bump_radius_factor") c.bumpRadiusFactor = d < 0.05 ? 0.05 : (d > 0.8 ? 0.8 : d);
         else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
         else if (k == "radar") c.radar = toBool(v);
@@ -112,7 +111,7 @@ bool loadConfig(const std::string& path, Config& c) {
         // The plugin writes every setting to the file on start-up, so values from earlier test builds stick even after the default
         // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
         c.startupCalmS = d.startupCalmS;
-        c.bumpCount = d.bumpCount; c.bumpFillCount = d.bumpFillCount; c.bumpMax = d.bumpMax; c.bumpHeightM = d.bumpHeightM; c.bumpRadiusFactor = d.bumpRadiusFactor;
+        c.topBumps = d.topBumps; c.bumpCount = d.bumpCount; c.bumpFillCount = d.bumpFillCount; c.bumpMax = d.bumpMax; c.bumpHeightM = d.bumpHeightM; c.bumpRadiusFactor = d.bumpRadiusFactor;
         c.regenWaitS = d.regenWaitS;
         c.lowCloudType = d.lowCloudType;
         c.stationRadiusFactor = d.stationRadiusFactor;
@@ -158,7 +157,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "bump_max = " << c.bumpMax << "\n"
       << "bump_fill_count = " << c.bumpFillCount << "\n"
       << "bump_height_m = " << c.bumpHeightM << "\n"
-      << "bump_coverage = " << c.bumpCoverage << "\n"
       << "bump_radius_factor = " << c.bumpRadiusFactor << "\n"
       << "vis_check_s = " << c.visCheckS << "\n"
       << "radar = " << (c.radar ? 1 : 0) << "\n"

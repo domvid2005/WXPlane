@@ -271,7 +271,9 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     }
     float topM = stormTopM(c, cfg, baseM);
     XpCloud& cl = x.clouds[slot];
-    cl.type = 3.0f;   // always full cumulonimbus: weaker echoes used to ramp down towards 1.0 (smooth stratus sheets with curtain edges)
+    // Cumulonimbus from 30 dBZ up (and for any measured echo top above 6 km); a weak echo is cumulus (2.0), not a deep anvil. Ramping
+    // further down to 1.0 made smooth stratus sheets with curtain edges, so the floor stays at cumulus.
+    cl.type = (dbz >= 30.0f || (c.topKnown && c.topM > 6000.0f)) ? 3.0f : 2.0f;
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
     cl.baseM = baseM;

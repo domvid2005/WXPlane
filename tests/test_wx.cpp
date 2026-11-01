@@ -156,12 +156,19 @@ int main() {
         { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\ntransition_s = 90\napply_per_tick = 4\nsearch_nm = 90\n", f); std::fclose(f); }
         Config old; loadConfig(fn, old);
         CHECK(old.updateMinutes == 30 && old.startupDelayS == 0 && !old.startupStaged && old.visAutocal && old.transitionS == 0 && old.applyPerTick == 500 && old.searchNm == 90);
-        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 18\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 19\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
         Config cur; loadConfig(fn, cur);
         CHECK(cur.updateMinutes == 10 && cur.startupStaged && cur.lowCloudType == 2.0 && cur.stationRadiusFactor == 0.65);   // current files keep their values
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
         Config v6; loadConfig(fn, v6);
         CHECK(v6.lowCloudType == 3.0 && v6.stationRadiusFactor == 0.49 && v6.fillRadiusFactor == 0.8 && v6.radarMinutes == 5 && v6.searchNm == 80);   // stale cloud settings from earlier builds reset once
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 18\ntop_bumps = 1\nbump_count = 30\nupdate_minutes = 10\nsearch_nm = 77\n", f); std::fclose(f); }
+        Config v18; loadConfig(fn, v18);
+        CHECK(!v18.topBumps && v18.bumpCount == 10 && v18.updateMinutes == 30 && v18.searchNm == 77);   // rough tops switched off once; other settings kept
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 19\ntop_bumps = 1\nbump_count = 30\n", f); std::fclose(f); }
+        Config v19; loadConfig(fn, v19);
+        CHECK(v19.topBumps && v19.bumpCount == 30);   // a later opt-in is respected
+        { Config d; CHECK(!d.topBumps); }
         std::remove(fn);
     }
 
@@ -417,7 +424,7 @@ int main() {
         }
         XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
         applyStorm(w2, cell, sc, 400, 38);
-        CHECK(w2.clouds[2].type == 3.0f && w2.clouds[2].coverage < 0.8f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
+        CHECK(w2.clouds[2].type == 2.0f && w2.clouds[2].coverage < 0.8f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
         XpWx w3 = base; cell.topM = 99000; cell.dbz = 45; cell.topKnown = true; applyStorm(w3, cell, sc, 400, 38);
         CHECK(w3.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1);   // absurd tops are clamped
         XpWx w4 = base; sc.radarTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);
@@ -583,6 +590,14 @@ int main() {
         CHECK(stormSlot >= 1 && deckSlot >= 1 && deckSlot != stormSlot && es.clouds[deckSlot].baseM == deckBefore.baseM && es.clouds[deckSlot].topM == deckBefore.topM);   // overcast survives next to the storm
         CHECK(es.clouds[stormSlot].topM == 11000 && es.clouds[stormSlot].baseM <= deckBefore.baseM + 1);                                    // genuine deep convection is not capped
         CHECK(validateXp(es, true) == 0);
+        {   // weak echoes are cumulus, strong ones cumulonimbus; a weak cell next to a strong one does not get a deep tower
+            RadarCell wk = cc; wk.dbz = 24; wk.topKnown = false; wk.topM = 0; wk.key = "R9:9";
+            XpWx ws = ob; applyStorm(ws, wk, oc, 300, 38);
+            int sl = ws.clouds[2].coverage > 0 && ws.clouds[2].topM > ws.clouds[1].topM ? 2 : 1;
+            CHECK(ws.clouds[sl].type == 2.0f && ws.clouds[sl].topM < 9000);
+            wk.dbz = 36; XpWx ms = ob; applyStorm(ms, wk, oc, 300, 38);
+            CHECK(ms.clouds[2].type == 3.0f || ms.clouds[1].type == 3.0f);
+        }
         // three layers: the storm replaces the highest and grows from ITS base, not from the lowest layer (slot-wise blending in X-Plane)
         Station t3; t3.elevM = 380;
         parseReport("KTTT 301553Z 18010KT 5SM SCT018 BKN040 OVC080", t3.report);

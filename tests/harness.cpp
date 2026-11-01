@@ -229,7 +229,7 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 // HARNESS_RAMP=1: the first load is released evenly over transition_s instead of in one burst.
 static int runRamp() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 18\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
     XPluginStart(n, s, d);
@@ -256,7 +256,7 @@ static int runRamp() {
 // HARNESS_STAGED=1: the first update has no radar; storms follow startup_radar_delay_s later.
 static int runStaged() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 18\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -284,7 +284,7 @@ static int runStaged() {
 // HARNESS_ONESHOT=1: with default settings, the first load is ONE weather update containing every record.
 static int runOneShot() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 18\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -306,7 +306,7 @@ static int runOneShot() {
 // HARNESS_BUMPS=1: rough-top records scattered over the overcast: billowy, base inside the deck, tops at different heights.
 static int runBumps() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 18\nmax_age_hours = 40\nradar = 0\nfill_gaps = 0\nuse_aloft = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\nregen_weather_on_start = 0\ntop_bumps = 1\nbump_count = 8\nrough_min_coverage = 0.85\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\nmax_age_hours = 40\nradar = 0\nfill_gaps = 0\nuse_aloft = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\nregen_weather_on_start = 0\ntop_bumps = 1\nbump_count = 8\nrough_min_coverage = 0.85\n", f); std::fclose(f); }
     g_agl = 0.0f; g_lat = 38.79; g_lon = -97.65;
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
@@ -324,18 +324,18 @@ static int runBumps() {
         if (!sln || li < 0 || c.where != "loc" || !(c.info.radius_nm < sln->info.radius_nm) || std::fabs(c.lat - 38.79) > 0.6 || std::fabs(c.lon + 97.65) > 0.8) continue;
         ++bumps;
         const auto& L = c.info.cloud_layers[li]; const auto& P = sln->info.cloud_layers[li];
-        if (!(L.cloud_type > 2.9f && L.coverage <= 0.96f && L.alt_base > P.alt_base && L.alt_base < P.alt_top && L.alt_top >= P.alt_top - 1.0f)) ++wrong;
+        if (!(L.cloud_type == P.cloud_type && L.coverage == P.coverage && L.alt_base == P.alt_base && L.alt_top >= P.alt_top - 1.0f)) ++wrong;   // only the top may differ
         if (L.alt_top > P.alt_top + 20.0f) ++higher;
         {   // footprint: the bump circle lies inside its parent (centre + radius <= 0.9 R); rise tied to the deck thickness (<= 45%)
             const double dn = std::sqrt(std::pow((c.lat - 38.79) * 60.0, 2) + std::pow((c.lon + 97.65) * 60.0 * std::cos(38.79 * 3.14159265358979 / 180.0), 2));
             if (dn + c.info.radius_nm > sln->info.radius_nm * 0.9 + 0.3 || c.info.radius_nm > sln->info.radius_nm * 0.35 + 0.01) ++outside;
-            if (L.alt_top - P.alt_top > 0.45f * (P.alt_top - P.alt_base) + 1.0f) ++tall;
+            if (L.alt_top - P.alt_top > 0.2f * (P.alt_top - P.alt_base) + 1.0f) ++tall;
         }
         minTop = std::min(minTop, L.alt_top); maxTop = std::max(maxTop, L.alt_top);
     }
     std::printf("  rough-top records: %d (wrong: %d, standing above the deck: %d, tops %.0f-%.0f m)\n", bumps, wrong, higher, minTop, maxTop);
     CHECK(bumps >= 4 && wrong == 0 && higher >= 3 && maxTop - minTop > 60.0f);
-    std::printf("  bumps outside their parent: %d, taller than 45%% of the deck: %d\n", outside, tall);
+    std::printf("  bumps outside their parent: %d, taller than 20%% of the deck: %d\n", outside, tall);
     CHECK(outside == 0 && tall == 0);
     CHECK(g_logAll.find("submitted weather:") != std::string::npos);
     CHECK(g_logAll.find("overcast tops:") != std::string::npos);
@@ -350,7 +350,7 @@ int main() {
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 18\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 19\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());

@@ -293,9 +293,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     int valFixes = 0;           // adjustments made by validateXp across all records this update
     std::string valNote;        // first of them, for the log
     int stormClash = 0;         // storm records whose own layers had to replace a station layer
-    // Rough tops: scatter small billowy records over a thick overcast so its top is uneven instead of one flat sheet. Each keeps only
-    // the upper 40% of the deck and stands up to bump_height_m above its top, at a different height each time, capped to stay clear
-    // of the layer above. Used for the station decks and for the overcast that continues over the gap-fill tiles between stations.
+    // Rough tops (experimental, off by default): small records over a thick overcast whose layers equal the parent's except for a slightly
+    // higher top, so the top is a little uneven. Used for the station decks and for the overcast that continues over the gap-fill tiles between stations.
     auto addBumps = [&](const wx::XpWx& x, const XPLMWeatherInfo_t& info, double cLat, double cLon, double radNm, double elev,
                         const std::string& id, int count, double fracMin, double fracMax) {
         if (!g_cfg.topBumps || bumpCount >= g_cfg.bumpMax) return;
@@ -320,6 +319,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             e.elev = elev;
             e.info = info;
             e.info.radius_nm = (float)bumpR;
+            bool changed = false;
             for (int i = 0; i < 3; ++i) {
                 auto& L = e.info.cloud_layers[i];
                 if (!ovc(i)) continue;
@@ -327,14 +327,16 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 for (int j = 0; j < 3; ++j)
                     if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
                 const float thick = L.alt_top - L.alt_base;
-                // The rise is tied to the deck: at most 45% of its thickness, so a thin deck gets a gentle swell and a thick one a real billow.
-                const float rise = std::min({(float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), 0.45f * thick, std::max(0.0f, ceilM - L.alt_top - 120.0f)});
+                // Experimental, conservative: a bump record is a weather SAMPLE that X-Plane blends with its neighbours slot by slot, so it keeps
+                // the parent layer's slot, type, coverage and base exactly and differs only in the top: at most 20% of the deck thickness
+                // higher, never into the layer above. (Earlier builds also changed type, coverage and base, which blended into walls.)
+                const float rise = std::min({(float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), 0.2f * thick, std::max(0.0f, ceilM - L.alt_top - 120.0f)});
                 if (thick < 120.0f || rise < 20.0f) continue;   // too thin to carry a bump: leave this layer as the parent has it
-                L.cloud_type = 3.0f;
-                L.coverage = (float)std::min(0.95, g_cfg.bumpCoverage * (0.8 + 0.4 * ((h1 / 3600) % 1000) / 1000.0));
-                L.alt_base = L.alt_base + thick * 0.6f;
                 L.alt_top = L.alt_top + rise;
+                e.info.max_altitude_msl_ft = std::max(e.info.max_altitude_msl_ft, L.alt_top / 0.3048f);   // the record's ceiling must cover its own top
+                changed = true;
             }
+            if (!changed) continue;
             e.info.age = 0.0f;
             const std::string key = "bump:" + id + ":" + std::to_string(k);
             seen[key] = true;

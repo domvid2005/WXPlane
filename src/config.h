@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 18;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 19;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -34,12 +34,11 @@ struct Config {
     int aloftStations = 4;        // FD stations blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
     double roughMinCoverage = 0.65; // layers at least this solid get rough-top records (0.65 = broken and overcast; 0.85 = overcast only)
-    bool topBumps = true;         // scatter billowy records over thick overcasts so the top is uneven, not one flat sheet
+    bool topBumps = false;        // EXPERIMENTAL: scatter records over thick overcasts that differ from the parent only by a slightly higher top
     int bumpCount = 10;           // rough-top records per overcast station
     int bumpMax = 200;            // most of them in one update
     int bumpFillCount = 1;        // rough-top records per gap-fill tile that carries an overcast
     double bumpHeightM = 550;     // how far a bump can stand above the deck top (m)
-    double bumpCoverage = 0.7;    // coverage of the overcast layer in those records
     double bumpRadiusFactor = 0.26; // record radius = this x the station record radius
     double visScale = 1.0;        // factor on reported visibility below 10 SM before it goes to X-Plane (1 = exactly the METAR/ATIS value)
     bool visAutocal = true;       // compare what X-Plane reports with the METAR/ATIS and correct our input
