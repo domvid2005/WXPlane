@@ -66,6 +66,12 @@ bool g_haveLast = false;
 float g_visK = 1.0f;            // factor between the METAR visibility and what we send (vis_scale; the optional self-check adjusts it)
 bool g_checkPending = false;
 bool g_loggedNoNearStation = false;
+// Real-weather switch used by the hand-off: X-Plane's own "use real weather" flag. Turned on when the aircraft climbs into the
+// hand-off band and put back as it was once the aircraft is back below it.
+XPLMDataRef g_drRealWx = nullptr;
+bool g_realWxChecked = false, g_realWxUsable = false, g_hoEngaged = false;
+int g_realWxPrev = 0;
+Clock::time_point g_hoScanAt{};
 std::string g_checkedIcao;       // station the visibility check last looked at; a different one nearby (moved, reloaded) restarts it
 Clock::time_point g_moveScanAt{};
 Clock::time_point g_lastRadarRequest{};
@@ -565,7 +571,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                         const float height = core.alt_top - core.alt_base;
                         if (tower) L.alt_top = core.alt_top + (float)g_cfg.stormRoughHeightM * (0.3f + 0.7f * (float)((h3 / 1000) % 1000) / 1000.0f);
                         else L.alt_top = core.alt_base + height * (0.45f + 0.5f * (float)((h3 / 1000) % 1000) / 1000.0f);
-                        L.coverage = std::min(0.95f, core.coverage * (tower ? 1.0f : 0.9f));
+                        L.coverage = std::min(tower ? 0.8f : 0.65f, core.coverage * (tower ? 0.9f : 0.7f));   // dense records render as smooth dark slabs
                         q.info.age = 0.0f;
                         const std::string qkey = "stormrough:" + c.key + ":" + std::to_string(k);
                         seen[qkey] = true;
@@ -594,7 +600,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_pendingGone = gone;
     g_pendingImmediate = res.immediate || !g_firstApplyDone || g_startupPhase;
     g_pendingStartup = g_startupPhase;
-    g_pendingManual = res.immediate && !g_startupPhase;
+    g_pendingManual = res.immediate && !g_startupPhase && g_cfg.manualRefreshImmediate;   // immediate = the sim freezes for several seconds while X-Plane rebuilds
     {   // spread the records evenly over the configured transition time (nearest stations first)
         size_t n = todo.size() + gone.size();
         int T = g_startupPhase ? 0 : (g_firstApplyDone ? g_cfg.updateTransitionS : g_cfg.transitionS);
@@ -693,6 +699,14 @@ void weatherWatch() {
     logf("weather watch (nearest %s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
          nearSt ? nearSt->icao.c_str() : "?", nearSt ? nearD : 0.0, info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
          cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
+    if (g_cfg.handoffAltFt > 0) {
+        const double ho = g_cfg.handoffAltFt * 0.3048, bandM = g_cfg.handoffBandFt * 0.3048, ac = el;
+        const double ourShare = ac >= ho ? 0.0 : (ac <= ho - bandM ? 1.0 : (ho - ac) / bandM);
+        logf("  hand-off: X-Plane's own weather above %d ft (%.0f m), fade band %d ft; aircraft at %.0f m, so our weather is %.0f%% there",
+             g_cfg.handoffAltFt, ho, g_cfg.handoffBandFt, ac, ourShare * 100.0);
+    } else {
+        logf("  hand-off: off (our weather at all altitudes)");
+    }
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
@@ -837,6 +851,32 @@ float flightLoop(float, float, int, void*) {
     if (g_checkPending && Clock::now() >= g_checkAt) {
         g_checkPending = false;
         visibilityCheck();
+    }
+    // Altitude hand-off to X-Plane's own real weather: our weather is cut above the hand-off altitude (see applyHandoff), and
+    // here X-Plane itself is switched to real weather as the aircraft climbs into the fade band, so something real is there to
+    // take over. Back below the band (with 300 m of margin so it does not flap) the flag is put back as it was.
+    if (g_cfg.handoffAltFt > 0 && g_cfg.handoffRealWeather && g_drElev && Clock::now() >= g_hoScanAt) {
+        g_hoScanAt = Clock::now() + std::chrono::seconds(2);
+        if (!g_realWxChecked) {
+            g_realWxChecked = true;
+            g_drRealWx = XPLMFindDataRef("sim/weather/use_real_weather_bool");
+            g_realWxUsable = g_drRealWx && (XPLMGetDataRefTypes(g_drRealWx) & xplmType_Int) && XPLMCanWriteDataRef(g_drRealWx);
+            logf("hand-off: X-Plane's real-weather switch (sim/weather/use_real_weather_bool) is %s",
+                 !g_drRealWx ? "not available in this X-Plane version, so the hand-off only cuts our weather" : (g_realWxUsable ? "available" : "there but not writable, so the hand-off only cuts our weather"));
+        }
+        if (g_realWxUsable) {
+            const double ac = XPLMGetDatad(g_drElev), ho = g_cfg.handoffAltFt * 0.3048, bandM = g_cfg.handoffBandFt * 0.3048;
+            if (!g_hoEngaged && ac >= ho - bandM) {
+                g_realWxPrev = XPLMGetDatai(g_drRealWx);
+                g_hoEngaged = true;
+                if (g_realWxPrev == 0) { XPLMSetDatai(g_drRealWx, 1); logf("hand-off: aircraft at %.0f m, entering the hand-off band: X-Plane real weather switched ON", ac); }
+                else logf("hand-off: aircraft at %.0f m, entering the hand-off band: X-Plane real weather was already on", ac);
+            } else if (g_hoEngaged && ac < ho - bandM - 300.0) {
+                g_hoEngaged = false;
+                if (g_realWxPrev == 0) { XPLMSetDatai(g_drRealWx, 0); logf("hand-off: aircraft back at %.0f m, below the band: X-Plane real weather switched back OFF", ac); }
+                else logf("hand-off: aircraft back at %.0f m, below the band", ac);
+            }
+        }
     }
     // Moved to another airport (flight reload, reposition, long taxi): the visibility check and its correction belong to the
     // station it looked at, so start them again for the new one, against the station's own value rather than the old correction.

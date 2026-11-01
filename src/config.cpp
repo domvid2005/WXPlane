@@ -61,6 +61,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_rough_max") c.stormRoughMax = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "storm_rough_min_dbz") c.stormRoughMinDbz = d < 10 ? 10 : (d > 60 ? 60 : d);
         else if (k == "storm_rough_height_m") c.stormRoughHeightM = d < 200 ? 200 : (d > 5000 ? 5000 : d);
+        else if (k == "manual_refresh_immediate") c.manualRefreshImmediate = toBool(v);
+        else if (k == "handoff_real_weather") c.handoffRealWeather = toBool(v);
         else if (k == "cap_layer") c.capLayer = toBool(v);
         else if (k == "cap_coverage") c.capCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
         else if (k == "cap_thick_m") c.capThickM = d < 20 ? 20 : (d > 400 ? 400 : d);
@@ -128,6 +130,8 @@ bool loadConfig(const std::string& path, Config& c) {
         // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
         c.startupCalmS = d.startupCalmS;
         c.bumpCount = d.bumpCount; c.bumpMax = d.bumpMax; c.bumpHeightM = d.bumpHeightM; c.bumpRadiusFactor = d.bumpRadiusFactor;
+        c.edgeClouds = d.edgeClouds;   // the rim records made odd weather in testing: off until reworked
+        c.capLayer = d.capLayer;   // the thin cap layer rendered as a smooth dark skin over the deck: off until proven
         c.edgeCoverage = d.edgeCoverage; c.edgeRadiusFactor = d.edgeRadiusFactor; c.edgePoints = d.edgePoints;   // sparse edge clouds sparkled
         c.regenWaitS = d.regenWaitS;
         c.lowCloudType = d.lowCloudType;
@@ -179,6 +183,8 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "storm_rough_max = " << c.stormRoughMax << "\n"
       << "storm_rough_min_dbz = " << c.stormRoughMinDbz << "\n"
       << "storm_rough_height_m = " << c.stormRoughHeightM << "\n"
+      << "manual_refresh_immediate = " << (c.manualRefreshImmediate ? 1 : 0) << "\n"
+      << "handoff_real_weather = " << (c.handoffRealWeather ? 1 : 0) << "\n"
       << "cap_layer = " << (c.capLayer ? 1 : 0) << "\n"
       << "cap_coverage = " << c.capCoverage << "\n"
       << "cap_thick_m = " << c.capThickM << "\n"

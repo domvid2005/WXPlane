@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 12;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 14;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -33,7 +33,7 @@ struct Config {
     int aloftFcstHours = 6;       // NOAA winds-aloft forecast cycle: 6, 12 or 24
     int aloftStations = 4;        // FD stations blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
-    bool edgeClouds = true;       // ring of type-3 clouds around the edge of every overcast so its edge is billowy, not a smooth wall
+    bool edgeClouds = false;       // ring of type-3 clouds around the edge of every overcast so its edge is billowy, not a smooth wall
     double edgeCoverage = 0.8;    // coverage of the overcast layer in those edge records
     double edgeRadiusFactor = 0.6; // edge record radius = this x the station record radius
     int edgePoints = 8;           // edge records per overcast station
@@ -44,7 +44,7 @@ struct Config {
     int stormRoughMax = 220;      // most of them in one update
     double stormRoughMinDbz = 35; // only cells at least this strong
     double stormRoughHeightM = 1800; // how far a tower stands above the cell top (m)
-    bool capLayer = true;         // very thin type-3 layer just above every thick overcast (breaks up the flat top)
+    bool capLayer = false;        // very thin type-3 layer just above every thick overcast (breaks up the flat top)
     double capCoverage = 0.5;     // its coverage
     double capThickM = 70;        // its thickness (m)
     double capGapM = 40;          // clear gap between the overcast top and the cap layer (m)
@@ -56,6 +56,7 @@ struct Config {
     double bumpCoverage = 0.7;    // coverage of the overcast layer in those records
     double bumpRadiusFactor = 0.26; // record radius = this x the station record radius
     int handoffAltFt = 0;         // above this altitude (ft MSL) X-Plane's own weather takes over from ours; 0 = our weather all the way up
+    bool handoffRealWeather = true; // also switch X-Plane to its own real weather while above the hand-off band (put back below it)
     int handoffBandFt = 3000;     // our clouds fade out over this many feet below the hand-off altitude
     double visScale = 1.0;        // factor on reported visibility below 10 SM before it goes to X-Plane (1 = exactly the METAR/ATIS value)
     bool visAutocal = true;       // compare what X-Plane reports with the METAR/ATIS and correct our input
@@ -71,6 +72,7 @@ struct Config {
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud
+    bool manualRefreshImmediate = false; // Refresh Weather from the menu: true = the new weather appears at once but the sim freezes for a few seconds; false = it fades in
     bool firstLoadImmediate = true;  // the start-up updates (stations, then radar storms) skip X-Plane's slow fade-in, so the clouds do not dissolve in patches
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
     int startupDelayS = 0;        // wait this long after the plugin loads before the first download
