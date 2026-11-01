@@ -583,6 +583,20 @@ int main() {
         CHECK(stormSlot >= 1 && deckSlot >= 1 && deckSlot != stormSlot && es.clouds[deckSlot].baseM == deckBefore.baseM && es.clouds[deckSlot].topM == deckBefore.topM);   // overcast survives next to the storm
         CHECK(es.clouds[stormSlot].topM == 11000 && es.clouds[stormSlot].baseM <= deckBefore.baseM + 1);                                    // genuine deep convection is not capped
         CHECK(validateXp(es, true) == 0);
+        // three layers: the storm replaces the highest and grows from ITS base, not from the lowest layer (slot-wise blending in X-Plane)
+        Station t3; t3.elevM = 380;
+        parseReport("KTTT 301553Z 18010KT 5SM SCT018 BKN040 OVC080", t3.report);
+        XpWx b3 = buildXp(t3, oc, now, nullptr, false);
+        XpWx s3 = b3; applyStorm(s3, cc, oc, 380, 38);
+        CHECK(s3.clouds[0].baseM == b3.clouds[0].baseM && s3.clouds[1].baseM == b3.clouds[1].baseM && s3.clouds[2].type == 3.0f);
+    }
+    {
+        Station t4; t4.elevM = 380; Config oc;
+        parseReport("KUUU 301553Z 18010KT 5SM FEW012 BKN040", t4.report);
+        XpWx b4 = buildXp(t4, oc, now, nullptr, true);
+        RadarCell c4; c4.lat = 38; c4.lon = -98; c4.dbz = 45; c4.frac = 1; c4.topKnown = true; c4.topM = 11000; c4.rateMmH = rateFromDbz(45);
+        XpWx s4 = b4; applyStorm(s4, c4, oc, 380, 38);
+        CHECK(s4.clouds[1].baseM == b4.clouds[1].baseM && s4.clouds[2].topM == 11000);
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

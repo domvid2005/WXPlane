@@ -256,17 +256,20 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     else if (dbz >= 35) cap = 4000; else if (dbz >= 30) cap = 6000; else if (dbz >= 25) cap = 8000;
     x.visM = std::min(x.visM, cap);
 
-    // Storm cloud in slot 2 (slot 0 may hold ground fog; slot 1 the station's own cloud).
-    float baseM = (float)fieldElevM + (dbz >= 40 ? 900.0f : 600.0f);
-    for (int i = 0; i < 3; ++i)    // do not float above the station's own lowest layer
-        if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
-    float topM = stormTopM(c, cfg, baseM);
     // Slot choice: the station's own layers must survive. Use the top slot if it is free, else the middle one; only when all
     // are taken does the storm replace the highest of them (slot 0 may hold ground fog and is never used).
     int slot = 2;
-    if (x.clouds[2].coverage > 0) {
-        if (x.clouds[1].coverage <= 0) slot = 1;   // else every slot is taken: the highest layer (slot 2, layers are packed bottom-up) is the one replaced
+    if (x.clouds[2].coverage > 0 && x.clouds[1].coverage <= 0) slot = 1;   // else every slot is taken: slot 2 (the highest, layers are packed bottom-up) is replaced
+    float baseM = (float)fieldElevM + (dbz >= 40 ? 900.0f : 600.0f);
+    if (x.clouds[slot].coverage > 0 && x.clouds[slot].baseM <= fieldElevM + 2500.0f) {
+        // X-Plane blends records slot by slot, bases and tops included. A storm base 700 m below the deck it replaces turned the
+        // blend at the station into a thin 560-6000 m column (seen in a log at KFYV), so the storm grows from the replaced deck's base.
+        baseM = x.clouds[slot].baseM;
+    } else {
+        for (int i = 0; i < 3; ++i)    // otherwise do not float above the station's own lowest layer
+            if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
     }
+    float topM = stormTopM(c, cfg, baseM);
     XpCloud& cl = x.clouds[slot];
     cl.type = 3.0f;   // always full cumulonimbus: weaker echoes used to ramp down towards 1.0 (smooth stratus sheets with curtain edges)
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);

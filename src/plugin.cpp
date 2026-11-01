@@ -450,7 +450,11 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
             // Haze/rain visibility (5 km and up) belongs to the whole air mass, so storm records within 60 nm carry the station's
             // value. Giving them 40 km instead made X-Plane blend them into the station area and the METAR visibility never showed.
-            if (nd > 60.0 || x.visM < 5000.0f) x.visM = (float)g_cfg.clearVisM;
+            // A storm whose circle overlaps its station's record keeps the station's visibility instead (rain/mist of 1 km or more; ground fog stays local): with 40 km here X-Plane blended
+            // it into the station record and the METAR value read back at the airport several times too high (KFYV: 2.8 km reported, 9.5 km read).
+            auto srit = stationRadius.find(nearest->icao);
+            const bool overlapsStation = srit != stationRadius.end() && nd <= srit->second + std::max(6.0, g_cfg.radarCellNm * 0.9);
+            if (nd > 60.0 || (x.visM < 5000.0f && !(overlapsStation && x.visM >= 1000.0f))) x.visM = (float)g_cfg.clearVisM;
             if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
             const int layersBefore = x.cloudCount;
             wx::applyStorm(x, c, g_cfg, nearest->elevM, c.lat);
