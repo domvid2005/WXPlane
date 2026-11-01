@@ -590,6 +590,14 @@ int main() {
         CHECK(stormSlot >= 1 && deckSlot >= 1 && deckSlot != stormSlot && es.clouds[deckSlot].baseM == deckBefore.baseM && es.clouds[deckSlot].topM == deckBefore.topM);   // overcast survives next to the storm
         CHECK(es.clouds[stormSlot].topM == 11000 && es.clouds[stormSlot].baseM <= deckBefore.baseM + 1);                                    // genuine deep convection is not capped
         CHECK(validateXp(es, true) == 0);
+        {   // a storm replacing an overcast keeps at least the overcast's coverage
+            Station ov3; ov3.elevM = 380;
+            parseReport("KVVV 301553Z 18010KT 4SM FEW010 SCT015 OVC030", ov3.report);
+            XpWx b5 = buildXp(ov3, oc, now, nullptr, false);
+            RadarCell c5 = cc; c5.dbz = 32; c5.topKnown = false; c5.topM = 0;
+            XpWx s5 = b5; applyStorm(s5, c5, oc, 380, 38);
+            CHECK(b5.clouds[2].coverage >= 0.9f && s5.clouds[2].coverage >= b5.clouds[2].coverage);
+        }
         {   // weak echoes are cumulus, strong ones cumulonimbus; a weak cell next to a strong one does not get a deep tower
             RadarCell wk = cc; wk.dbz = 24; wk.topKnown = false; wk.topM = 0; wk.key = "R9:9";
             XpWx ws = ob; applyStorm(ws, wk, oc, 300, 38);

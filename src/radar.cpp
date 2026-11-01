@@ -271,11 +271,15 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     }
     float topM = stormTopM(c, cfg, baseM);
     XpCloud& cl = x.clouds[slot];
+    const float replacedCov = cl.coverage;   // the deck this storm grows out of (0 if the slot was free)
     // Cumulonimbus from 30 dBZ up (and for any measured echo top above 6 km); a weak echo is cumulus (2.0), not a deep anvil. Ramping
     // further down to 1.0 made smooth stratus sheets with curtain edges, so the floor stays at cumulus.
     cl.type = (dbz >= 30.0f || (c.topKnown && c.topM > 6000.0f)) ? 3.0f : 2.0f;
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
+    // A storm inside a solid deck must not thin it: X-Plane blends coverage slot by slot, so a 58% storm over a 94% overcast punched a
+    // sinuous hole-edged contour through the sheet (KFYV log). The station's own coverage is the floor.
+    cl.coverage = std::max(cl.coverage, replacedCov);
     cl.baseM = baseM;
     cl.topM = topM;
     x.cloudCount = 0;
