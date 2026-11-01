@@ -39,14 +39,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kHandoff };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxHandoff = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -66,12 +66,6 @@ bool g_haveLast = false;
 float g_visK = 1.0f;            // factor between the METAR visibility and what we send (vis_scale; the optional self-check adjusts it)
 bool g_checkPending = false;
 bool g_loggedNoNearStation = false;
-// Real-weather switch used by the hand-off: X-Plane's own "use real weather" flag. Turned on when the aircraft climbs into the
-// hand-off band and put back as it was once the aircraft is back below it.
-XPLMDataRef g_drRealWx = nullptr;
-bool g_realWxChecked = false, g_realWxUsable = false, g_hoEngaged = false;
-int g_realWxPrev = 0;
-Clock::time_point g_hoScanAt{};
 std::string g_checkedIcao;       // station the visibility check last looked at; a different one nearby (moved, reloaded) restarts it
 Clock::time_point g_moveScanAt{};
 Clock::time_point g_lastRadarRequest{};
@@ -125,12 +119,6 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
-    {
-        char b[96];
-        if (g_cfg.handoffAltFt > 0) std::snprintf(b, sizeof b, "X-Plane Real Weather Above %d ft (click to adjust)", g_cfg.handoffAltFt);
-        else std::snprintf(b, sizeof b, "X-Plane Real Weather Above: off (click to adjust)");
-        XPLMSetMenuItemName(g_menu, g_idxHandoff, b, 0);
-    }
 }
 
 // Removes every record this plugin has set, handing control back to X-Plane's own weather.
@@ -301,8 +289,6 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     const bool anyFog = now < g_fogUntil;
     std::map<std::string, wx::XpWx> baseWx;   // weather built per station, reused for storm cells
     std::map<std::string, float> stationRadius;
-    std::map<std::string, wx::XpWx> edgeWx;   // weather of the stations next to an overcast edge
-    int edgeCount = 0;
     int bumpCount = 0;
     // Rough tops: scatter small billowy records over a thick overcast so its top is uneven instead of one flat sheet. Each keeps only
     // the upper 40% of the deck and stands up to bump_height_m above its top, at a different height each time, capped to stay clear
@@ -331,20 +317,15 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             for (int i = 0; i < 3; ++i) {
                 auto& L = e.info.cloud_layers[i];
                 if (!ovc(i)) continue;
-                float ceilM = 1e9f;   // base of the next layer above this one (not counting the thin cap layer sitting on the deck)
-                int cap = -1;
-                for (int j = 0; j < 3; ++j) {
-                    if (j == i || !(info.cloud_layers[j].coverage > 0) || !(info.cloud_layers[j].alt_base > L.alt_top)) continue;
-                    if (info.cloud_layers[j].alt_base - L.alt_top < 100.0f && info.cloud_layers[j].alt_top - info.cloud_layers[j].alt_base < 150.0f) { cap = j; continue; }
-                    ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
-                }
+                float ceilM = 1e9f;   // base of the next layer above this one
+                for (int j = 0; j < 3; ++j)
+                    if (j != i && info.cloud_layers[j].coverage > 0 && info.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
                 const float thick = L.alt_top - L.alt_base;
                 const float rise = std::min((float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), std::max(0.0f, ceilM - L.alt_top - 120.0f));
                 L.cloud_type = 3.0f;
                 L.coverage = (float)std::min(0.95, g_cfg.bumpCoverage * (0.8 + 0.4 * ((h1 / 3600) % 1000) / 1000.0));
                 L.alt_base = L.alt_base + thick * 0.6f;
                 L.alt_top = L.alt_top + rise;
-                if (cap >= 0) { e.info.cloud_layers[cap].alt_base += rise; e.info.cloud_layers[cap].alt_top += rise; }
             }
             e.info.age = 0.0f;
             const std::string key = "bump:" + id + ":" + std::to_string(k);
@@ -380,78 +361,6 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         r.info = info;
         r.info.age = 0.0f;
         seen[s.icao] = true;
-        if (g_cfg.edgeClouds) {
-            // A thick overcast ends at its record's edge in a smooth wall. Around its rim, place small records whose overcast layer is
-            // thinner and billowy (type 3), so the sheet breaks up into cloud instead of stopping dead. Points that lie inside the
-            // overcast of the nearest other station (the sheet continues there) get none.
-            auto isOvc = [&](const wx::XpWx& w, int i) { return w.clouds[i].coverage >= (float)g_cfg.roughMinCoverage && w.clouds[i].type > 0.5f && !(i == 0 && w.fogLayerApplied); };
-            bool anyOvc = false;
-            for (int i = 0; i < 3; ++i) anyOvc = anyOvc || isOvc(x, i);
-            if (anyOvc && edgeCount < g_cfg.edgeMax) {
-                const wx::Station* other = nullptr;
-                for (int k = 0; k < g_cfg.edgePoints && edgeCount < g_cfg.edgeMax; ++k) {
-                    const double ang = 6.283185307179586 * k / g_cfg.edgePoints;
-                    const double rNm = info.radius_nm * 0.95;
-                    const double pLat = s.lat + rNm / 60.0 * std::cos(ang);
-                    const double pLon = s.lon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(s.lat * 3.14159265358979 / 180.0));
-                    other = nullptr;
-                    double od = 1e9;
-                    for (const auto& o : res.stations) {
-                        if (&o == &s) continue;
-                        const double d = wx::distNm(pLat, pLon, o.lat, o.lon);
-                        if (d < od) { od = d; other = &o; }
-                    }
-                    bool continues = false;
-                    if (other) {
-                        auto ow = edgeWx.find(other->icao);
-                        if (ow == edgeWx.end()) ow = edgeWx.emplace(other->icao, wx::buildXp(*other, g_cfg, now, &res.aloft, anyFog)).first;
-                        for (int i = 0; i < 3 && !continues; ++i)
-                            for (int j = 0; j < 3; ++j)
-                                if (isOvc(x, i) && isOvc(ow->second, j) && std::fabs(x.clouds[i].baseM - ow->second.clouds[j].baseM) < 600.0f) { continues = true; break; }
-                    }
-                    if (continues) continue;
-                    Rec e;
-                    e.airport = false;
-                    e.lat = pLat; e.lon = pLon; e.elev = s.elevM;
-                    e.info = info;
-                    e.info.radius_nm = (float)std::max(0.5, info.radius_nm * g_cfg.edgeRadiusFactor);
-                    for (int i = 0; i < 3; ++i)
-                        if (isOvc(x, i)) {
-                            e.info.cloud_layers[i].cloud_type = 3.0f;
-                            e.info.cloud_layers[i].coverage = (float)std::min((double)e.info.cloud_layers[i].coverage, g_cfg.edgeCoverage);
-                            // A copy of the parent's exact base and top puts two flat surfaces on one plane, which X-Plane draws as a
-                            // seam or speckle. Shrink each edge cloud a little, by a different amount per record, so no two coincide
-                            // (only inward, so the gap to the next layer is never reduced).
-                            const unsigned h = (unsigned)(k * 2654435761u + (unsigned)i * 40503u + (unsigned)std::fabs(s.lat * 1000.0));
-                            const float room = std::max(0.0f, e.info.cloud_layers[i].alt_top - e.info.cloud_layers[i].alt_base - 150.0f);
-                            const float dBase = std::min(room * 0.4f, 20.0f + (float)(h % 50));
-                            const float dTop = std::min(room * 0.4f, 25.0f + (float)((h / 50) % 70));
-                            e.info.cloud_layers[i].alt_base += dBase;
-                            // Tops vary too: some edge clouds stand above the deck, some below, so the rim is uneven. A rise is kept
-                            // clear of the layer above.
-                            float ceilM = 1e9f;
-                            int cap = -1;   // the thin cap layer on the deck is not a ceiling; it moves with the top
-                            for (int j = 0; j < 3; ++j) {
-                                if (j == i || !(info.cloud_layers[j].coverage > 0) || !(info.cloud_layers[j].alt_base > e.info.cloud_layers[i].alt_top)) continue;
-                                if (info.cloud_layers[j].alt_base - e.info.cloud_layers[i].alt_top < 100.0f && info.cloud_layers[j].alt_top - info.cloud_layers[j].alt_base < 150.0f) { cap = j; continue; }
-                                ceilM = std::min(ceilM, info.cloud_layers[j].alt_base);
-                            }
-                            const float up = std::min((float)(g_cfg.topBumps ? g_cfg.bumpHeightM * 0.6 : 0.0) * (float)((h / 3500) % 100) / 100.0f, std::max(0.0f, ceilM - e.info.cloud_layers[i].alt_top - 120.0f));
-                            const float dTopMove = ((h / 7) % 3 == 0) ? up : -dTop;
-                            e.info.cloud_layers[i].alt_top += dTopMove;
-                            if (cap >= 0) { e.info.cloud_layers[cap].alt_base += dTopMove; e.info.cloud_layers[cap].alt_top += dTopMove; }
-                        }
-                    e.info.age = 0.0f;
-                    const std::string key = "edge:" + s.icao + ":" + std::to_string(k);
-                    seen[key] = true;
-                    ++edgeCount;
-                    auto eit = g_recs.find(key);
-                    if (!full && eit != g_recs.end() && std::memcmp(&eit->second.info, &e.info, sizeof e.info) == 0) continue;
-                    e.info.age = info.age;
-                    todo.push_back({key, e});
-                }
-            }
-        }
         addBumps(x, info, s.lat, s.lon, info.radius_nm, s.elevM, s.icao, g_cfg.bumpCount, 0.15, 0.85);
         auto it = g_recs.find(s.icao);
         if (!full && it != g_recs.end() && it->second.airport == r.airport && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0)
@@ -518,7 +427,6 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     }
     // Radar storm cells: the weather of the nearest station with the storm applied on top, as location records.
     int stormCount = 0;
-    int stormRoughCount = 0;
     if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
         for (const auto& c : res.radar.cells) {
             const wx::Station* nearest = &res.stations[0];
@@ -546,43 +454,6 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const std::string key = "radar:" + c.key;
             seen[key] = true;
             ++stormCount;
-            if (g_cfg.stormRough && c.dbz >= g_cfg.stormRoughMinDbz && stormRoughCount < g_cfg.stormRoughMax) {
-                // One record is a cylinder with straight walls and a flat top, which renders as a tabletop. Ring and cap it with
-                // smaller records of the same storm cloud whose tops differ: short turrets round the rim (stepped, ragged
-                // edge) and a few towers standing above the top.
-                const XPLMWeatherInfoClouds_t& core = r.info.cloud_layers[2];
-                const unsigned seed = (unsigned)std::fabs(c.lat * 1000.0) * 2654435761u + (unsigned)std::fabs(c.lon * 1000.0) * 40503u;
-                auto hash = [](unsigned v) { v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16; return v; };
-                if (core.coverage > 0 && core.alt_top > core.alt_base + 500.0f) {
-                    for (int k = 0; k < g_cfg.stormRoughCount && stormRoughCount < g_cfg.stormRoughMax; ++k) {
-                        const unsigned h1 = hash(seed + (unsigned)k * 7919u), h2 = hash(h1 + 17u), h3 = hash(h2 + 31u);
-                        const bool tower = (k % 3 == 2);
-                        const double ang = 6.283185307179586 * (h1 % 3600) / 3600.0;
-                        const double frac = tower ? 0.1 + 0.5 * ((h2 % 1000) / 1000.0) : 0.7 + 0.3 * ((h2 % 1000) / 1000.0);
-                        const double rNm = r.info.radius_nm * frac;
-                        Rec q;
-                        q.airport = false;
-                        q.lat = c.lat + rNm / 60.0 * std::cos(ang);
-                        q.lon = c.lon + rNm / 60.0 * std::sin(ang) / std::max(0.2, std::cos(c.lat * 3.14159265358979 / 180.0));
-                        q.elev = nearest->elevM;
-                        q.info = r.info;
-                        q.info.radius_nm = (float)std::max(1.0, r.info.radius_nm * (0.3 + 0.3 * ((h3 % 1000) / 1000.0)));
-                        auto& L = q.info.cloud_layers[2];
-                        const float height = core.alt_top - core.alt_base;
-                        if (tower) L.alt_top = core.alt_top + (float)g_cfg.stormRoughHeightM * (0.3f + 0.7f * (float)((h3 / 1000) % 1000) / 1000.0f);
-                        else L.alt_top = core.alt_base + height * (0.45f + 0.5f * (float)((h3 / 1000) % 1000) / 1000.0f);
-                        L.coverage = std::min(tower ? 0.8f : 0.65f, core.coverage * (tower ? 0.9f : 0.7f));   // dense records render as smooth dark slabs
-                        q.info.age = 0.0f;
-                        const std::string qkey = "stormrough:" + c.key + ":" + std::to_string(k);
-                        seen[qkey] = true;
-                        ++stormRoughCount;
-                        auto qit = g_recs.find(qkey);
-                        if (!full && qit != g_recs.end() && std::memcmp(&qit->second.info, &q.info, sizeof q.info) == 0) continue;
-                        q.info.age = info.age;
-                        todo.push_back({qkey, q});
-                    }
-                }
-            }
             auto it = g_recs.find(key);
             if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
             r.info.age = info.age;
@@ -662,9 +533,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         std::snprintf(l2, sizeof l2, "No stations in range");
     g_lastGoodStatus = l1;
     setStatus(l1, l2);
-    if (g_cfg.stormRough) logf("storm shape: %d turret/tower records around storm cells", stormRoughCount);
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
-    if (g_cfg.edgeClouds) logf("overcast edges: %d billowy edge records around thick overcast decks", edgeCount);
     logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
          res.immediate ? " [immediate]" : "");
@@ -699,14 +568,6 @@ void weatherWatch() {
     logf("weather watch (nearest %s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
          nearSt ? nearSt->icao.c_str() : "?", nearSt ? nearD : 0.0, info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
          cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
-    if (g_cfg.handoffAltFt > 0) {
-        const double ho = g_cfg.handoffAltFt * 0.3048, bandM = g_cfg.handoffBandFt * 0.3048, ac = el;
-        const double ourShare = ac >= ho ? 0.0 : (ac <= ho - bandM ? 1.0 : (ho - ac) / bandM);
-        logf("  hand-off: X-Plane's own weather above %d ft (%.0f m), fade band %d ft; aircraft at %.0f m, so our weather is %.0f%% there",
-             g_cfg.handoffAltFt, ho, g_cfg.handoffBandFt, ac, ourShare * 100.0);
-    } else {
-        logf("  hand-off: off (our weather at all altitudes)");
-    }
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
@@ -851,32 +712,6 @@ float flightLoop(float, float, int, void*) {
     if (g_checkPending && Clock::now() >= g_checkAt) {
         g_checkPending = false;
         visibilityCheck();
-    }
-    // Altitude hand-off to X-Plane's own real weather: our weather is cut above the hand-off altitude (see applyHandoff), and
-    // here X-Plane itself is switched to real weather as the aircraft climbs into the fade band, so something real is there to
-    // take over. Back below the band (with 300 m of margin so it does not flap) the flag is put back as it was.
-    if (g_cfg.handoffAltFt > 0 && g_cfg.handoffRealWeather && g_drElev && Clock::now() >= g_hoScanAt) {
-        g_hoScanAt = Clock::now() + std::chrono::seconds(2);
-        if (!g_realWxChecked) {
-            g_realWxChecked = true;
-            g_drRealWx = XPLMFindDataRef("sim/weather/use_real_weather_bool");
-            g_realWxUsable = g_drRealWx && (XPLMGetDataRefTypes(g_drRealWx) & xplmType_Int) && XPLMCanWriteDataRef(g_drRealWx);
-            logf("hand-off: X-Plane's real-weather switch (sim/weather/use_real_weather_bool) is %s",
-                 !g_drRealWx ? "not available in this X-Plane version, so the hand-off only cuts our weather" : (g_realWxUsable ? "available" : "there but not writable, so the hand-off only cuts our weather"));
-        }
-        if (g_realWxUsable) {
-            const double ac = XPLMGetDatad(g_drElev), ho = g_cfg.handoffAltFt * 0.3048, bandM = g_cfg.handoffBandFt * 0.3048;
-            if (!g_hoEngaged && ac >= ho - bandM) {
-                g_realWxPrev = XPLMGetDatai(g_drRealWx);
-                g_hoEngaged = true;
-                if (g_realWxPrev == 0) { XPLMSetDatai(g_drRealWx, 1); logf("hand-off: aircraft at %.0f m, entering the hand-off band: X-Plane real weather switched ON", ac); }
-                else logf("hand-off: aircraft at %.0f m, entering the hand-off band: X-Plane real weather was already on", ac);
-            } else if (g_hoEngaged && ac < ho - bandM - 300.0) {
-                g_hoEngaged = false;
-                if (g_realWxPrev == 0) { XPLMSetDatai(g_drRealWx, 0); logf("hand-off: aircraft back at %.0f m, below the band: X-Plane real weather switched back OFF", ac); }
-                else logf("hand-off: aircraft back at %.0f m, below the band", ac);
-            }
-        }
     }
     // Moved to another airport (flight reload, reposition, long taxi): the visibility check and its correction belong to the
     // station it looked at, so start them again for the new one, against the station's own value rather than the old correction.
@@ -1113,122 +948,6 @@ void showWindow() {
     }
 }
 
-// ---------------- "X-Plane Real Weather Above" slider window ----------------
-// A menu item can only cycle through presets, so the hand-off altitude gets its own small window: drag the bar, or use the
-// buttons for 1000 ft steps. The new altitude is applied when the mouse is released, not while dragging, because every
-// change rebuilds the weather.
-XPLMWindowID g_hoWin = nullptr;
-bool g_hoDrag = false;
-int g_hoValue = 0;                       // altitude shown on the bar (ft); 0 = off
-constexpr int kHoMaxFt = 40000, kHoStepFt = 1000;
-
-struct HoGeom { int x0, x1, yTop, yBot, btnTop, btnBot; };
-HoGeom hoGeom(int l, int t, int r, int b) {
-    HoGeom g;
-    g.x0 = l + 24; g.x1 = r - 24;
-    g.yTop = t - 62; g.yBot = t - 74;
-    g.btnTop = b + 40; g.btnBot = b + 14;
-    return g;
-}
-int hoFromX(const HoGeom& g, int x) {
-    double f = (double)(x - g.x0) / std::max(1, g.x1 - g.x0);
-    f = std::max(0.0, std::min(1.0, f));
-    return (int)(f * (kHoMaxFt / kHoStepFt) + 0.5) * kHoStepFt;
-}
-void setHandoff(int ft) {
-    ft = std::max(0, std::min(kHoMaxFt, ft));
-    g_hoValue = ft;
-    if (ft == g_cfg.handoffAltFt) return;
-    g_cfg.handoffAltFt = ft;
-    g_reapplyRequested = true;
-    syncMenu();
-    wx::saveConfig(g_cfgPath, g_cfg);
-}
-
-void drawHoWin(XPLMWindowID w, void*) {
-    int l, t, r, b;
-    XPLMGetWindowGeometry(w, &l, &t, &r, &b);
-    const HoGeom g = hoGeom(l, t, r, b);
-    float white[3] = {1, 1, 1}, grey[3] = {0.75f, 0.75f, 0.75f};
-    char buf[160];
-    if (g_hoValue > 0) std::snprintf(buf, sizeof buf, "X-Plane real weather above %d ft", g_hoValue);
-    else std::snprintf(buf, sizeof buf, "X-Plane real weather above: off (WXPlane weather at all altitudes)");
-    XPLMDrawString(white, l + 14, t - 28, buf, nullptr, xplmFont_Proportional);
-    char hint[] = "Below it, WXPlane's weather; above it, X-Plane's own, faded in over a band.";
-    XPLMDrawString(grey, l + 14, t - 46, hint, nullptr, xplmFont_Proportional);
-    XPLMDrawTranslucentDarkBox(g.x0, g.yTop, g.x1, g.yBot);                       // track
-    const int tx = g.x0 + (int)((double)(g.x1 - g.x0) * g_hoValue / kHoMaxFt);
-    if (tx > g.x0) XPLMDrawTranslucentDarkBox(g.x0, g.yTop, tx, g.yBot);          // filled part (darker)
-    XPLMDrawTranslucentDarkBox(tx - 3, g.yTop + 5, tx + 3, g.yBot - 5);           // handle
-    XPLMDrawTranslucentDarkBox(tx - 3, g.yTop + 5, tx + 3, g.yBot - 5);
-    char lo[] = "off", hi[] = "40000 ft";
-    XPLMDrawString(grey, g.x0, g.yBot - 18, lo, nullptr, xplmFont_Proportional);
-    XPLMDrawString(grey, g.x1 - 40, g.yBot - 18, hi, nullptr, xplmFont_Proportional);
-    const int bw = 64, gap = 10;
-    const char* names[3] = {"- 1000", "+ 1000", "Off"};
-    for (int i = 0; i < 3; ++i) {
-        const int bl = l + 14 + i * (bw + gap);
-        XPLMDrawTranslucentDarkBox(bl, g.btnTop, bl + bw, g.btnBot);
-        XPLMDrawString(white, bl + 10, g.btnBot + 9, const_cast<char*>(names[i]), nullptr, xplmFont_Proportional);
-    }
-}
-
-int clickHoWin(XPLMWindowID w, int x, int y, XPLMMouseStatus st, void*) {
-    int l, t, r, b;
-    XPLMGetWindowGeometry(w, &l, &t, &r, &b);
-    const HoGeom g = hoGeom(l, t, r, b);
-    if (st == xplm_MouseDown) {
-        if (y >= g.btnBot && y <= g.btnTop) {
-            const int bw = 64, gap = 10;
-            for (int i = 0; i < 3; ++i) {
-                const int bl = l + 14 + i * (bw + gap);
-                if (x >= bl && x <= bl + bw) {
-                    if (i == 0) setHandoff(g_hoValue - kHoStepFt);
-                    else if (i == 1) setHandoff(g_hoValue + kHoStepFt);
-                    else setHandoff(0);
-                }
-            }
-        } else if (y >= g.yBot - 10 && y <= g.yTop + 10) {
-            g_hoDrag = true;
-            g_hoValue = hoFromX(g, x);
-        }
-    } else if (st == xplm_MouseDrag) {
-        if (g_hoDrag) g_hoValue = hoFromX(g, x);
-    } else if (st == xplm_MouseUp) {
-        if (g_hoDrag) { g_hoDrag = false; setHandoff(hoFromX(g, x)); }
-    }
-    return 1;
-}
-
-void showHandoffWindow() {
-    if (!g_hoWin) {
-        int sl, st, sr, sb;
-        XPLMGetScreenBoundsGlobal(&sl, &st, &sr, &sb);
-        XPLMCreateWindow_t p;
-        std::memset(&p, 0, sizeof p);
-        p.structSize = sizeof p;
-        p.left = sl + 120; p.right = sl + 120 + 480;
-        p.top = st - 140;  p.bottom = st - 140 - 150;
-        p.visible = 1;
-        p.drawWindowFunc = drawHoWin;
-        p.handleMouseClickFunc = clickHoWin;
-        p.handleRightClickFunc = clickWin;
-        p.handleKeyFunc = keyWin;
-        p.handleCursorFunc = cursorWin;
-        p.handleMouseWheelFunc = wheelWin;
-        p.refcon = nullptr;
-        p.decorateAsFloatingWindow = xplm_WindowDecorationRoundRectangle;
-        p.layer = xplm_WindowLayerFloatingWindows;
-        g_hoWin = XPLMCreateWindowEx(&p);
-        if (g_hoWin) XPLMSetWindowTitle(g_hoWin, "WXPlane - real weather hand-off");
-    }
-    if (g_hoWin) {
-        g_hoValue = g_cfg.handoffAltFt;
-        XPLMSetWindowIsVisible(g_hoWin, 1);
-        XPLMBringWindowToFront(g_hoWin);
-    }
-}
-
 void menuHandler(void*, void* item) {
     switch ((int)(intptr_t)item) {
         case kEnabled:
@@ -1255,9 +974,6 @@ void menuHandler(void*, void* item) {
         case kRadarGlobal:
             g_cfg.radarGlobal = !g_cfg.radarGlobal;
             if (g_cfg.enabled && g_cfg.radar) g_manualRefresh = true;
-            break;
-        case kHandoff:   // opens the slider window
-            showHandoffWindow();
             break;
         case kAloft:
             g_cfg.useAloft = !g_cfg.useAloft;
@@ -1302,7 +1018,6 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxAloft = XPLMAppendMenuItem(g_menu, "Use NOAA Winds/Temps Aloft", (void*)(intptr_t)kAloft, 0);
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
-    g_idxHandoff = XPLMAppendMenuItem(g_menu, "X-Plane Real Weather Above", (void*)(intptr_t)kHandoff, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);
@@ -1319,7 +1034,6 @@ PLUGIN_API void XPluginStop(void) {
         g_loop = nullptr;
     }
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
-    if (g_hoWin) { XPLMDestroyWindow(g_hoWin); g_hoWin = nullptr; }
     if (g_menu) { XPLMDestroyMenu(g_menu); g_menu = nullptr; }
 }
 

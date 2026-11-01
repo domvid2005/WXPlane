@@ -51,22 +51,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "clear_vis_m") c.clearVisM = d < 10000 ? 10000 : d;
         else if (k == "vis_scale") c.visScale = d < 0.2 ? 0.2 : (d > 1.5 ? 1.5 : d);
         else if (k == "vis_autocal") c.visAutocal = toBool(v);
-        else if (k == "edge_clouds") c.edgeClouds = toBool(v);
-        else if (k == "edge_coverage") c.edgeCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
-        else if (k == "edge_radius_factor") c.edgeRadiusFactor = d < 0.1 ? 0.1 : (d > 1.0 ? 1.0 : d);
-        else if (k == "edge_points") c.edgePoints = (int)(d < 3 ? 3 : (d > 24 ? 24 : d));
         else if (k == "rough_min_coverage") c.roughMinCoverage = d < 0.3 ? 0.3 : (d > 0.95 ? 0.95 : d);
-        else if (k == "storm_rough") c.stormRough = toBool(v);
-        else if (k == "storm_rough_count") c.stormRoughCount = (int)(d < 0 ? 0 : (d > 20 ? 20 : d));
-        else if (k == "storm_rough_max") c.stormRoughMax = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
-        else if (k == "storm_rough_min_dbz") c.stormRoughMinDbz = d < 10 ? 10 : (d > 60 ? 60 : d);
-        else if (k == "storm_rough_height_m") c.stormRoughHeightM = d < 200 ? 200 : (d > 5000 ? 5000 : d);
         else if (k == "manual_refresh_immediate") c.manualRefreshImmediate = toBool(v);
-        else if (k == "handoff_real_weather") c.handoffRealWeather = toBool(v);
-        else if (k == "cap_layer") c.capLayer = toBool(v);
-        else if (k == "cap_coverage") c.capCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
-        else if (k == "cap_thick_m") c.capThickM = d < 20 ? 20 : (d > 400 ? 400 : d);
-        else if (k == "cap_gap_m") c.capGapM = d < 10 ? 10 : (d > 300 ? 300 : d);
         else if (k == "top_bumps") c.topBumps = toBool(v);
         else if (k == "bump_count") c.bumpCount = (int)(d < 0 ? 0 : (d > 40 ? 40 : d));
         else if (k == "bump_fill_count") c.bumpFillCount = (int)(d < 0 ? 0 : (d > 10 ? 10 : d));
@@ -74,9 +60,6 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "bump_height_m") c.bumpHeightM = d < 50 ? 50 : (d > 1500 ? 1500 : d);
         else if (k == "bump_coverage") c.bumpCoverage = d < 0.1 ? 0.1 : (d > 0.95 ? 0.95 : d);
         else if (k == "bump_radius_factor") c.bumpRadiusFactor = d < 0.05 ? 0.05 : (d > 0.8 ? 0.8 : d);
-        else if (k == "edge_max") c.edgeMax = (int)(d < 0 ? 0 : (d > 400 ? 400 : d));
-        else if (k == "handoff_alt_ft") c.handoffAltFt = (int)(d < 0 ? 0 : (d > 60000 ? 60000 : d));
-        else if (k == "handoff_band_ft") c.handoffBandFt = (int)(d < 500 ? 500 : (d > 15000 ? 15000 : d));
         else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
         else if (k == "radar") c.radar = toBool(v);
         else if (k == "radar_global") c.radarGlobal = toBool(v);
@@ -130,9 +113,6 @@ bool loadConfig(const std::string& path, Config& c) {
         // changes (an old low_cloud_type = 2 kept the layers at type 2, an old radius factor of 0.65 kept the record overlap).
         c.startupCalmS = d.startupCalmS;
         c.bumpCount = d.bumpCount; c.bumpMax = d.bumpMax; c.bumpHeightM = d.bumpHeightM; c.bumpRadiusFactor = d.bumpRadiusFactor;
-        c.edgeClouds = d.edgeClouds;   // the rim records made odd weather in testing: off until reworked
-        c.capLayer = d.capLayer;   // the thin cap layer rendered as a smooth dark skin over the deck: off until proven
-        c.edgeCoverage = d.edgeCoverage; c.edgeRadiusFactor = d.edgeRadiusFactor; c.edgePoints = d.edgePoints;   // sparse edge clouds sparkled
         c.regenWaitS = d.regenWaitS;
         c.lowCloudType = d.lowCloudType;
         c.stationRadiusFactor = d.stationRadiusFactor;
@@ -172,23 +152,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "clear_vis_m = " << c.clearVisM << "\n"
       << "vis_scale = " << c.visScale << "\n"
       << "vis_autocal = " << (c.visAutocal ? 1 : 0) << "\n"
-      << "edge_clouds = " << (c.edgeClouds ? 1 : 0) << "\n"
-      << "edge_coverage = " << c.edgeCoverage << "\n"
-      << "edge_radius_factor = " << c.edgeRadiusFactor << "\n"
-      << "edge_points = " << c.edgePoints << "\n"
-      << "edge_max = " << c.edgeMax << "\n"
-      << "rough_min_coverage = " << c.roughMinCoverage << "\n"
-      << "storm_rough = " << (c.stormRough ? 1 : 0) << "\n"
-      << "storm_rough_count = " << c.stormRoughCount << "\n"
-      << "storm_rough_max = " << c.stormRoughMax << "\n"
-      << "storm_rough_min_dbz = " << c.stormRoughMinDbz << "\n"
-      << "storm_rough_height_m = " << c.stormRoughHeightM << "\n"
       << "manual_refresh_immediate = " << (c.manualRefreshImmediate ? 1 : 0) << "\n"
-      << "handoff_real_weather = " << (c.handoffRealWeather ? 1 : 0) << "\n"
-      << "cap_layer = " << (c.capLayer ? 1 : 0) << "\n"
-      << "cap_coverage = " << c.capCoverage << "\n"
-      << "cap_thick_m = " << c.capThickM << "\n"
-      << "cap_gap_m = " << c.capGapM << "\n"
       << "top_bumps = " << (c.topBumps ? 1 : 0) << "\n"
       << "bump_count = " << c.bumpCount << "\n"
       << "bump_max = " << c.bumpMax << "\n"
@@ -196,8 +160,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "bump_height_m = " << c.bumpHeightM << "\n"
       << "bump_coverage = " << c.bumpCoverage << "\n"
       << "bump_radius_factor = " << c.bumpRadiusFactor << "\n"
-      << "handoff_alt_ft = " << c.handoffAltFt << "\n"
-      << "handoff_band_ft = " << c.handoffBandFt << "\n"
       << "vis_check_s = " << c.visCheckS << "\n"
       << "radar = " << (c.radar ? 1 : 0) << "\n"
       << "radar_global = " << (c.radarGlobal ? 1 : 0) << "\n"
@@ -209,30 +171,13 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_turbulence = " << c.radarTurbulence << "\n"
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
-      << "first_load_immediate = " << (c.firstLoadImmediate ? 1 : 0) << "\n"
-      << "apply_per_tick = " << c.applyPerTick << "\n"
       << "fill_gaps = " << (c.fillGaps ? 1 : 0) << "\n"
       << "fill_range_nm = " << c.fillRangeNm << "\n"
       << "fill_cell_nm = " << c.fillCellNm << "\n"
       << "fill_far_range_nm = " << c.fillFarRangeNm << "\n"
       << "fill_far_cell_nm = " << c.fillFarCellNm << "\n"
-      << "low_cloud_type = " << c.lowCloudType << "\n"
-      << "storm_top_variation_m = " << c.stormTopVariationM << "\n"
-      << "startup_calm_s = " << c.startupCalmS << "\n"
-      << "regen_wait_s = " << c.regenWaitS << "\n"
       << "regen_weather_on_start = " << (c.regenWeatherOnStart ? 1 : 0) << "\n"
       << "radar_minutes = " << c.radarMinutes << "\n"
-      << "storm_smooth_tops = " << (c.stormSmoothTops ? 1 : 0) << "\n"
-      << "station_radius_factor = " << c.stationRadiusFactor << "\n"
-      << "fill_radius_factor = " << c.fillRadiusFactor << "\n"
-      << "station_radius_auto = " << (c.stationRadiusAuto ? 1 : 0) << "\n"
-      << "startup_wait_fps = " << (c.startupWaitFps ? 1 : 0) << "\n"
-      << "startup_radar_delay_s = " << c.startupRadarDelayS << "\n"
-      << "startup_staged = " << (c.startupStaged ? 1 : 0) << "\n"
-      << "startup_max_wait_s = " << c.startupMaxWaitS << "\n"
-      << "startup_wait_scenery = " << (c.startupWaitScenery ? 1 : 0) << "\n"
-      << "transition_s = " << c.transitionS << "\n"
-      << "update_transition_s = " << c.updateTransitionS << "\n"
       << "startup_delay_s = " << c.startupDelayS << "\n";
     return true;
 }

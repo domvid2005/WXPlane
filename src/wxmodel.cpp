@@ -62,62 +62,6 @@ bool stationHasFog(const Station& st, const Config& cfg) {
     return r.fog || r.shallowFog || r.patchyFog || r.mist;
 }
 
-namespace {
-// Hand-off to X-Plane's own weather above cfg.handoffAltFt: our record stops there (max altitude), clouds that start above it are
-// dropped, clouds in the band below it fade out (coverage falls to zero at the top of the band), and winds / temperatures are
-// cut at the hand-off altitude with an interpolated last point, so nothing jumps at the edge.
-void applyHandoff(XpWx& x, const Config& cfg) {
-    const float topM = (float)(cfg.handoffAltFt * kFtToM);
-    const float bandM = (float)(std::max(500, cfg.handoffBandFt) * kFtToM);
-    constexpr float kMinThick = 120.0f;
-    for (auto& c : x.clouds) {
-        if (c.coverage <= 0) continue;
-        if (c.baseM >= topM) { c = XpCloud(); continue; }
-        if (c.baseM > topM - bandM) c.coverage *= (topM - c.baseM) / bandM;
-        if (c.topM > topM) c.topM = std::max(c.baseM + kMinThick, topM);
-        if (c.coverage < 0.02f) c = XpCloud();
-    }
-    if (x.maxAltFt > (float)cfg.handoffAltFt) x.maxAltFt = (float)cfg.handoffAltFt;
-    if (x.winds.size() > 1) {
-        std::vector<XpWind> kept;
-        for (size_t i = 0; i < x.winds.size(); ++i) {
-            if (x.winds[i].altMsl <= topM) { kept.push_back(x.winds[i]); continue; }
-            if (!kept.empty() && kept.back().altMsl < topM) {
-                const XpWind& a = kept.back();
-                const XpWind& b = x.winds[i];
-                const float f = (topM - a.altMsl) / (b.altMsl - a.altMsl);
-                XpWind m = a;
-                m.altMsl = topM;
-                float dd = b.dir - a.dir;
-                while (dd > 180.0f) dd -= 360.0f;
-                while (dd < -180.0f) dd += 360.0f;
-                m.dir = a.dir + dd * f;
-                if (m.dir < 0) m.dir += 360.0f;
-                if (m.dir >= 360.0f) m.dir -= 360.0f;
-                m.ms = a.ms + (b.ms - a.ms) * f;
-                m.gustMs = a.gustMs + (b.gustMs - a.gustMs) * f;
-                kept.push_back(m);
-            }
-            break;
-        }
-        x.winds = kept;
-    }
-    if (x.tempProfile.size() > 1) {
-        std::vector<std::pair<float, float>> kept;
-        for (size_t i = 0; i < x.tempProfile.size(); ++i) {
-            if (x.tempProfile[i].first <= topM) { kept.push_back(x.tempProfile[i]); continue; }
-            if (!kept.empty() && kept.back().first < topM) {
-                const auto& a = kept.back();
-                const auto& b = x.tempProfile[i];
-                kept.push_back({topM, a.second + (b.second - a.second) * (topM - a.first) / (b.first - a.first)});
-            }
-            break;
-        }
-        x.tempProfile = kept;
-    }
-}
-} // namespace
-
 XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft, bool fogSlot) {
     const Report& r = st.report;
     XpWx x;
@@ -278,28 +222,6 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     } else {
         for (size_t i = 0; i < 3 && i < layers.size(); ++i) x.clouds[i] = layers[i];
     }
-    // A very thin billowy (type 3) layer sitting just above every thick overcast: the top of a flat deck then breaks into cloud
-    // instead of ending in one clean plane. Only in a free slot (never slot 0 when it is reserved for ground fog, because that
-    // slot is blended between stations) and only when there is room below the next layer.
-    if (cfg.capLayer) {
-        for (int i = 0; i < 3; ++i) {
-            const XpCloud d = x.clouds[i];
-            if (!(d.coverage >= (float)cfg.roughMinCoverage && d.type > 0.5f) || (i == 0 && x.fogLayerApplied)) continue;
-            const float base = d.topM + (float)cfg.capGapM, top = base + (float)cfg.capThickM;
-            int slot = -1;
-            for (int k = (fogSlot ? 1 : 0); k < 3 && slot < 0; ++k)
-                if (x.clouds[k].coverage <= 0.0f) slot = k;
-            if (slot < 0) break;
-            bool room = true;
-            for (int k = 0; k < 3; ++k)
-                if (k != slot && x.clouds[k].coverage > 0 && x.clouds[k].baseM > d.topM && x.clouds[k].baseM < top + 100.0f) room = false;
-            if (!room) continue;
-            XpCloud c;
-            c.type = 3.0f; c.coverage = (float)cfg.capCoverage; c.baseM = base; c.topM = top;
-            x.clouds[slot] = c;
-        }
-    }
-    if (cfg.handoffAltFt > 0) applyHandoff(x, cfg);
     x.cloudCount = 0;
     for (const auto& c : x.clouds)
         if (c.coverage > 0) ++x.cloudCount;

@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 14;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 17;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -33,21 +33,7 @@ struct Config {
     int aloftFcstHours = 6;       // NOAA winds-aloft forecast cycle: 6, 12 or 24
     int aloftStations = 4;        // FD stations blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
-    bool edgeClouds = false;       // ring of type-3 clouds around the edge of every overcast so its edge is billowy, not a smooth wall
-    double edgeCoverage = 0.8;    // coverage of the overcast layer in those edge records
-    double edgeRadiusFactor = 0.6; // edge record radius = this x the station record radius
-    int edgePoints = 8;           // edge records per overcast station
-    int edgeMax = 120;            // most edge records in one update
-    double roughMinCoverage = 0.65; // layers at least this solid get rough tops, edges and the cap layer (0.65 = broken and overcast; 0.85 = overcast only)
-    bool stormRough = true;       // ring and cap strong storm cells with turret/tower records so they are not straight-walled tabletops
-    int stormRoughCount = 5;      // records per storm cell (every third one is a tower above the top, the rest short turrets round the rim)
-    int stormRoughMax = 220;      // most of them in one update
-    double stormRoughMinDbz = 35; // only cells at least this strong
-    double stormRoughHeightM = 1800; // how far a tower stands above the cell top (m)
-    bool capLayer = false;        // very thin type-3 layer just above every thick overcast (breaks up the flat top)
-    double capCoverage = 0.5;     // its coverage
-    double capThickM = 70;        // its thickness (m)
-    double capGapM = 40;          // clear gap between the overcast top and the cap layer (m)
+    double roughMinCoverage = 0.65; // layers at least this solid get rough-top records (0.65 = broken and overcast; 0.85 = overcast only)
     bool topBumps = true;         // scatter billowy records over thick overcasts so the top is uneven, not one flat sheet
     int bumpCount = 14;           // rough-top records per overcast station
     int bumpMax = 320;            // most of them in one update
@@ -55,9 +41,6 @@ struct Config {
     double bumpHeightM = 550;     // how far a bump can stand above the deck top (m)
     double bumpCoverage = 0.7;    // coverage of the overcast layer in those records
     double bumpRadiusFactor = 0.26; // record radius = this x the station record radius
-    int handoffAltFt = 0;         // above this altitude (ft MSL) X-Plane's own weather takes over from ours; 0 = our weather all the way up
-    bool handoffRealWeather = true; // also switch X-Plane to its own real weather while above the hand-off band (put back below it)
-    int handoffBandFt = 3000;     // our clouds fade out over this many feet below the hand-off altitude
     double visScale = 1.0;        // factor on reported visibility below 10 SM before it goes to X-Plane (1 = exactly the METAR/ATIS value)
     bool visAutocal = true;       // compare what X-Plane reports with the METAR/ATIS and correct our input
     int visCheckS = 100;          // seconds after an update to run that comparison
