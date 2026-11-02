@@ -280,3 +280,7 @@ Refresh Weather and the menu toggles are coalesced: at most one download per 60 
 - `storm_top_variation_known_m` (default 0): a fixed per-block height variation for measured echo tops too (estimated tops use `storm_top_variation_m`).
 
 None of these has been checked against X-Plane's renderer yet. Compare one at a time.
+
+## Storm holes
+
+Blocks enclosed on all four sides by storm cells, but with no cell of their own (cut by the cell cap, too weak, or empty), get a cell interpolated from their neighbours: mean reflectivity, top and coverage, at most a quarter of `radar_max_cells` extra. The radar log line reports how many (`N hole(s) interpolated`). Notches at the storm edge are left alone. `storm_fill_holes = 0` turns it off. Untested in X-Plane's NEXRAD map.

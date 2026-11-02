@@ -89,6 +89,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_top_step_m") c.stormTopStepM = d < 50 ? 50 : (d > 1000 ? 1000 : d);
         else if (k == "storm_top_blend") c.stormTopBlend = d < 0 ? 0 : (d > 0.8 ? 0.8 : d);
         else if (k == "storm_top_variation_known_m") c.stormTopVariationKnownM = d < 0 ? 0 : (d > 1000 ? 1000 : d);
+        else if (k == "storm_fill_holes") c.stormFillHoles = toBool(v);
         else if (k == "storm_radius_factor") c.stormRadiusFactor = d < 0.6 ? 0.6 : (d > 2.0 ? 2.0 : d);
         else if (k == "fill_radius_factor") c.fillRadiusFactor = d < 0.5 ? 0.5 : (d > 1.5 ? 1.5 : d);
         else if (k == "station_radius_auto") c.stationRadiusAuto = toBool(v);

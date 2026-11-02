@@ -97,6 +97,61 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend,
     }
 }
 
+int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& dropped, double cellNm, double aircraftLat, double aircraftLon,
+                   double stepM, double minDbz, int minNeighbours, int maxAdd) {
+    if (kept.size() < (size_t)minNeighbours || maxAdd <= 0) return 0;
+    int added = 0;
+    const double cosLat = std::max(0.2, std::cos(kept[0].lat * kPi / 180.0));
+    for (int pass = 0; pass < 2 && added < maxAdd; ++pass) {
+        struct Cand { double lat, lon; const RadarCell* src; };
+        std::vector<Cand> cands;
+        for (const auto& d : dropped) cands.push_back({d.lat, d.lon, &d});
+        for (const auto& k : kept)
+            for (int dj = -1; dj <= 1; ++dj)
+                for (int di = -1; di <= 1; ++di) {
+                    if (!dj && !di) continue;
+                    cands.push_back({k.lat + dj * cellNm / 60.0, k.lon + di * cellNm / 60.0 / std::max(0.2, std::cos(k.lat * kPi / 180.0)), nullptr});
+                }
+        std::vector<RadarCell> fresh;
+        for (const auto& c : cands) {
+            bool taken = false;
+            for (const auto& k : kept) if (distNm(c.lat, c.lon, k.lat, k.lon) < cellNm * 0.55) { taken = true; break; }
+            if (!taken) for (const auto& f : fresh) if (distNm(c.lat, c.lon, f.lat, f.lon) < cellNm * 0.55) { taken = true; break; }
+            if (taken) continue;
+            int n = 0; bool north = false, south = false, east = false, west = false;
+            double sDbz = 0, sFrac = 0, sTop = 0; int nTop = 0;
+            for (const auto& k : kept) {
+                const double d = distNm(c.lat, c.lon, k.lat, k.lon);
+                if (d > cellNm * 1.45) continue;
+                ++n; sDbz += k.dbz; sFrac += k.frac;
+                if (k.topM > 0) { sTop += k.topM; ++nTop; }
+                const double dy = (k.lat - c.lat) * 60.0, dx = (k.lon - c.lon) * 60.0 * cosLat;
+                if (dy > cellNm * 0.3) north = true;
+                if (dy < -cellNm * 0.3) south = true;
+                if (dx > cellNm * 0.3) east = true;
+                if (dx < -cellNm * 0.3) west = true;
+            }
+            if (n < minNeighbours || !(north && south && east && west)) continue;
+            RadarCell h;
+            h.lat = c.lat; h.lon = c.lon;
+            h.dbz = std::max((float)minDbz, std::round((float)(sDbz / n) / 5.0f) * 5.0f);
+            h.frac = std::max(0.25f, std::round((float)(sFrac / n) * 4.0f) / 4.0f);
+            h.topKnown = nTop > 0;
+            h.topM = nTop > 0 ? (float)(std::round(sTop / nTop / stepM) * stepM) : std::round(estimateTopM(h.dbz, h.lat) / (float)stepM) * (float)stepM;
+            h.rateMmH = rateFromDbz(h.dbz);
+            h.distNm = distNm(aircraftLat, aircraftLon, h.lat, h.lon);
+            if (c.src) h.key = c.src->key;
+            else { char kb[48]; std::snprintf(kb, sizeof kb, "H%ld:%ld", (long)std::lround(h.lat * 100.0), (long)std::lround(h.lon * 100.0)); h.key = kb; }
+            fresh.push_back(h);
+            if (added + (int)fresh.size() >= maxAdd) break;
+        }
+        if (fresh.empty()) break;
+        added += (int)fresh.size();
+        for (auto& f : fresh) kept.push_back(f);
+    }
+    return added;
+}
+
 void markStormEdges(std::vector<RadarCell>& cells, double cellNm) {
     const double reach = cellNm * 1.7;
     for (size_t i = 0; i < cells.size(); ++i) {
@@ -181,7 +236,9 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     std::set<std::string> prevKeys = prev ? *prev : std::set<std::string>();
     auto score = [&](const RadarCell& c) { return c.distNm - 2.0 * (c.dbz - 20.0) - (prevKeys.count(c.key) ? 25.0 : 0.0); };
     std::sort(all.begin(), all.end(), [&](const RadarCell& a, const RadarCell& b) { return score(a) < score(b); });
-    if ((int)all.size() > cfg.radarMaxCells) all.resize((size_t)cfg.radarMaxCells);
+    std::vector<RadarCell> droppedCells;
+    if ((int)all.size() > cfg.radarMaxCells) { droppedCells.assign(all.begin() + cfg.radarMaxCells, all.end()); all.resize((size_t)cfg.radarMaxCells); }
+    if (cfg.stormFillHoles) res.holesFilled = fillStormHoles(all, droppedCells, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, 5, std::max(4, cfg.radarMaxCells / 4));
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM);
     markStormEdges(all, cfg.radarCellNm);
     res.cells = std::move(all);

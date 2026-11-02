@@ -25,6 +25,11 @@ struct RadarCell {
 
 // Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
 // the neighbour mean + 2 km, and lone blocks to 8 km. Only ever lowers a top.
+// Interpolates cells into holes: positions enclosed on all four sides by kept cells (at least minNeighbours within ~1.4 cells)
+// that have no cell of their own. `dropped` are real blocks that lost out to the cell cap; their position and key are reused.
+// Returns how many cells were added (at most maxAdd); each takes the mean reflectivity, top and coverage of its neighbours.
+int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& dropped, double cellNm, double aircraftLat, double aircraftLon,
+                   double stepM, double minDbz, int minNeighbours, int maxAdd);
 void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend = 0.0, double stepM = 500.0);
 
 // Rim of a storm cluster: a block with few neighbouring blocks among the applied cells (the rim of a system, or the cut made by the cell
@@ -41,6 +46,7 @@ struct RadarResult {
     std::time_t dataTime = 0;  // when the radar mosaic was valid (0 = unknown)
     int echoBlocks = 0;        // blocks with echo before the cap
     bool topsFromRadar = false;
+    int holesFilled = 0;       // cells interpolated into enclosed holes
     std::vector<RadarCell> cells;
 };
 

@@ -51,6 +51,7 @@ struct Config {
     double stormTopStepM = 500;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
     double stormTopBlend = 0;        // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
     double stormTopVariationKnownM = 0; // fixed per-block height variation (m) added to MEASURED echo tops too (estimated tops always use storm_top_variation_m)
+    bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
     double radarCellNm = 12;      // block size one storm record represents
     int radarMaxCells = 60;       // cap on storm records handed to X-Plane
     double radarMinDbz = 20;      // ignore weaker echoes

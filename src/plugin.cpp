@@ -508,9 +508,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         if (res.radar.ok) {
             float maxDbz = 0, maxTop = 0; int cb = 0;
             for (const auto& c : res.radar.cells) { maxDbz = std::max(maxDbz, c.dbz); maxTop = std::max(maxTop, c.topM); if (c.dbz >= 40) ++cb; }
-            logf("radar: %s, %d echo blocks, %d cells applied (%d at 40+ dBZ = cumulonimbus), strongest %.0f dBZ, highest echo top %.0f m%s%s",
+            logf("radar: %s, %d echo blocks, %d cells applied (%d at 40+ dBZ = cumulonimbus), strongest %.0f dBZ, highest echo top %.0f m%s%s; %d hole(s) interpolated",
                  res.radar.source.c_str(), res.radar.echoBlocks, stormCount, cb, maxDbz, maxTop,
-                 res.radar.topsFromRadar ? ", echo tops from radar" : ", tops estimated", res.radar.note.empty() ? "" : (" (" + res.radar.note + ")").c_str());
+                 res.radar.topsFromRadar ? ", echo tops from radar" : ", tops estimated", res.radar.note.empty() ? "" : (" (" + res.radar.note + ")").c_str(), res.radar.holesFilled);
         }
         else if (g_radarDeferred)
             logf("radar: deferred, storms follow in about %d s", g_cfg.startupRadarDelayS);

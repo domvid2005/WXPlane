@@ -269,6 +269,33 @@ int main() {
         CHECK(r1[1].topM - r1[0].topM < 2000 && r1[0].topM > 8000 && r1[1].topM < 10000);   // the 2 km step is reduced
         CHECK(std::fmod(r1[0].topM, 250.0f) == 0 && std::fmod(r1[1].topM, 250.0f) == 0);
     }
+    // --- holes inside a storm are interpolated from the surrounding cells; edge notches and far-away gaps are not
+    {
+        std::vector<RadarCell> ring;
+        const double lat0 = 35.0, lon0 = -97.0, dl = 12.0 / 60.0, dn = dl / std::cos(lat0 * 3.14159265 / 180.0);
+        for (int j = -2; j <= 2; ++j)
+            for (int i = -2; i <= 2; ++i) {
+                if ((i == 0 && j == 0) || (i == 2 && j == 2)) continue;     // centre hole, and a missing corner (an edge notch)
+                RadarCell c; c.lat = lat0 + j * dl; c.lon = lon0 + i * dn; c.dbz = 50; c.frac = 1; c.topM = 11000; c.topKnown = true; c.rateMmH = 30;
+                char k[24]; std::snprintf(k, sizeof k, "R%d:%d", j + 9, i + 9); c.key = k;
+                ring.push_back(c);
+            }
+        std::vector<RadarCell> none;
+        const size_t before = ring.size();
+        int n = fillStormHoles(ring, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 10);
+        CHECK(n == 1 && ring.size() == before + 1);
+        const RadarCell& h = ring.back();
+        CHECK(std::fabs(h.lat - lat0) < 0.01 && std::fabs(h.lon - lon0) < 0.01 && h.dbz == 50 && h.topM == 11000 && h.topKnown && !h.key.empty());
+        // a hole that only the cap removed keeps its own key
+        std::vector<RadarCell> ring2;
+        for (const auto& c : ring) if (!(std::fabs(c.lat - lat0) < 0.01 && std::fabs(c.lon - lon0) < 0.01)) ring2.push_back(c);
+        std::vector<RadarCell> drop(1); drop[0].lat = lat0; drop[0].lon = lon0; drop[0].dbz = 25; drop[0].key = "R9:9"; drop[0].topM = 5000;
+        CHECK(fillStormHoles(ring2, drop, 12.0, lat0, lon0, 500.0, 20.0, 5, 10) == 1 && ring2.back().key == "R9:9" && ring2.back().dbz == 50);
+        // the budget is respected, and a lone pair of cells has no holes
+        std::vector<RadarCell> r3 = ring; std::vector<RadarCell> r4(2); r4[1].lat = 35.2;
+        CHECK(fillStormHoles(r3, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 0) == 0);
+        CHECK(fillStormHoles(r4, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 10) == 0);
+    }
     // --- mist with a low ceiling: the ceiling stays where it is reported and all three decks are kept
     {
         Station st; st.elevM = 132;
