@@ -236,10 +236,20 @@ bool tilesToField(const std::vector<TileImage>& tiles, const GribWindow& win, Gr
 
 // ---------------------------------------------------------------------------------------------------------
 
+// Deterministic -1..+1 value from a cell key: the same block gets the same value in every update, so nothing is resent because of it.
+static float keyJitter(const std::string& key) {
+    unsigned h = 2166136261u;
+    for (char ch : key) { h ^= (unsigned char)ch; h *= 16777619u; }
+    h ^= h >> 15; h *= 0x2c1b3c6du; h ^= h >> 12;
+    return (float)(h % 2001u) / 1000.0f - 1.0f;
+}
+
 float stormTopM(const RadarCell& c, const Config&, float baseM) {
     // The radar echo top (or, without echo-top data, an estimate from reflectivity), capped at the tropopause + 2.5 km.
     const float limit = tropopauseKm(c.lat) * 1000.0f + 2500.0f;
-    float topM = std::min(c.topM > 0 ? c.topM : estimateTopM(c.dbz, c.lat), limit);
+    float raw = c.topM > 0 ? c.topM : estimateTopM(c.dbz, c.lat);
+    if (c.topKnown && !c.key.empty()) raw += keyJitter(c.key) * 250.0f;   // half the 500 m echo-top step: breaks up identical neighbouring tops (flat plateaus)
+    float topM = std::min(raw, limit);
     if (topM < baseM + 1500.0f) topM = baseM + 1500.0f;
     return topM;
 }
@@ -277,6 +287,10 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     cl.type = (dbz >= 30.0f || (c.topKnown && c.topM > 6000.0f)) ? 3.0f : 2.0f;
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
+    // A 10 km tall layer at 95% coverage is a solid wall whose flank X-Plane renders as vertical curtains. Thick layers get up to 15% less
+    // coverage (the rain placement is untouched), and each block varies a little around that, so neighbouring blocks do not repeat.
+    cl.coverage *= 1.0f - 0.15f * clampf((topM - baseM - 5000.0f) / 7000.0f, 0.0f, 1.0f);
+    if (!c.key.empty()) cl.coverage = clampf(cl.coverage * (1.0f + 0.05f * keyJitter(c.key + "c")), 0.05f, (float)cfg.stormCoverageMax);
     // A storm inside a solid deck must not thin it: X-Plane blends coverage slot by slot, so a 58% storm over a 94% overcast punched a
     // sinuous hole-edged contour through the sheet (KFYV log). The station's own coverage is the floor.
     cl.coverage = std::max(cl.coverage, replacedCov);
