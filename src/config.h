@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 19;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 20;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -16,7 +16,7 @@ struct Config {
     bool regenWeatherOnStart = true;  // before the first load is applied, run X-Plane's own 'regenerate weather' command so none of its previous clouds are left
     double radarMinutes = 5;         // storm radar (MRMS publishes every ~2 min) is refetched this often, on its own
     bool stormSmoothTops = true;  // tame lone tall echo tops that render as thin spikes
-    int updateMinutes = 30;       // periodic refresh
+    int updateMinutes = 5;        // periodic refresh
     double searchNm = 120;        // METARs are fetched within this distance of the aircraft
     int maxStations = 40;         // nearest N stations are applied
     double radiusNm = 30;         // influence radius of each report

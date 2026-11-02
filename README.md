@@ -1,6 +1,6 @@
 # WXPlane for X-Plane 12
 
-Replaces X-Plane 12's flawed weather with live **NOAA** data, refreshed every **30 minutes** by default (`update_minutes`) and whenever you fly 40 nm:
+Replaces X-Plane 12's flawed weather with live **NOAA** data, refreshed every **5 minutes** by default (`update_minutes`) and whenever you fly 40 nm:
 
 * **METARs** from NOAA's Aviation Weather Center (surface wind, visibility, fog, clouds, precipitation, temperature, pressure)
 * **ATIS** (D-ATIS) merged over the METAR for airports near you
@@ -29,7 +29,7 @@ Settings are saved to `Output/preferences/WXPlane.cfg`.
 
 ## How it works
 
-1. Every `update_minutes` (30; or when you move 40 nm from the last download point) a background thread asks NOAA for all METARs within 120 nm **of the aircraft**, so the data follows you along your route. The sim is never blocked by the network.
+1. Every `update_minutes` (5; or when you move 40 nm from the last download point) a background thread asks NOAA for all METARs within 120 nm **of the aircraft**, so the data follows you along your route. The sim is never blocked by the network.
 2. The nearest 40 reports are applied with `XPLMSetWeatherAtAirport` (replacing the sim's own METAR for that airport) or `XPLMSetWeatherAtLocation`. Only changed stations are re-sent and stations that left range are erased, so stale stations never linger.
 3. If an ATIS exists for one of the 2 nearest airports within 35 nm, its values override that airport's METAR values.
 4. **Winds/temps aloft:** NOAA FD winds (3,000–39,000 ft, ~175 US stations plus Alaska/Hawaii) are downloaded every 30 minutes. For each weather report, the 4 nearest FD stations are blended by inverse-distance-squared on the wind *vectors* (so opposing winds cancel instead of averaging compass numbers). The report then carries a surface wind layer plus the aloft layers, and a temperature profile anchored to the airport's own METAR temperature. The highest NOAA wind is held up to FL600 so the sim's own winds never take over above FL390. X-Plane interpolates between reports and layers.
@@ -68,7 +68,7 @@ No compiler? Push this folder to a GitHub repo; `.github/workflows/build.yml` bu
 
 ## Config keys (`WXPlane.cfg`)
 
-`update_minutes` (30), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
+`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
 
 Advanced settings (start-up gating, `transition_s`, `update_transition_s`, `apply_per_tick`, `first_load_immediate`, station and gap-fill record radii, `low_cloud_type`, storm top handling, `rough_min_coverage`) are no longer written to `WXPlane.cfg`. They keep their built-in defaults; a line added by hand is still read.
 
@@ -88,7 +88,7 @@ X-Plane blends cloud layers between neighbouring reports slot by slot. When any 
 
 X-Plane's weather API cannot take a radar image, so WXPlane builds the storms from radar data instead. The aircraft's weather radar draws what the sim simulates, so if the sim's storms match the real ones, the radar picture does too.
 
-Every update (`update_minutes`, 30 by default) a background thread downloads:
+Every update (`update_minutes`, 5 by default) a background thread downloads:
 
 * **MergedReflectivityQCComposite** from NOAA's MRMS system (`mrms.ncep.noaa.gov`), a quality-controlled mosaic of the whole US radar network at about 1 km, valid within a couple of minutes.
 * **EchoTop_18**, the height in km MSL of the 18 dBZ echo, used as the storm top.
@@ -118,7 +118,7 @@ No free global radar data feed offers raw values. With `radar_global = 1` WXPlan
 
 | Data | Source | Requests | When |
 |---|---|---|---|
-| METARs | NOAA AWC | 1 (bounding box) | every `update_minutes` (30) |
+| METARs | NOAA AWC | 1 (bounding box) | every `update_minutes` (5) |
 | ATIS | D-ATIS | 1 per airport, at most `atis_max_airports` (2) within `atis_range_nm` | every update; airports with no ATIS are skipped for 1 hour |
 | Winds/temps aloft | NOAA AWC FD winds | 2 (low + high), plus a one-off coordinate lookup | re-downloaded at most every 30 minutes, cached otherwise; coordinates cached for 6 hours |
 | Radar | NOAA MRMS | 2 files (reflectivity + echo tops, a few MB each) | every update |
@@ -217,7 +217,7 @@ Cloud layers at one station never overlap vertically: every top stays at least 1
 
 ## Radar every 5 minutes, and storm spikes
 
-* **Radar refresh:** NOAA's MRMS mosaic is republished about every 2 minutes, so the storm radar is now refetched on its own every `radar_minutes` (5; minimum 0.1 for testing). A radar refresh downloads only the MRMS grids, keeps the stations and winds aloft from the last full update, and sends X-Plane only the storm records that changed (plus erases storms that ended). It is applied without the "immediate" flag, so X-Plane fades the change in over its usual 1-2 minutes. METARs, ATIS and winds aloft still refresh every `update_minutes` (30).
+* **Radar refresh:** NOAA's MRMS mosaic is republished about every 2 minutes, so the storm radar is now refetched on its own every `radar_minutes` (5; minimum 0.1 for testing). A radar refresh downloads only the MRMS grids, keeps the stations and winds aloft from the last full update, and sends X-Plane only the storm records that changed (plus erases storms that ended). It is applied without the "immediate" flag, so X-Plane fades the change in over its usual 1-2 minutes. METARs, ATIS and winds aloft still refresh every `update_minutes` (5).
 * **Spikes:** a radar block whose echo top is far above its neighbours (or that has no neighbours) rendered as a thin tower. With `storm_smooth_tops = 1` each measured top is limited to the mean of the neighbouring blocks' tops plus 2 km, and a lone block to 8 km. Tops are only ever lowered, and the map's FL labels use the same smoothed values. Set `storm_smooth_tops = 0` for the raw radar tops.
 
 ## Cloud look: smooth curtains vs billowy

@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <cmath>
 #include <string>
 #include <thread>
@@ -137,16 +138,16 @@ static int g_netRequests = 0, g_fdRequests = 0;
 static std::vector<std::string> g_urls;
 static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
 static std::string readFile(const char* p) { FILE* f = std::fopen(p, "rb"); std::string r; if (!f) return r; char b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) r.append(b, n); std::fclose(f); return r; }
-static const char* kAwc =
-    "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT 301553Z 00000KT 1/4SM FG VV001 08/08 A3010 RMK AO2\"},"
-    "{\"icaoId\":\"KEWK\",\"lat\":38.06,\"lon\":-97.28,\"elev\":467,\"rawOb\":\"KEWK 301555Z 27014G24KT 10SM SCT060 BKN110 14/05 A3005\"},"
-    "{\"icaoId\":\"KSLN\",\"lat\":38.79,\"lon\":-97.65,\"elev\":389,\"rawOb\":\"KSLN 301553Z 24012KT 6SM -RA BR OVC009 10/09 A3003\"},"
-    "{\"icaoId\":\"KFAKE\",\"lat\":37.2,\"lon\":-97.1,\"elev\":300,\"rawOb\":\"KFAKE 301500Z 18008KT CAVOK 15/05 Q1015\"},"
-    "{\"icaoId\":\"KOLD\",\"lat\":37.9,\"lon\":-97.9,\"elev\":300,\"rawOb\":\"KOLD 290900Z 18008KT 10SM CLR 15/05 A3000\"}]";
-static const char* kAwcNoSln =
-    "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT 301553Z 00000KT 1/4SM FG VV001 08/08 A3010 RMK AO2\"},"
-    "{\"icaoId\":\"KEWK\",\"lat\":38.06,\"lon\":-97.28,\"elev\":467,\"rawOb\":\"KEWK 301555Z 27014G24KT 10SM SCT060 BKN110 14/05 A3005\"},"
-    "{\"icaoId\":\"KFAKE\",\"lat\":37.2,\"lon\":-97.1,\"elev\":300,\"rawOb\":\"KFAKE 301500Z 18008KT CAVOK 15/05 Q1015\"}]";
+static const char* kAwcT =
+    "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT @A@ 00000KT 1/4SM FG VV001 08/08 A3010 RMK AO2\"},"
+    "{\"icaoId\":\"KEWK\",\"lat\":38.06,\"lon\":-97.28,\"elev\":467,\"rawOb\":\"KEWK @B@ 27014G24KT 10SM SCT060 BKN110 14/05 A3005\"},"
+    "{\"icaoId\":\"KSLN\",\"lat\":38.79,\"lon\":-97.65,\"elev\":389,\"rawOb\":\"KSLN @A@ 24012KT 6SM -RA BR OVC009 10/09 A3003\"},"
+    "{\"icaoId\":\"KFAKE\",\"lat\":37.2,\"lon\":-97.1,\"elev\":300,\"rawOb\":\"KFAKE @C@ 18008KT CAVOK 15/05 Q1015\"},"
+    "{\"icaoId\":\"KOLD\",\"lat\":37.9,\"lon\":-97.9,\"elev\":300,\"rawOb\":\"KOLD @OLD@ 18008KT 10SM CLR 15/05 A3000\"}]";
+static const char* kAwcNoSlnT =
+    "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT @A@ 00000KT 1/4SM FG VV001 08/08 A3010 RMK AO2\"},"
+    "{\"icaoId\":\"KEWK\",\"lat\":38.06,\"lon\":-97.28,\"elev\":467,\"rawOb\":\"KEWK @B@ 27014G24KT 10SM SCT060 BKN110 14/05 A3005\"},"
+    "{\"icaoId\":\"KFAKE\",\"lat\":37.2,\"lon\":-97.1,\"elev\":300,\"rawOb\":\"KFAKE @C@ 18008KT CAVOK 15/05 Q1015\"}]";
 static bool g_dropSln = false;
 static const char* kFdLow =
     "DATA BASED ON 301200Z\nVALID 301800Z   FOR USE 1400-2100Z. TEMPS NEG ABV 24000\n\n"
@@ -155,9 +156,36 @@ static const char* kFdLow =
     "SLN 2518    2722+10 2830+05 2935-01 3040-17 3150-31\n"
     "FAR 3010    3015+02 3020-02 3025-08 3035-20 3045-33\n";
 static const char* kFdHigh = "FT  30000  34000  39000\nICT 305945 305552 305157\nSLN 306250 306056 305561\nFAR 307055 307262 307468\n";
-static const char* kFdIds =
-    "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT 301553Z 00000KT 1/4SM FG VV001 08/08 A3010\"},"
-    "{\"icaoId\":\"KSLN\",\"lat\":38.79,\"lon\":-97.65,\"elev\":389,\"rawOb\":\"KSLN 301553Z 24012KT 6SM OVC009 10/09 A3003\"}]";
+static const char* kFdIdsT =
+    "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT @A@ 00000KT 1/4SM FG VV001 08/08 A3010\"},"
+    "{\"icaoId\":\"KSLN\",\"lat\":38.79,\"lon\":-97.65,\"elev\":389,\"rawOb\":\"KSLN @A@ 24012KT 6SM OVC009 10/09 A3003\"}]";
+// The mock reports carry timestamps built from the real clock when the harness starts, so the tests never go stale: the current
+// reports are 1-2.5 hours old, KOLD is 45 hours old (older than the 40 h limit in the test configs and so must be dropped).
+static std::string g_stampA;   // the timestamp used for KICT, kept so the checks can look for it
+static std::string utcStamp(int minutesAgo) {
+    std::time_t t = std::time(nullptr) - (std::time_t)minutesAgo * 60;
+    std::tm tmv;
+    gmtime_r(&t, &tmv);
+    char b[16];
+    std::snprintf(b, sizeof b, "%02d%02d%02dZ", tmv.tm_mday, tmv.tm_hour, tmv.tm_min);
+    return b;
+}
+static std::string stamped(const char* tpl) {
+    std::string s = tpl;
+    const std::pair<const char*, int> subs[] = {{"@A@", 90}, {"@B@", 88}, {"@C@", 150}, {"@OLD@", 45 * 60}};
+    for (const auto& p : subs) {
+        const std::string key = p.first, val = key == "@A@" ? g_stampA : utcStamp(p.second);
+        for (size_t at = s.find(key); at != std::string::npos; at = s.find(key, at + val.size())) s.replace(at, key.size(), val);
+    }
+    return s;
+}
+static std::string g_awcS, g_awcNoSlnS, g_idsS;
+static const char *kAwc = nullptr, *kAwcNoSln = nullptr, *kFdIds = nullptr;
+static void initMockTimes() {
+    g_stampA = utcStamp(90);
+    g_awcS = stamped(kAwcT); g_awcNoSlnS = stamped(kAwcNoSlnT); g_idsS = stamped(kFdIdsT);
+    kAwc = g_awcS.c_str(); kAwcNoSln = g_awcNoSlnS.c_str(); kFdIds = g_idsS.c_str();
+}
 static const char* kDatis = "[{\"airport\":\"KICT\",\"type\":\"combined\",\"code\":\"D\",\"datis\":\"KICT ATIS INFO D 1550Z. 00000KT 1/4SM FG VV001 08/08 A3011 (THREE ZERO ONE ONE). LANDING RWY 1R.\"}]";
 CURLcode curl_global_init(long) { return 0; }
 void curl_global_cleanup(void) {}
@@ -229,7 +257,7 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 // HARNESS_RAMP=1: the first load is released evenly over transition_s instead of in one burst.
 static int runRamp() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 20\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
     XPluginStart(n, s, d);
@@ -256,7 +284,7 @@ static int runRamp() {
 // HARNESS_STAGED=1: the first update has no radar; storms follow startup_radar_delay_s later.
 static int runStaged() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 20\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -284,7 +312,7 @@ static int runStaged() {
 // HARNESS_ONESHOT=1: with default settings, the first load is ONE weather update containing every record.
 static int runOneShot() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 20\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -306,7 +334,7 @@ static int runOneShot() {
 // HARNESS_BUMPS=1: rough-top records scattered over the overcast: billowy, base inside the deck, tops at different heights.
 static int runBumps() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 19\nmax_age_hours = 40\nradar = 0\nfill_gaps = 0\nuse_aloft = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\nregen_weather_on_start = 0\ntop_bumps = 1\nbump_count = 8\nrough_min_coverage = 0.85\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 20\nmax_age_hours = 40\nradar = 0\nfill_gaps = 0\nuse_aloft = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\nregen_weather_on_start = 0\ntop_bumps = 1\nbump_count = 8\nrough_min_coverage = 0.85\n", f); std::fclose(f); }
     g_agl = 0.0f; g_lat = 38.79; g_lon = -97.65;
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
@@ -346,11 +374,12 @@ static int runBumps() {
 }
 
 int main() {
+    initMockTimes();
     if (std::getenv("HARNESS_BUMPS")) { return runBumps(); }
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 19\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 20\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
@@ -366,7 +395,7 @@ int main() {
     std::printf("[1] first load: aircraft at FL370 (%.2f, %.2f)\n", g_lat, g_lon);
     CHECK(pump(4, 9000));
     CHECK(g_lastIncr == 1 && g_lastImm == 1);   // the start-up update skips X-Plane's slow fade-in                // gradual, no forced rebuild
-    CHECK(g_calls.size() == 4);               // KOLD (29th, 33 h old) dropped
+    CHECK(g_calls.size() == 4);               // KOLD (45 h old) dropped
     // nearest first: KICT, then KEWK/KFAKE...
     const Call* kict = nullptr; const Call* fake = nullptr;
     for (auto& c : g_calls) { if (c.where == "KICT") kict = &c; if (c.where == "loc") fake = &c; }
@@ -471,7 +500,7 @@ int main() {
         g_drawn.clear();
         g_drawCb((void*)99, nullptr);
         CHECK(g_drawn.find("KICT") != std::string::npos);
-        CHECK(g_drawn.find("METAR  KICT 301553Z 00000KT 1/4SM FG VV001") != std::string::npos);
+        CHECK(g_drawn.find("METAR  KICT " + g_stampA + " 00000KT 1/4SM FG VV001") != std::string::npos);
         CHECK(g_drawn.find("ATIS INFO D") != std::string::npos);
         CHECK(g_drawn.find("FOG") != std::string::npos);                 // "Applied" line mentions the fog layer
         CHECK(g_drawn.find("winds/temps aloft") != std::string::npos);
