@@ -47,6 +47,10 @@ struct Config {
     bool radar = true;            // turn radar echoes into storm cells
     bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
     double radarRangeNm = 150;    // storms within this distance of the aircraft
+    double stormRadiusFactor = 0.9;  // storm record radius = this x radar cell size (min 6 nm); above ~1.0 neighbouring storm cells overlap more and blend their edges
+    double stormTopStepM = 500;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
+    double stormTopBlend = 0;        // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
+    double stormTopVariationKnownM = 0; // fixed per-block height variation (m) added to MEASURED echo tops too (estimated tops always use storm_top_variation_m)
     double radarCellNm = 12;      // block size one storm record represents
     int radarMaxCells = 60;       // cap on storm records handed to X-Plane
     double radarMinDbz = 20;      // ignore weaker echoes

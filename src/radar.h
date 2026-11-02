@@ -25,7 +25,7 @@ struct RadarCell {
 
 // Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
 // the neighbour mean + 2 km, and lone blocks to 8 km. Only ever lowers a top.
-void smoothStormTops(std::vector<RadarCell>& cells, double cellNm);
+void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend = 0.0, double stepM = 500.0);
 
 // Rim of a storm cluster: a block with few neighbouring blocks among the applied cells (the rim of a system, or the cut made by the cell
 // limit) gets edge up to 1. A storm record stops sharply at its circle, so a full-depth block at the rim shows up as a cliff against the

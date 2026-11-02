@@ -259,6 +259,16 @@ int main() {
         CHECK(v[3].topM <= 12500 && v[3].topM > 10000);
         CHECK(v[4].topM == 8000);
     }
+    // --- optional storm-top smoothing: a blend pulls neighbouring tops together; 0 leaves ordinary clusters exactly as before
+    {
+        auto row = [](float a, float b) { std::vector<RadarCell> v(2); v[0].lat = 35.0; v[0].lon = -97.0; v[0].topM = a; v[1].lat = 35.0; v[1].lon = -96.8; v[1].topM = b; return v; };
+        auto r0 = row(8000, 10000), r1 = row(8000, 10000);
+        smoothStormTops(r0, 12.0, 0.0, 500.0);
+        smoothStormTops(r1, 12.0, 0.4, 250.0);
+        CHECK(r0[0].topM == 8000 && r0[1].topM == 10000);          // blend 0 = unchanged
+        CHECK(r1[1].topM - r1[0].topM < 2000 && r1[0].topM > 8000 && r1[1].topM < 10000);   // the 2 km step is reduced
+        CHECK(std::fmod(r1[0].topM, 250.0f) == 0 && std::fmod(r1[1].topM, 250.0f) == 0);
+    }
     // --- mist with a low ceiling: the ceiling stays where it is reported and all three decks are kept
     {
         Station st; st.elevM = 132;
@@ -377,6 +387,22 @@ int main() {
                 differs = differs || va.cells[i].topM != vf.cells[i].topM;
             }
             CHECK(same && bounded && differs);
+        }
+        {   // measured tops: a finer step gives non-500 m heights; variation for measured tops is opt-in, stable and bounded
+            Config sc = rc; sc.radarMaxCells = 100; sc.stormSmoothTops = false;
+            Config fine = sc; fine.stormTopStepM = 100;
+            Config jit = sc; jit.stormTopVariationKnownM = 400; jit.stormTopStepM = 100;
+            Config base100 = sc; base100.stormTopStepM = 100;
+            RadarResult b0 = buildRadarCells(refl, &tops, 38.0, -98.0, base100), b1 = buildRadarCells(refl, &tops, 38.0, -98.0, fine);
+            RadarResult j1 = buildRadarCells(refl, &tops, 38.0, -98.0, jit), j2 = buildRadarCells(refl, &tops, 38.0, -98.0, jit);
+            bool okStep = !b1.cells.empty(), okJit = b0.cells.size() == j1.cells.size() && j1.cells.size() == j2.cells.size(), anyDiff = false;
+            for (auto& c : b1.cells) okStep = okStep && std::fmod(c.topM, 100.0f) == 0;
+            for (size_t i = 0; okJit && i < j1.cells.size(); ++i) {
+                okJit = okJit && j1.cells[i].topM == j2.cells[i].topM && std::fabs(j1.cells[i].topM - b0.cells[i].topM) <= 450.0f;
+                anyDiff = anyDiff || j1.cells[i].topM != b0.cells[i].topM;
+            }
+            std::printf("  known-top test: step %d jitter %d diff %d (cells %zu/%zu)\n", (int)okStep, (int)okJit, (int)anyDiff, b1.cells.size(), j1.cells.size());
+            CHECK(okStep && okJit && anyDiff);
         }
         rc.radarMaxCells = 100; rc.radarRangeNm = 20; RadarResult rr4 = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
         CHECK(rr4.cells.size() < rr.cells.size());                   // range limit applies

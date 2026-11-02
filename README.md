@@ -269,3 +269,14 @@ A radar storm record stops sharply at its circle, so a full-height block at the 
 ## Menu refreshes
 
 Refresh Weather and the menu toggles are coalesced: at most one download per 60 s (`manual_refresh_gap_s`, advanced key). Turning radar on fetches only the radar and fades it in; stations and winds are kept. The log line after each update says `[fade-in]` or `[immediate: sim pauses while X-Plane rebuilds]`.
+
+`storm_radius_factor` (advanced key, default 0.9, 0.6-2.0): storm record radius as a multiple of the radar cell size. Raise it (1.2-1.5) to make neighbouring storm cells overlap more; X-Plane then blends their edges instead of showing square steps. Untested in the sim.
+
+## Storm shape tuning (advanced keys, all defaults keep the old behaviour)
+
+- `radar_cell_nm` / `radar_max_cells`: smaller blocks follow the storm outline more closely (8 nm and 100 cells is a reasonable test; more records = more load).
+- `storm_top_step_m` (default 500): tops are rounded to this step; 100-250 removes the terraces between neighbouring cells.
+- `storm_top_blend` (default 0, max 0.8): with `storm_smooth_tops` on, pulls each top toward the distance-weighted mean of its neighbours (0.3-0.5 rounds the steps; spikes are still clipped first).
+- `storm_top_variation_known_m` (default 0): a fixed per-block height variation for measured echo tops too (estimated tops use `storm_top_variation_m`).
+
+None of these has been checked against X-Plane's renderer yet. Compare one at a time.

@@ -59,7 +59,7 @@ std::string mrmsUrl(const std::string& region, const std::string& product) {
     return u + product + "/MRMS_" + product + ".latest.grib2.gz";
 }
 
-void smoothStormTops(std::vector<RadarCell>& cells, double cellNm) {
+void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend, double stepM) {
     std::vector<float> orig(cells.size());
     for (size_t i = 0; i < cells.size(); ++i) orig[i] = cells[i].topM;
     const double reach = cellNm * 1.7;
@@ -73,6 +73,27 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm) {
         }
         float cap = n == 0 ? 8000.0f : (float)(sum / n) + 2000.0f;
         if (cells[i].topM > cap) cells[i].topM = std::max(1500.0f, std::round(cap / 500.0f) * 500.0f);
+    }
+    // optional real smoothing: pull each top toward the distance-weighted mean of its neighbours (rounds the steps between cells)
+    if (blend > 0.0 && stepM > 0.0) {
+        std::vector<float> clipped(cells.size());
+        for (size_t i = 0; i < cells.size(); ++i) clipped[i] = cells[i].topM;
+        const double sigma = cellNm * 0.9;
+        for (size_t i = 0; i < cells.size(); ++i) {
+            if (!(clipped[i] > 0)) continue;
+            double sum = 0, ws = 0;
+            for (size_t j = 0; j < cells.size(); ++j) {
+                if (j == i || !(clipped[j] > 0)) continue;
+                const double d = distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon);
+                if (d > reach) continue;
+                const double w = std::exp(-(d * d) / (2.0 * sigma * sigma));
+                sum += clipped[j] * w; ws += w;
+            }
+            if (ws <= 0) continue;
+            const float mean = (float)(sum / ws);
+            const float t = (float)((1.0 - blend) * clipped[i] + blend * mean);
+            cells[i].topM = std::max(1500.0f, (float)(std::round(t / stepM) * stepM));
+        }
     }
 }
 
@@ -135,8 +156,10 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         double pxPerBlock = (blockLat / refl.dLat) * (a.step / refl.dLon);
         c.frac = std::max(0.25f, std::round(clampf((float)(a.n / std::max(1.0, pxPerBlock)), 0.0f, 1.0f) * 4.0f) / 4.0f);
         c.topKnown = a.top > 0;
-        c.topM = c.topKnown ? std::round(a.top * 2.0f) * 500.0f : std::round(estimateTopM(c.dbz, c.lat) / 500.0f) * 500.0f;
-        if (!c.topKnown && cfg.stormTopVariationM > 0) {
+        const float step = (float)std::max(50.0, cfg.stormTopStepM);
+        c.topM = c.topKnown ? std::round(a.top * 1000.0f / step) * step : std::round(estimateTopM(c.dbz, c.lat) / step) * step;
+        if ((!c.topKnown && cfg.stormTopVariationM > 0) || (c.topKnown && cfg.stormTopVariationKnownM > 0)) {
+            const double amp = c.topKnown ? cfg.stormTopVariationKnownM : cfg.stormTopVariationM;
             // one estimate per intensity makes every such storm the same height (a flat plateau with straight walls): vary each
             // block by a fixed amount derived from its key, so the height does not change from one update to the next
             char hk[48];
@@ -144,7 +167,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
             unsigned h = 2166136261u;
             for (const char* q = hk; *q; ++q) { h ^= (unsigned char)*q; h *= 16777619u; }
             const double v = (double)(h % 2001u) / 1000.0 - 1.0;   // -1 .. +1
-            c.topM = std::max(3000.0f, std::round((c.topM + (float)(v * cfg.stormTopVariationM)) / 500.0f) * 500.0f);
+            c.topM = std::max(3000.0f, std::round((c.topM + (float)(v * amp)) / step) * step);
         }
         c.rateMmH = rateFromDbz(c.dbz);
         c.distNm = distNm(lat, lon, c.lat, c.lon);
@@ -159,7 +182,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     auto score = [&](const RadarCell& c) { return c.distNm - 2.0 * (c.dbz - 20.0) - (prevKeys.count(c.key) ? 25.0 : 0.0); };
     std::sort(all.begin(), all.end(), [&](const RadarCell& a, const RadarCell& b) { return score(a) < score(b); });
     if ((int)all.size() > cfg.radarMaxCells) all.resize((size_t)cfg.radarMaxCells);
-    if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm);
+    if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM);
     markStormEdges(all, cfg.radarCellNm);
     res.cells = std::move(all);
     res.ok = true;

@@ -465,7 +465,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             valFixes += wx::validateXp(x, true, &valNote);   // storms may overlap the station's layers on purpose; only sanity-checked
             XPLMWeatherInfo_t info;
             fillInfo(info, x);
-            info.radius_nm = (float)std::max(6.0, g_cfg.radarCellNm * 0.9);
+            info.radius_nm = (float)std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor);
             Rec r;
             r.airport = false;
             r.lat = c.lat; r.lon = c.lon; r.elev = nearest->elevM;
