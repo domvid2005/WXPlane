@@ -330,7 +330,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 // Experimental, conservative: a bump record is a weather SAMPLE that X-Plane blends with its neighbours slot by slot, so it keeps
                 // the parent layer's slot, type, coverage and base exactly and differs only in the top: at most 20% of the deck thickness
                 // higher, never into the layer above. (Earlier builds also changed type, coverage and base, which blended into walls.)
-                const float rise = std::min({(float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), 0.2f * thick, std::max(0.0f, ceilM - L.alt_top - 120.0f)});
+                const float rise = std::min({(float)g_cfg.bumpHeightM * (0.25f + 0.75f * ((h2 / 1000) % 1000) / 1000.0f), 0.2f * thick, std::max(0.0f, ceilM - L.alt_top - 120.0f), std::max(0.0f, wx::xpMaxThicknessM(L.cloud_type) - thick), std::max(0.0f, wx::kXpTopM - L.alt_top)});
                 if (thick < 120.0f || rise < 20.0f) continue;   // too thin to carry a bump: leave this layer as the parent has it
                 L.alt_top = L.alt_top + rise;
                 e.info.max_altitude_msl_ft = std::max(e.info.max_altitude_msl_ft, L.alt_top / 0.3048f);   // the record's ceiling must cover its own top

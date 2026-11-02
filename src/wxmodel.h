@@ -68,6 +68,14 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
 // order or overlapping (unless allowOverlap: radar storm records deliberately run through the station's own layers), and a record whose
 // maximum altitude lies below its highest cloud top. Deep convection and layered frontal decks are untouched. Returns the number of
 // adjustments; the first one is described in *note (if given).
+// Highest cloud top: 45000 ft. Seen as ch=45000.00 in two separate D/RWX weather-state dumps of the sim's own state.
+constexpr float kXpTopM = 13716.0f;
+constexpr float kXpMaxTopM = 13716.0f;   // X-Plane's manual weather limits only tops (45,000 ft, every cloud type) and thickness; bases may be anywhere down to 0 ft MSL
+// Largest thickness X-Plane's manual weather screen allows per cloud type (read off its Weather Settings with the top at 45000 ft:
+// cirrus 43,200-45,000 ft, stratus 40,080-45,000 ft, cumulus 28,320-45,000 ft; cumulonimbus has no thickness limit, base 0 to top 45,000 ft).
+// A stratus layer in X-Plane's own state dump is exactly 4920 ft thick too. Cloud type is rounded to the nearest of 0..3.
+constexpr float kXpMaxThickM[4] = {1800.0f * 0.3048f, 4920.0f * 0.3048f, 16680.0f * 0.3048f, 1e9f};
+inline float xpMaxThicknessM(float cloudType) { int t = (int)(cloudType + 0.5f); return kXpMaxThickM[t < 0 ? 0 : (t > 3 ? 3 : t)]; }
 int validateXp(XpWx& x, bool allowOverlap, std::string* note = nullptr);
 
 // True if this station's report calls for a fog layer under the given config.

@@ -242,6 +242,13 @@ int validateXp(XpWx& x, bool allowOverlap, std::string* note) {
         else if (c.topM - c.baseM < 30.0f) { c.topM = c.baseM + 30.0f; say("layer thinner than 30 m", i); }
         else if (c.topM - c.baseM > 16000.0f) { c.topM = c.baseM + 16000.0f; say("layer thicker than 16 km", i); }
     }
+    for (int i = 0; i < 3; ++i) {   // the sim's own limits: the top (45,000 ft) and the maximum thickness of each cloud type
+        XpCloud& c = x.clouds[i];
+        if (!(c.coverage > 0)) continue;
+        if (c.topM > kXpMaxTopM) { c.topM = std::max(kXpMaxTopM, c.baseM + 30.0f); say("cloud top above 45000 ft", i); }   // every type: the manual weather screen stops tops at 45,000 ft
+        const float maxThick = xpMaxThicknessM(c.type);
+        if (c.topM - c.baseM > maxThick) { c.topM = c.baseM + maxThick; say("layer thicker than X-Plane allows for its cloud type", i); }
+    }
     if (!allowOverlap) {
         // vertical order of the non-empty layers (slot 0 may be an empty fog slot)
         int prev = -1;

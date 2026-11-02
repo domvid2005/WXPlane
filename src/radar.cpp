@@ -238,7 +238,8 @@ bool tilesToField(const std::vector<TileImage>& tiles, const GribWindow& win, Gr
 
 float stormTopM(const RadarCell& c, const Config&, float baseM) {
     // The radar echo top (or, without echo-top data, an estimate from reflectivity), capped at the tropopause + 2.5 km.
-    const float limit = tropopauseKm(c.lat) * 1000.0f + 2500.0f;
+    // X-Plane's own weather state (the D/RWX dumps in Log.txt) shows cumulonimbus tops of exactly 45000.00 ft, so that is the sim's ceiling.
+    const float limit = std::min(tropopauseKm(c.lat) * 1000.0f + 2500.0f, kXpTopM);
     float topM = std::min(c.topM > 0 ? c.topM : estimateTopM(c.dbz, c.lat), limit);
     if (topM < baseM + 1500.0f) topM = baseM + 1500.0f;
     return topM;

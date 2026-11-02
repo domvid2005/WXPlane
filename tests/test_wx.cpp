@@ -569,6 +569,26 @@ int main() {
         XpWx ov; ov.clouds[1] = mk(0.7f, 1000, 2000); ov.clouds[2] = mk(0.7f, 1500, 2500);   // overlapping layers
         CHECK(validateXp(ov, false) >= 1 && ov.clouds[2].baseM >= ov.clouds[1].topM + 40 - 0.5f && ov.clouds[2].topM - ov.clouds[2].baseM >= 999);
         XpWx ov2; ov2.clouds[1] = mk(0.7f, 1000, 2000); ov2.clouds[2] = mk(0.7f, 1500, 2500); ov2.maxAltFt = 20000; CHECK(validateXp(ov2, true) == 0 && ov2.clouds[2].baseM == 1500);  // storms may overlap on purpose
+        { XpWx hi; hi.clouds[2] = mk(0.9f, 600, 15000); hi.clouds[2].type = 3; hi.maxAltFt = 60000; CHECK(validateXp(hi, true) == 1 && hi.clouds[2].topM == kXpTopM); }
+        { RadarCell tall; tall.lat = 28; tall.dbz = 55; tall.topKnown = true; tall.topM = 15500; Config tc; CHECK(stormTopM(tall, tc, 900.0f) == kXpTopM); }
+        {   // per-type maximum thickness (X-Plane's manual weather limits); cumulonimbus is not limited by thickness
+            XpWx ty; ty.maxAltFt = 60000;
+            ty.clouds[0] = mk(0.5f, 9000, 10000); ty.clouds[0].type = 0;      // cirrus 1000 m -> 548.6 m
+            ty.clouds[1] = mk(0.9f, 1000, 3000); ty.clouds[1].type = 1;       // stratus 2000 m -> 1499.6 m
+            ty.clouds[2] = mk(0.9f, 4000, 10000); ty.clouds[2].type = 2;      // cumulus 6000 m -> 5084 m
+            CHECK(validateXp(ty, true) >= 3);
+            NEAR(ty.clouds[0].topM - ty.clouds[0].baseM, 548.64, 0.1);
+            NEAR(ty.clouds[1].topM - ty.clouds[1].baseM, 1499.6, 0.2);
+            NEAR(ty.clouds[2].topM - ty.clouds[2].baseM, 5084.06, 0.2);
+            XpWx hc; hc.maxAltFt = 60000; hc.clouds[2] = mk(0.5f, 13500, 14000); hc.clouds[2].type = 0;   // any type: tops stop at 45,000 ft
+            CHECK(validateXp(hc, true) >= 1 && hc.clouds[2].topM <= kXpMaxTopM + 0.1f);
+            XpWx lo; lo.maxAltFt = 60000; lo.clouds[2] = mk(0.9f, -50, 1200); lo.clouds[2].type = 3;      // bases are not limited (ground level and below are allowed)
+            CHECK(validateXp(lo, true) == 0 && lo.clouds[2].baseM == -50.0f);
+            XpWx cbk; cbk.clouds[2] = mk(0.9f, 100, 13000); cbk.clouds[2].type = 3; cbk.maxAltFt = 60000;
+            CHECK(validateXp(cbk, true) == 0 && cbk.clouds[2].topM == 13000);
+        }
+        { XpWx ci; ci.clouds[2] = mk(0.5f, 13400, 14200); ci.clouds[2].type = 0; ci.maxAltFt = 60000; CHECK(validateXp(ci, true) >= 1 && ci.clouds[2].topM <= kXpTopM + 0.01f); }   // cirrus top is limited too
+        { XpWx lo; lo.clouds[2] = mk(0.9f, -50, 400); lo.clouds[2].type = 3; lo.maxAltFt = 5000; CHECK(validateXp(lo, true) == 0 && lo.clouds[2].baseM == -50); }   // bases are free: low or below sea level is fine
         XpWx deep; deep.clouds[2] = mk(0.9f, 600, 13000); deep.clouds[2].type = 3; deep.maxAltFt = 50000;   // deep convection is legitimate
         CHECK(validateXp(deep, true) == 0 && deep.clouds[2].topM == 13000);
         XpWx fogOver; fogOver.clouds[0] = mk(0.9f, 0, 80); fogOver.clouds[1] = mk(0.94f, 150, 900); fogOver.maxAltFt = 5000;   // fog beneath overcast
