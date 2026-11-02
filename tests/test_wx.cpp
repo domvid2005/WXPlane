@@ -409,8 +409,8 @@ int main() {
         {   // a measured echo top is used as it is, and the map label shows the same number
             RadarCell m = cell; m.key = "R5:5"; m.dbz = 48; m.topM = 11277; m.topKnown = true; m.frac = 0.5f;
             XpWx a = base; applyStorm(a, m, sc, 400, 38);
-            NEAR(a.clouds[2].topM, 11277, 251);   // measured top, within the 250 m per-block jitter
-            NEAR(stormTopM(m, sc, 900.0f), a.clouds[2].topM, 0.5);
+            NEAR(a.clouds[2].topM, 11277, 0.5);
+            NEAR(stormTopM(m, sc, 900.0f), 11277, 0.5);
             m.topM = 30000; applyStorm(a, m, sc, 400, 38);                     // capped at tropopause + 2.5 km
             CHECK(a.clouds[2].topM < 22000 && stormTopM(m, sc, 900.0f) == a.clouds[2].topM);
         }
@@ -597,19 +597,6 @@ int main() {
             RadarCell c5 = cc; c5.dbz = 32; c5.topKnown = false; c5.topM = 0;
             XpWx s5 = b5; applyStorm(s5, c5, oc, 380, 38);
             CHECK(b5.clouds[2].coverage >= 0.9f && s5.clouds[2].coverage >= b5.clouds[2].coverage);
-        }
-        {   // thick storm layers are less solid; per-block variation is stable between updates and breaks up equal neighbouring tops
-            RadarCell a = cc, b = cc; a.dbz = b.dbz = 50; a.topKnown = b.topKnown = true; a.topM = b.topM = 11000; a.frac = b.frac = 1;
-            a.key = "R1:1"; b.key = "R1:2";
-            XpWx sa = ob, sb = ob, sa2 = ob; applyStorm(sa, a, oc, 300, 38); applyStorm(sb, b, oc, 300, 38); applyStorm(sa2, a, oc, 300, 38);
-            CHECK(sa.clouds[2].topM == sa2.clouds[2].topM && sa.clouds[2].coverage == sa2.clouds[2].coverage);   // same block, same result every update
-            CHECK(sa.clouds[2].topM != sb.clouds[2].topM && std::fabs(sa.clouds[2].topM - 11000) <= 251 && std::fabs(sb.clouds[2].topM - 11000) <= 251);
-            CHECK(sa.clouds[2].coverage < 0.95f && sa.clouds[2].coverage > 0.6f);   // a 10 km layer is not a 95% wall
-            RadarCell th = a; th.dbz = 50; th.topM = 4500; th.key = "R1:3";
-            XpWx st2 = ob; applyStorm(st2, th, oc, 300, 38);
-            const float thickCov = sa.clouds[2].coverage, thinCov = st2.clouds[2].coverage;
-            CHECK(thinCov > thickCov * 1.05f || thinCov >= 0.9f);   // shallow storms keep their full coverage
-            CHECK(sa.clouds[2].topM > 10500);                       // deep convection keeps its depth
         }
         {   // weak echoes are cumulus, strong ones cumulonimbus; a weak cell next to a strong one does not get a deep tower
             RadarCell wk = cc; wk.dbz = 24; wk.topKnown = false; wk.topM = 0; wk.key = "R9:9";

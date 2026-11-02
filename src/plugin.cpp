@@ -447,15 +447,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 double d = wx::distNm(c.lat, c.lon, s.lat, s.lon);
                 if (d < nd) { nd = d; nearest = &s; }
             }
-            // Close to a station its own METAR layers are kept exactly. Farther out, neighbouring storm blocks used to inherit the layers of
-            // whichever station happened to be nearest, so two adjacent blocks could start their storm 500 m apart (a base step across a
-            // 10 nm overlap). There the layers are interpolated between the stations, as the gap-fill records already do.
-            wx::XpWx x;
-            {
-                auto sr = stationRadius.find(nearest->icao);
-                if (sr != stationRadius.end() && nd <= sr->second * 0.9) x = baseWx[nearest->icao];
-                else x = wx::buildXp(wx::blendAt(res.stations, c.lat, c.lon), g_cfg, now, &res.aloft, anyFog);
-            }
+            wx::XpWx x = baseWx[nearest->icao];
             // A station's ground fog and low visibility are local; do not project them onto storms far from it.
             if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
             // Haze/rain visibility (5 km and up) belongs to the whole air mass, so storm records within 60 nm carry the station's
