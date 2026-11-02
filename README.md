@@ -265,3 +265,7 @@ The log gains a `submitted weather:` line per update (stations, storm records, r
 ## Storm cluster edges
 
 A radar storm record stops sharply at its circle, so a full-height block at the rim of a storm system showed as a cliff against the weather beside it. Blocks with fewer than 5 neighbouring blocks (the rim of a system, or the cut made by `radar_max_cells`) now get up to 45% less height above their base (never below 1500 m, and measured tops are still used for interior blocks) and up to 25% less coverage, in proportion to how isolated they are. Interior blocks, and the cloud base and station layers, are unchanged.
+
+## Menu refreshes
+
+Refresh Weather and the menu toggles are coalesced: at most one download per 60 s (`manual_refresh_gap_s`, advanced key). Turning radar on fetches only the radar and fades it in; stations and winds are kept. The log line after each update says `[fade-in]` or `[immediate: sim pauses while X-Plane rebuilds]`.

@@ -52,6 +52,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "vis_scale") c.visScale = d < 0.2 ? 0.2 : (d > 1.5 ? 1.5 : d);
         else if (k == "vis_autocal") c.visAutocal = toBool(v);
         else if (k == "rough_min_coverage") c.roughMinCoverage = d < 0.3 ? 0.3 : (d > 0.95 ? 0.95 : d);
+        else if (k == "manual_refresh_gap_s") c.manualRefreshGapS = d < 0 ? 0 : (d > 600 ? 600 : d);
         else if (k == "manual_refresh_immediate") c.manualRefreshImmediate = toBool(v);
         else if (k == "top_bumps") c.topBumps = toBool(v);
         else if (k == "bump_count") c.bumpCount = (int)(d < 0 ? 0 : (d > 40 ? 40 : d));

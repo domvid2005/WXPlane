@@ -80,6 +80,7 @@ float g_prevReadVis = 0;
 float g_visBeforeCorr = 0;
 bool g_reapplyRequested = false;   // settings that change the weather we send (not what we download): rebuild from the data we already have
 bool g_manualRefresh = false;
+bool g_radarKick = false;          // radar was switched on / changed: fetch only the radar (stations and winds are kept), no full refresh
 bool g_eraseRequested = false;
 bool g_firstApplyDone = false;
 std::time_t g_fogUntil = 0;
@@ -490,7 +491,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_pendingGone = gone;
     g_pendingImmediate = res.immediate || !g_firstApplyDone || g_startupPhase;
     g_pendingStartup = g_startupPhase;
-    g_pendingManual = res.immediate && !g_startupPhase && g_cfg.manualRefreshImmediate;   // immediate = the sim freezes for several seconds while X-Plane rebuilds
+    g_pendingManual = res.immediate && !g_startupPhase && g_cfg.manualRefreshImmediate;
+    const bool reallyImmediate = g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup));   // immediate = the sim freezes for several seconds while X-Plane rebuilds
     {   // spread the records evenly over the configured transition time (nearest stations first)
         size_t n = todo.size() + gone.size();
         int T = g_startupPhase ? 0 : (g_firstApplyDone ? g_cfg.updateTransitionS : g_cfg.transitionS);
@@ -557,7 +559,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
          (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash);
     logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
-         res.immediate ? " [immediate]" : "");
+         reallyImmediate ? " [immediate: sim pauses while X-Plane rebuilds]" : " [fade-in]");
     if (g_cfg.useAloft && !res.aloftNote.empty()) logf("%s", res.aloftNote.c_str());
     for (const auto& s : res.stations) {
         if (s.hasAtis) logf("  %s ATIS %s: %s", s.icao.c_str(), s.atisLetter.c_str(), s.atisText.substr(0, 110).c_str());
@@ -846,26 +848,32 @@ float flightLoop(float, float, int, void*) {
                                  std::chrono::duration<double>(now - g_firstApplyAt).count() >= g_cfg.startupRadarDelayS && (!g_cfg.startupWaitFps || framesSteady());
             if (catchUp) due = true;
             bool moved = g_haveCenter && since >= 60.0 && wx::distNm(lat, lon, g_centerLat, g_centerLon) > g_cfg.refetchMoveNm;
-            const bool radarDue = g_cfg.radar && g_firstApplyDone && !g_radarDeferred && !due && !moved && !g_manualRefresh && !g_startupPhase &&
-                                  std::chrono::duration<double>(now - g_lastRadarRequest).count() >= g_cfg.radarMinutes * 60.0;
+            // Menu refreshes are coalesced: at most one per 60 s, so clicking Refresh right after a radar toggle cannot stack rebuilds.
+            const bool manualHold = g_manualRefresh && g_everRequested && g_firstApplyDone && since < g_cfg.manualRefreshGapS;
+            const bool manual = g_manualRefresh && !manualHold;
+            const bool kick = g_radarKick && g_cfg.radar && g_firstApplyDone && !g_radarDeferred && !g_startupPhase;
+            if (kick) g_radarKick = false;
+            const bool radarDue = g_cfg.radar && g_firstApplyDone && !g_radarDeferred && !due && !moved && !manual && !g_startupPhase &&
+                                  (kick || std::chrono::duration<double>(now - g_lastRadarRequest).count() >= g_cfg.radarMinutes * 60.0);
             if (radarDue) {
                 wx::FetchRequest rq;
                 rq.lat = lat; rq.lon = lon; rq.cfg = g_cfg; rq.radarOnly = true;
                 g_fetcher.request(rq);
                 g_lastRadarRequest = now;
             }
-            if (due || moved || g_manualRefresh) {
+            if (due || moved || manual) {
                 g_lastRadarRequest = now;
                 wx::FetchRequest rq;
                 rq.lat = lat; rq.lon = lon; rq.cfg = g_cfg;
                 if (catchUp) g_radarDeferred = false;
                 else if (!g_firstApplyDone && g_cfg.startupStaged && g_cfg.radar) { rq.cfg.radar = false; g_radarDeferred = true; }
-                rq.immediate = g_manualRefresh || !g_firstApplyDone;
+                rq.immediate = manual || !g_firstApplyDone;
                 g_fetcher.request(rq);
                 g_lastRequest = now;
                 g_everRequested = true;
                 g_centerLat = lat; g_centerLon = lon; g_haveCenter = true;
                 g_manualRefresh = false;
+                g_radarKick = false;
                 if (since > 1e8 || rq.immediate) setStatus("Downloading NOAA weather...", "");
             }
         }
@@ -1017,11 +1025,11 @@ void menuHandler(void*, void* item) {
             break;
         case kRadar:
             g_cfg.radar = !g_cfg.radar;
-            if (g_cfg.enabled) g_manualRefresh = true;
+            if (g_cfg.enabled) { if (g_cfg.radar && g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
             break;
         case kRadarGlobal:
             g_cfg.radarGlobal = !g_cfg.radarGlobal;
-            if (g_cfg.enabled && g_cfg.radar) g_manualRefresh = true;
+            if (g_cfg.enabled && g_cfg.radar) { if (g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
             break;
         case kAloft:
             g_cfg.useAloft = !g_cfg.useAloft;

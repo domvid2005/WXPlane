@@ -54,6 +54,7 @@ struct Config {
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud
+    double manualRefreshGapS = 60;   // menu refreshes closer together than this are coalesced into one
     bool manualRefreshImmediate = false; // Refresh Weather from the menu: true = the new weather appears at once but the sim freezes for a few seconds; false = it fades in
     bool firstLoadImmediate = true;  // the start-up updates (stations, then radar storms) skip X-Plane's slow fade-in, so the clouds do not dissolve in patches
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
