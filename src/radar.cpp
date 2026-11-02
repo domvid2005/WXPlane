@@ -76,6 +76,16 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm) {
     }
 }
 
+void markStormEdges(std::vector<RadarCell>& cells, double cellNm) {
+    const double reach = cellNm * 1.7;
+    for (size_t i = 0; i < cells.size(); ++i) {
+        int n = 0;
+        for (size_t j = 0; j < cells.size(); ++j)
+            if (j != i && distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon) <= reach) ++n;
+        cells[i].edge = clampf((5.0f - (float)n) / 5.0f, 0.0f, 1.0f);
+    }
+}
+
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
                             const std::set<std::string>* prev) {
     RadarResult res;
@@ -150,6 +160,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     std::sort(all.begin(), all.end(), [&](const RadarCell& a, const RadarCell& b) { return score(a) < score(b); });
     if ((int)all.size() > cfg.radarMaxCells) all.resize((size_t)cfg.radarMaxCells);
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm);
+    markStormEdges(all, cfg.radarCellNm);
     res.cells = std::move(all);
     res.ok = true;
     res.topsFromRadar = tops != nullptr;
@@ -271,6 +282,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
             if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
     }
     float topM = stormTopM(c, cfg, baseM);
+    // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a wall.
+    if (c.edge > 0) topM = std::max(baseM + 1500.0f, baseM + (topM - baseM) * (1.0f - 0.45f * c.edge));
     XpCloud& cl = x.clouds[slot];
     const float replacedCov = cl.coverage;   // the deck this storm grows out of (0 if the slot was free)
     // Cumulonimbus from 30 dBZ up (and for any measured echo top above 6 km); a weak echo is cumulus (2.0), not a deep anvil. Ramping
@@ -278,6 +291,7 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     cl.type = (dbz >= 30.0f || (c.topKnown && c.topM > 6000.0f)) ? 3.0f : 2.0f;
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
+    cl.coverage *= 1.0f - 0.25f * c.edge;   // and up to 25% less coverage on the rim (the station deck it replaces still sets the floor below)
     // A storm inside a solid deck must not thin it: X-Plane blends coverage slot by slot, so a 58% storm over a 94% overcast punched a
     // sinuous hole-edged contour through the sheet (KFYV log). The station's own coverage is the floor.
     cl.coverage = std::max(cl.coverage, replacedCov);

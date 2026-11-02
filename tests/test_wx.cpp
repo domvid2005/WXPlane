@@ -618,6 +618,21 @@ int main() {
             XpWx s5 = b5; applyStorm(s5, c5, oc, 380, 38);
             CHECK(b5.clouds[2].coverage >= 0.9f && s5.clouds[2].coverage >= b5.clouds[2].coverage);
         }
+        {   // rim of a storm cluster slopes off: isolated blocks are lower and thinner, interior blocks are untouched
+            std::vector<RadarCell> grid;
+            for (int a = -1; a <= 1; ++a) for (int b = -1; b <= 1; ++b) { RadarCell g = cc; g.lat = 38 + a * 0.2; g.lon = -98 + b * 0.2 / std::cos(38 * 3.14159265 / 180); g.dbz = 50; g.topKnown = true; g.topM = 11000; grid.push_back(g); }
+            RadarCell lone = cc; lone.lat = 40; lone.lon = -98; lone.dbz = 50; lone.topKnown = true; lone.topM = 11000; grid.push_back(lone);
+            markStormEdges(grid, 12.0);
+            CHECK(grid[4].edge == 0.0f);          // centre of the 3 x 3 cluster
+            CHECK(grid[0].edge > 0.0f && grid[0].edge < 1.0f);   // a corner has 3 neighbours
+            CHECK(grid[9].edge == 1.0f);          // lone block
+            XpWx mid = ob, rim = ob, iso = ob;
+            applyStorm(mid, grid[4], oc, 300, 38); applyStorm(rim, grid[0], oc, 300, 38); applyStorm(iso, grid[9], oc, 300, 38);
+            CHECK(rim.clouds[2].topM < mid.clouds[2].topM && iso.clouds[2].topM < rim.clouds[2].topM);
+            CHECK(iso.clouds[2].coverage <= mid.clouds[2].coverage);
+            CHECK(mid.clouds[2].topM == 11000 && iso.clouds[2].topM >= iso.clouds[2].baseM + 1500);
+            CHECK(iso.clouds[2].topM > 6000);     // still a real tower, only lower
+        }
         {   // weak echoes are cumulus, strong ones cumulonimbus; a weak cell next to a strong one does not get a deep tower
             RadarCell wk = cc; wk.dbz = 24; wk.topKnown = false; wk.topM = 0; wk.key = "R9:9";
             XpWx ws = ob; applyStorm(ws, wk, oc, 300, 38);

@@ -20,11 +20,18 @@ struct RadarCell {
     float rateMmH = 0;         // rain rate for dbz
     double distNm = 0;         // from the aircraft when built
     std::string key;           // stable per block, used to diff updates
+    float edge = 0;            // 0 = inside a cluster of storm blocks .. 1 = isolated / on the rim of one (see markStormEdges)
 };
 
 // Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
 // the neighbour mean + 2 km, and lone blocks to 8 km. Only ever lowers a top.
 void smoothStormTops(std::vector<RadarCell>& cells, double cellNm);
+
+// Rim of a storm cluster: a block with few neighbouring blocks among the applied cells (the rim of a system, or the cut made by the cell
+// limit) gets edge up to 1. A storm record stops sharply at its circle, so a full-depth block at the rim shows up as a cliff against the
+// weather beside it; applyStorm gives rim blocks a lower top and less coverage in proportion, so the cluster slopes off. Interior blocks
+// (5 or more neighbours within 1.7 block widths) are not touched.
+void markStormEdges(std::vector<RadarCell>& cells, double cellNm);
 
 struct RadarResult {
     bool attempted = false;

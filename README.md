@@ -261,3 +261,7 @@ A METAR with BR (mist) used to change only the visibility, so nothing was visibl
 Every record is checked before it is sent (`validateXp`): coverage is clamped to 0..1, a top at or below its base is lifted, layers thinner than 30 m or thicker than 16 km are corrected, layers that overlap or are out of order are separated (radar storm records are exempt on purpose, since a storm legitimately runs through the station's layers), and the record's ceiling is raised to its highest cloud top. Deep convection and layered frontal decks pass untouched. A radar storm now takes a free cloud slot and leaves the station's own layers alone; only when all three are taken does it replace the highest one.
 
 The log gains a `submitted weather:` line per update (stations, storm records, rough-top records, validation adjustments) and, in the weather watch and the visibility check, a list of the records we submitted that cover that point, so expected, submitted and X-Plane-reported weather can be compared.
+
+## Storm cluster edges
+
+A radar storm record stops sharply at its circle, so a full-height block at the rim of a storm system showed as a cliff against the weather beside it. Blocks with fewer than 5 neighbouring blocks (the rim of a system, or the cut made by `radar_max_cells`) now get up to 45% less height above their base (never below 1500 m, and measured tops are still used for interior blocks) and up to 25% less coverage, in proportion to how isolated they are. Interior blocks, and the cloud base and station layers, are unchanged.
