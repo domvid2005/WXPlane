@@ -812,6 +812,9 @@ float flightLoop(float, float, int, void*) {
         } else if (!res.ok) {
             logf("update failed: %s", res.error.c_str());
             setStatus("Update failed (will retry)", res.error.substr(0, 60));
+            // Without this a failed download (a 12 s timeout while the sim was still loading) left the sky as it was until the next regular
+            // refresh. Retry in 30 s instead; the regular timer resumes from that attempt.
+            if (g_cfg.updateMinutes * 60.0 > 30.0) g_lastRequest = Clock::now() - std::chrono::seconds((long)(g_cfg.updateMinutes * 60.0 - 30.0));
         } else if (g_cfg.enabled) {
             if (!res.error.empty()) logf("%s", res.error.c_str());
             applyResult(res, true);
