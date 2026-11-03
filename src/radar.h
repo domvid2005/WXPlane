@@ -37,7 +37,8 @@ void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend)
 int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat, double aircraftLon, double stepM, double minDbz, int maxAdd, int rings = 1);
 float stormPrecipAt(const std::vector<RadarCell>& cells, double lat, double lon, double reachNm, float rainFullMmH);
 
-// Interpolates cells into holes: positions enclosed on all four sides by kept cells (at least minNeighbours within ~1.4 cells)
+// Interpolates cells into holes and channels: positions enclosed on all four sides by kept cells (at least minNeighbours within ~1.4 cells),
+// or lying between kept cells on two opposite sides (at least 3 within ~1.4 cells; a one-block-wide gap open at its ends)
 // that have no cell of their own. `dropped` are real blocks that lost out to the cell cap; their position and key are reused.
 // Returns how many cells were added (at most maxAdd); each takes the mean reflectivity, top and coverage of its neighbours.
 int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& dropped, double cellNm, double aircraftLat, double aircraftLon,

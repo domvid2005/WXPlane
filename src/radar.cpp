@@ -140,7 +140,7 @@ int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& d
     if (kept.size() < (size_t)minNeighbours || maxAdd <= 0) return 0;
     int added = 0;
     const double cosLat = std::max(0.2, std::cos(kept[0].lat * kPi / 180.0));
-    for (int pass = 0; pass < 2 && added < maxAdd; ++pass) {
+    for (int pass = 0; pass < 3 && added < maxAdd; ++pass) {
         struct Cand { double lat, lon; const RadarCell* src; };
         std::vector<Cand> cands;
         for (const auto& d : dropped) cands.push_back({d.lat, d.lon, &d});
@@ -157,6 +157,7 @@ int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& d
             if (!taken) for (const auto& f : fresh) if (distNm(c.lat, c.lon, f.lat, f.lon) < cellNm * 0.55) { taken = true; break; }
             if (taken) continue;
             int n = 0; bool north = false, south = false, east = false, west = false;
+            std::vector<std::pair<double, double>> vec;
             double sDbz = 0, sFrac = 0, sTop = 0; int nTop = 0;
             for (const auto& k : kept) {
                 const double d = distNm(c.lat, c.lon, k.lat, k.lon);
@@ -168,8 +169,17 @@ int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& d
                 if (dy < -cellNm * 0.3) south = true;
                 if (dx > cellNm * 0.3) east = true;
                 if (dx < -cellNm * 0.3) west = true;
+                const double len = std::sqrt(dx * dx + dy * dy);
+                if (len > 1e-9) vec.push_back({dx / len, dy / len});
             }
-            if (n < minNeighbours || !(north && south && east && west)) continue;
+            // enclosed on all four sides (a hole), or between confirmed blocks on two opposite sides (a channel: open at its ends, so a plain
+            // hole test never filled it, and X-Plane renders such a one-block-wide gap as a sheer canyon through the storm)
+            const bool hole = north && south && east && west && n >= minNeighbours;
+            bool opposite = false;                                 // two blocks on (nearly) opposite sides: more than ~150 degrees apart
+            for (size_t a = 0; a < vec.size() && !opposite; ++a)
+                for (size_t b = a + 1; b < vec.size() && !opposite; ++b) opposite = vec[a].first * vec[b].first + vec[a].second * vec[b].second < -0.87;
+            const bool channel = n >= 3 && opposite;
+            if (!hole && !channel) continue;
             RadarCell h;
             h.lat = c.lat; h.lon = c.lon;
             h.dbz = std::max((float)minDbz, std::round((float)(sDbz / n) / 5.0f) * 5.0f);

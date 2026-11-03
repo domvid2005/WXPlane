@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -324,6 +325,20 @@ int main() {
         for (const auto& c : ring) if (!(std::fabs(c.lat - lat0) < 0.01 && std::fabs(c.lon - lon0) < 0.01)) ring2.push_back(c);
         std::vector<RadarCell> drop(1); drop[0].lat = lat0; drop[0].lon = lon0; drop[0].dbz = 25; drop[0].key = "R9:9"; drop[0].topM = 5000;
         CHECK(fillStormHoles(ring2, drop, 12.0, lat0, lon0, 500.0, 20.0, 5, 10) == 1 && ring2.back().key == "R9:9" && ring2.back().dbz == 50);
+        {   // a one-block-wide channel between two columns of blocks, open at both ends, is filled; the outside of a single column is not
+            std::vector<RadarCell> cols;
+            for (int j = -2; j <= 2; ++j) for (int i : {-1, 1}) {
+                RadarCell c; c.lat = lat0 + j * dl; c.lon = lon0 + i * dn; c.dbz = 45; c.dbzFine = 45; c.frac = 1; c.topM = 10000; c.topKnown = true; c.rateMmH = 20;
+                char k[24]; std::snprintf(k, sizeof k, "R%d:%d", j + 9, i + 9); c.key = k; cols.push_back(c);
+            }
+            std::vector<RadarCell> one = cols; one.erase(std::remove_if(one.begin(), one.end(), [&](const RadarCell& c) { return c.lon > lon0; }), one.end());
+            const size_t b0 = cols.size();
+            const int nc = fillStormHoles(cols, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 30);
+            CHECK(nc >= 3 && cols.size() == b0 + (size_t)nc);
+            bool mid = true; for (size_t i = b0; i < cols.size(); ++i) mid = mid && std::fabs(cols[i].lon - lon0) < dn * 0.6;
+            CHECK(mid);                                                       // every added cell sits in the channel, none outside
+            CHECK(fillStormHoles(one, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 30) == 0);
+        }
         // the budget is respected, and a lone pair of cells has no holes
         std::vector<RadarCell> r3 = ring; std::vector<RadarCell> r4(2); r4[1].lat = 35.2;
         CHECK(fillStormHoles(r3, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 0) == 0);

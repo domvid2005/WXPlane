@@ -332,3 +332,7 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 
 - A truncated echo-top download is retried once; if it still fails, the last good tops are reused for up to 45 minutes (the log says so). Before, the update fell back to heights estimated from reflectivity, which changed every storm's height at once (13.5 km measured became 10.5 km estimated in one log) and rebuilt the sky with different shapes.
 - `storm_replaces_fill` now only applies under storm cells with a top of 6 km or more. Under light, low echoes (20-30 dBZ cells with 4 km tops) the background fill tile stays: removing 53 tiles there left 40-58% cumulus patches as the only cloud, which rendered as small odd clumps with dark shadows.
+
+### Channels
+
+Hole filling now also fills a **channel**: a spot between confirmed blocks on two opposite sides (north/south, east/west or either diagonal) with at least 3 blocks within 1.4 cells, even though its ends are open. Before, only spots enclosed on all four sides were filled, so a one-block-wide gap between two groups of storm cells stayed empty; X-Plane blends the low records under it and renders a sheer canyon through the storm. The fill runs 3 passes (was 2), so a gap up to about three blocks wide closes from both sides. Straight outer edges are not touched.
