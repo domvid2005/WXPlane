@@ -493,7 +493,7 @@ int main() {
         for (int j = 40; j < 60; ++j) for (int i = 40; i < 60; ++i) { refl.v[(size_t)j * 100 + i] = 50.0f; tops.v[(size_t)j * 100 + i] = 12.0f; }
         for (int j = 5; j < 15; ++j) for (int i = 5; i < 15; ++i) refl.v[(size_t)j * 100 + i] = 25.0f;
         for (int j = 80; j < 90; ++j) for (int i = 80; i < 90; ++i) refl.v[(size_t)j * 100 + i] = 12.0f;   // below threshold
-        Config rc; rc.stormRim = false;
+        Config rc; rc.stormRim = false; rc.stormContour = false;
         rc.radarCellNm = 10; rc.radarRangeNm = 100; rc.radarMaxCells = 100; rc.radarMinDbz = 20;
         RadarResult rr = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
         CHECK(rr.ok && rr.topsFromRadar && rr.cells.size() >= 3 && rr.cells.size() <= 12);
@@ -559,7 +559,7 @@ int main() {
         {
             GribField r2 = refl;
             for (int j = 5; j < 15; ++j) for (int i = 5; i < 15; ++i) r2.v[(size_t)j * 100 + i] = 18.0f;
-            Config hc; hc.stormRim = false; hc.radarCellNm = 10; hc.radarRangeNm = 100; hc.radarMaxCells = 100; hc.radarMinDbz = 20;
+            Config hc; hc.stormRim = false; hc.stormContour = false; hc.radarCellNm = 10; hc.radarRangeNm = 100; hc.radarMaxCells = 100; hc.radarMinDbz = 20;
             RadarResult fresh = buildRadarCells(r2, nullptr, 38.0, -98.0, hc, nullptr);
             std::set<std::string> prevKeys; for (auto& c : rr.cells) prevKeys.insert(c.key);
             RadarResult kept = buildRadarCells(r2, nullptr, 38.0, -98.0, hc, &prevKeys);
@@ -578,6 +578,91 @@ int main() {
         CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= st.clouds[2].topM / 0.3048 - 1);
         CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
         CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
+        {   // global model: ISA heights, parsing, and merging above the FD top
+            CHECK(std::fabs(isaAltFtFromHpa(1013.25)) < 1 && std::fabs(isaAltFtFromHpa(500) - 18289.0) < 150);       // 500 hPa = 5574 m
+            CHECK(std::fabs(isaAltFtFromHpa(200) - 38662.0) < 300 && std::fabs(isaAltFtFromHpa(100) - 53083.0) < 400);
+            std::vector<std::pair<double, double>> pts{{38.0, -98.0}};
+            std::vector<int> lv{500, 250, 100};
+            const std::string url = openMeteoUrl(pts, lv);
+            CHECK(url.find("latitude=38.00&longitude=-98.00") != std::string::npos && url.find("wind_speed_250hPa") != std::string::npos && url.find("wind_speed_unit=kn") != std::string::npos);
+            const std::string body = "[{\"latitude\":38.0,\"longitude\":-98.0,\"hourly\":{\"time\":[1000,4600],"
+                "\"wind_speed_500hPa\":[40,50],\"wind_direction_500hPa\":[270,280],\"temperature_500hPa\":[-20,-21],\"geopotential_height_500hPa\":[5600,5600],"
+                "\"wind_speed_250hPa\":[90,95],\"wind_direction_250hPa\":[270,275],\"temperature_250hPa\":[-50,-51],\"geopotential_height_250hPa\":[10400,10400],"
+                "\"wind_speed_100hPa\":[30,35],\"wind_direction_100hPa\":[90,95],\"temperature_100hPa\":[-60,-61],\"geopotential_height_100hPa\":[16600,16600]}}]";
+            std::string perr;
+            auto m = parseOpenMeteo(body, pts, lv, 4500, &perr);          // the second hour is the closer one
+            CHECK(m.size() == 1 && m[0].model && m[0].located && m[0].levels.size() == 3);
+            CHECK(std::fabs(m[0].levels[0].altFt - 5600 / 0.3048) < 1 && std::fabs(m[0].levels[0].speedKt - 50) < 0.01 && m[0].levels[2].tempC == -61);
+            std::string e2; CHECK(parseOpenMeteo("{\"error\":true,\"reason\":\"bad\"}", pts, lv, 0, &e2).empty() && e2.find("bad") != std::string::npos);
+            CHECK(parseOpenMeteo("garbage", pts, lv, 0, &e2).empty());
+            // merged: FD gives the low levels, the model only what is more than 1000 ft above the FD top
+            auto lw = [](double alt, double dir, double kt, double tc) { AloftLevel L; L.altFt = alt; L.hasWind = true; L.dirDeg = dir; L.speedKt = kt; L.hasTemp = true; L.tempC = tc; return L; };
+            AloftStation F; F.id = "FFF"; F.lat = 38; F.lon = -98; F.located = true;
+            F.levels = {lw(6000, 270, 20, -2), lw(18000, 270, 40, -20), lw(39000, 270, 100, -56)};
+            std::vector<AloftStation> mix{F, m[0]};
+            auto smp = sampleAloft(mix, 38, -98, 250, 4);
+            bool low = false, high = false, dup = false;
+            for (const auto& q : smp) { if (q.altFt == 18000) low = true; if (q.altFt > 53000) high = true; if (q.altFt > 18289 - 100 && q.altFt < 18289 + 100) dup = true; }
+            CHECK(low && high && !dup);                                          // the model's 500 hPa (18.3 kft) is not mixed into the FD levels; its 100 hPa is above FL390
+            for (size_t i = 1; i < smp.size(); ++i) CHECK(smp[i].altFt > smp[i - 1].altFt);
+            std::vector<AloftStation> only{m[0]};
+            auto g = sampleAloft(only, 50, -70, 250, 4);                          // no FD at all, far from the point: the model alone, from up to 2500 nm
+            CHECK(g.size() == 3);
+        }
+        {   // winds aloft without gaps
+            auto lv = [](double alt, double dir, double kt, bool wind, bool temp, double tc) { AloftLevel L; L.altFt = alt; L.hasWind = wind; L.dirDeg = dir; L.speedKt = kt; L.hasTemp = temp; L.tempC = tc; return L; };
+            AloftStation A; A.id = "AAA"; A.lat = 38; A.lon = -98; A.located = true;
+            A.levels = {lv(3000, 270, 10, true, false, 0), lv(6000, 270, 20, true, true, -2), /* 9000: nothing reported */ lv(12000, 270, 40, true, true, -15), lv(39000, 270, 100, true, true, -56)};
+            AloftStation B = A; B.id = "BBB"; B.lat = 38.5; B.lon = -98.5;
+            B.levels = {lv(3000, 270, 10, true, false, 0), lv(6000, 270, 20, true, true, -2), lv(9000, 270, 30, true, true, -8), lv(12000, 270, 40, true, true, -15)};   // no high-level data at all
+            std::vector<AloftStation> st{A, B};
+            auto smp = sampleAloft(st, 38.2, -98.2, 250, 4);
+            auto at = [&](double alt) { for (const auto& q : smp) if (q.altFt == alt) return q; return AloftSample(); };
+            CHECK(at(9000).hasWind && at(9000).hasTemp && std::fabs(at(9000).speedKt - 30.0) < 1.0);   // A's missing 9000 ft is interpolated (30 kt), B reports it: no jump
+            CHECK(at(39000).hasWind && std::fabs(at(39000).speedKt - 100.0) < 1.0);                     // B has nothing up there: only A speaks, B does not drag it to a held low-level value
+            // a station that is out of range is still used when nothing else is
+            auto far = sampleAloft(st, 45.0, -98.0, 100, 4);
+            CHECK(!far.empty() && far.size() == smp.size());
+            auto none = sampleAloft(st, 70.0, -98.0, 100, 4);                                           // 2000+ nm away: nothing to use
+            CHECK(none.empty());
+        }
+        {   // storm outline (the user's drawing): blocks in an L/T shape; skin cells sit just outside the blocks, never deep inside or far outside
+            const double cell = 12.0, cl = std::cos(38 * 3.14159265 / 180);
+            auto mk = [&](int i, int j) { RadarCell c; c.lat = 38 + j * cell / 60.0; c.lon = -98 + i * cell / (60.0 * cl); c.dbz = 45; c.dbzFine = 45; c.frac = 1; c.topM = 9000; c.topKnown = true; c.rateMmH = rateFromDbz(45); c.key = "R" + std::to_string(i) + ":" + std::to_string(j); return c; };
+            std::vector<RadarCell> v;
+            for (int j = 0; j < 3; ++j) for (int i = 0; i < 3; ++i) v.push_back(mk(i, j));
+            for (int i = 3; i < 7; ++i) v.push_back(mk(i, 1));
+            v.push_back(mk(6, 0)); v.push_back(mk(6, 2)); v.push_back(mk(0, -1));
+            const size_t nReal = v.size();
+            int added = addStormContour(v, cell, 15.6, 38, -98, 250, 20, 60);
+            CHECK(added >= 12 && added <= 60);
+            bool allOk = true; int outside = 0;
+            for (size_t k = nReal; k < v.size(); ++k) {
+                CHECK(v[k].synthetic && v[k].key[0] == 'C');
+                double dmin = 1e9;   // distance to the nearest block's square
+                for (size_t q = 0; q < nReal; ++q) {
+                    const double dx = std::fabs((v[k].lon - v[q].lon) * 60.0 * cl) - cell / 2, dy = std::fabs((v[k].lat - v[q].lat) * 60.0) - cell / 2;
+                    dmin = std::min(dmin, std::hypot(std::max(dx, 0.0), std::max(dy, 0.0)));
+                }
+                if (dmin > 0.5 * cell) allOk = false;      // skin cells hug the blocks: within half a cell of a square
+                if (dmin > 0.0) ++outside;
+            }
+            CHECK(allOk);
+            CHECK(outside < (int)(v.size() - nReal));      // and some of them sit just inside the squares' edge, not all outside it
+            bool shrunk = false, full = false;
+            for (size_t q = 0; q < nReal; ++q) { if (v[q].contourScale < 0.95f) shrunk = true; if (v[q].contourScale > 0.99f) full = true; CHECK(v[q].contourScale >= 0.4f && v[q].contourScale <= 1.0f); }
+            CHECK(shrunk && full);                          // rim blocks are pulled in, the middle of the block keeps its full circle
+            std::vector<RadarCell> w; for (size_t q = 0; q < nReal; ++q) w.push_back(mk(0, 0)), w.back() = v[q];
+            for (auto& c : w) c.contourScale = 1.0f;
+            addStormContour(w, cell, 15.6, 38, -98, 250, 20, 60);
+            // stable: the same blocks give the same skin cells (keys and positions)
+            std::vector<RadarCell> v2(v.begin(), v.begin() + nReal); for (auto& c : v2) c.contourScale = 1.0f;
+            int added2 = addStormContour(v2, cell, 15.6, 38, -98, 250, 20, 60);
+            CHECK(added2 == added);
+            bool same = true; for (int k = 0; k < added; ++k) if (v2[nReal + k].key != v[nReal + k].key) same = false;
+            CHECK(same);
+            std::vector<RadarCell> one(1, mk(0, 0)); CHECK(addStormContour(one, cell, 15.6, 38, -98, 250, 20, 60) >= 4);   // a lone block gets a ring
+        }
         {   // rain pits: a weak block inside a ring of strong ones is lifted, an edge block (few neighbours) is not
             std::vector<RadarCell> v;
             for (int j = -1; j <= 1; ++j) for (int i = -1; i <= 1; ++i) {
@@ -606,12 +691,12 @@ int main() {
         }
         {   // core cells (no open side) reach the core coverage, edge cells keep the normal one, 0.95 switches the core rule off
             RadarCell k = cell; k.key = "R9:9"; k.dbz = 45; k.frac = 0.5f; k.edge = 0; k.topM = 0; k.topKnown = false;
-            XpWx a1 = base; applyStorm(a1, k, sc, 400, 38);
+            sc.stormCoreCoverage = 1.0; XpWx a1 = base; applyStorm(a1, k, sc, 400, 38);
             CHECK(a1.clouds[2].coverage >= 0.999f);
             k.edge = 0.5f; XpWx a2 = base; applyStorm(a2, k, sc, 400, 38);
             CHECK(a2.clouds[2].coverage < 0.95f);
             k.edge = 0; sc.stormCoreCoverage = 0.95; XpWx a3 = base; applyStorm(a3, k, sc, 400, 38);
-            CHECK(a3.clouds[2].coverage <= 0.95f); sc.stormCoreCoverage = 1.0;
+            CHECK(a3.clouds[2].coverage <= 0.95f); sc.stormCoreCoverage = 0.95;
         }
         {   // a shared base replaces the station-derived one, and the top still stays 1500 m above it
             XpWx ov = base; applyStorm(ov, cell, sc, 400, 38, 1300.0f);
@@ -628,12 +713,11 @@ int main() {
         }
         {   // weaker/smaller cells are thinner and lower than strong ones
             XpWx lo = base, hi = base; RadarCell e = cell; e.key = "R1:1"; e.topM = 0; e.topKnown = false;
-            sc.stormCoreCoverage = 0.95;   // this block is about the coverage ramp, not the core rule
             e.dbz = 28; e.frac = 0.25f; applyStorm(lo, e, sc, 400, 38);
             e.dbz = 55; e.frac = 1.0f; applyStorm(hi, e, sc, 400, 38);
             CHECK(lo.clouds[2].topM < hi.clouds[2].topM && lo.clouds[2].coverage < hi.clouds[2].coverage);
             sc.stormCoverageMax = 1.0; XpWx full = base; applyStorm(full, e, sc, 400, 38);
-            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.95; sc.stormCoreCoverage = 1.0;
+            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.95;
         }
         XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
         applyStorm(w2, cell, sc, 400, 38);

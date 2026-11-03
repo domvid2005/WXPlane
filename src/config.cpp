@@ -32,6 +32,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "enabled") c.enabled = toBool(v);
         else if (k == "use_atis") c.useAtis = toBool(v);
         else if (k == "use_aloft") c.useAloft = toBool(v);
+        else if (k == "upper_air") c.upperAir = toBool(v);
         else if (k == "update_minutes") c.updateMinutes = (int)(d < 1 ? 1 : d);
         else if (k == "search_nm") c.searchNm = d < 20 ? 20 : (d > 400 ? 400 : d);
         else if (k == "max_stations") c.maxStations = (int)(d < 1 ? 1 : (d > 120 ? 120 : d));
@@ -93,6 +94,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_replaces_fill") c.stormReplacesFill = toBool(v);
         else if (k == "storm_fill_pits") c.stormFillPits = toBool(v);
         else if (k == "storm_rim") c.stormRim = toBool(v);
+        else if (k == "storm_contour") c.stormContour = toBool(v);
         else if (k == "storm_top_max_drop_m") c.stormTopMaxDropM = d < 0 ? 0 : (d > 20000 ? 20000 : d);
         else if (k == "storm_core_coverage") c.stormCoreCoverage = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
         else if (k == "storm_base_smooth") c.stormBaseSmooth = toBool(v);
@@ -111,6 +113,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "update_transition_s") c.updateTransitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
+    if (version < 25) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; c.stormCoreCoverage = d.stormCoreCoverage; c.stormTopMaxDropM = d.stormTopMaxDropM; }   // v25: back to the look of the earlier build (ragged walls)
     if (version < 24) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; }   // v24: wider overlap
     if (version < 23) { Config d; c.stormCoverageMax = d.stormCoverageMax; }   // v23: back to 95 % (the 100 % trial removed the natural breakup)
     if (version < 22) {   // the start-up defaults changed: take the new ones once, keep everything else as the user set it
@@ -152,6 +155,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "enabled = " << (c.enabled ? 1 : 0) << "\n"
       << "use_atis = " << (c.useAtis ? 1 : 0) << "\n"
       << "use_aloft = " << (c.useAloft ? 1 : 0) << "\n"
+      << "upper_air = " << (c.upperAir ? 1 : 0) << "\n"
       << "update_minutes = " << c.updateMinutes << "\n"
       << "search_nm = " << c.searchNm << "\n"
       << "max_stations = " << c.maxStations << "\n"

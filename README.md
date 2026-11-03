@@ -363,3 +363,32 @@ Config files older than version 24 take the new radius once.
 ### Solid storm cores (`storm_core_coverage`, default 1.0)
 
 Cells with no open side (surrounded by other storm cells) and 35 dBZ or more get this coverage instead of `storm_coverage_max` (0.95). The 5 % breakup stays on the rim and on weaker cells, where it looks natural; inside the storm it showed up as 1-2 nm pockets of clear air and rain-free spots on the NEXRAD map. Set `storm_core_coverage = 0.95` to turn it off.
+
+### Back to ragged walls (v25)
+
+The look of the storm walls got too solid after three changes, so their defaults are back to the earlier behaviour: `storm_top_max_drop_m` 0 (tops are not levelled between neighbouring cells; set 1500 to level them), `storm_core_coverage` 0.95 (no solid cores; 1.0 makes them solid) and `storm_radius_factor` 1.3 (1.45 overlaps more). The shared storm base, the rain-pit fill and the turbulence slider stay. Config files older than version 25 take these three values once.
+
+### Storm outline (`storm_contour`, default on)
+
+The storm edge now follows one smooth outline drawn around all the blocks (your drawing): a soft union of rounded squares, so concave corners and notches fill in, convex corners round off, and a thin one-block strip gets a gentle bulge. A low-frequency random wobble (stable from update to update, fixed to the map, not to the blocks) makes the outline uneven but flowing.
+
+* Small "skin" cells (keys `C...`, 55-100 % of a cell apart, randomised, lighter and lower than the block they come from) are placed just inside the outline, so the edge of the cloud follows it. They replace the random rim rings (`storm_rim`, used only when `storm_contour = 0`).
+* Every measured block's record radius is limited (`RadarCell::contourScale`, 40-100 %) so its circle does not reach past the outline; blocks in the middle of a storm keep their full radius.
+* At most `radar_max_cells` skin cells, nearest to the aircraft first. Set `storm_contour = 0` to go back to the random rim rings.
+
+### Winds aloft without gaps
+
+* A level an FD station does not report (it often skips one, or has no wind or temperature at the lowest levels) is interpolated from the levels above and below it, as vectors, before the stations are blended. A station is held at its top or bottom level for at most 6000 ft, so one with only the low-level product never adds a wind at FL390.
+* A report with no FD station within `aloft_range_nm` now uses the nearest ones up to 1000 nm away instead of falling back to the sim's own winds. Beyond that, X-Plane's own winds are used and the status line says so.
+* FD station positions come first from the reports already downloaded ("ABI" is "KABI"), then from the METAR lookup in batches of 30; a failed batch is skipped and retried at the next update instead of ending the lookup (the likely cause of a session with 0 FD stations). Stations up to 1200 nm away are kept.
+* The top wind is held up to the ceiling (FL600) as before, and the top temperature is held there too (the stratosphere is nearly isothermal).
+
+### Global-model winds aloft (`upper_air`, default on)
+
+NOAA's FD winds stop at FL390 and cover only the US and a few Pacific stations. WXPlane therefore also asks Open-Meteo's GFS endpoint (`api.open-meteo.com/v1/gfs`, free, no key; check its terms if you redistribute the plugin) for wind speed and direction, temperature and geopotential height on the 925, 850, 700, 500, 400, 300, 250, 200, 150, 100 and 70 hPa levels (to about FL600) at up to 9 points spread over the weather stations, once every 45 minutes (or when you have moved 60 nm).
+
+* **Where it is used:** wherever FD has no station within `aloft_range_nm` (everything outside the FD coverage gets real winds and temperatures instead of the sim's own, using the nearest model points up to 2500 nm away), and above the highest FD level of a report (more than 1000 ft above it, so normally above FL390). FD stays the source below that, as it is corrected by observations.
+* **Heights:** the model's own geopotential height of each pressure level is used (ISA only when it is missing), so a cold or warm air mass puts the levels where they really are.
+* **Safety:** if the endpoint refuses the highest levels the request is repeated with the levels up to 200 hPa; if both fail the previous download is kept for up to 3 hours, and `Log.txt` gets a line `global-model winds aloft unavailable (reason)`. A normal update logs `global-model winds aloft: N point(s), up to FLxxx`.
+* `upper_air = 0` turns it off (FD only, as before).
+* This could not be tried against the real service while it was written; the request and answer formats follow Open-Meteo's published pattern and are covered by tests with made-up answers. If the log shows "unavailable" or "answered without wind levels", send it.

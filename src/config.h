@@ -3,11 +3,12 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 24;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 25;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
+    bool upperAir = true;        // global model (Open-Meteo GFS) winds/temps for the levels above FD (FL390) and where no FD station is near
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
     double lowCloudType = 3.0;    // X-Plane cloud type for low/overcast layers: 1 = smooth stratus sheet (curtain-like edges), 2 = cumulus, 3 = billowy cumulonimbus
     double stormTopVariationM = 1500; // estimated storm tops (no radar echo-top data) vary by up to +/- this, stable per block, so tops are not one flat plateau
@@ -47,7 +48,7 @@ struct Config {
     bool radar = true;            // turn radar echoes into storm cells
     bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
     double radarRangeNm = 150;    // storms within this distance of the aircraft
-    double stormRadiusFactor = 1.45;  // storm record radius = this x radar cell size (min 6 nm); cells sit at the centre of their echo (storm_centroid), up to half a block off the grid, so 1.3 keeps them overlapping each other and the gap-fill tiles
+    double stormRadiusFactor = 1.3;   // storm record radius = this x radar cell size (min 6 nm); cells sit at the centre of their echo (storm_centroid), up to half a block off the grid, so 1.3 keeps them overlapping each other and the gap-fill tiles
     bool stormCentroid = true;       // a storm cell sits at the reflectivity-weighted centre of its echo instead of the block centre (breaks up the square grid)
     double stormRainBlend = 0.4;     // 0..0.8: pull each cell's reflectivity (rain rate) toward its neighbours', so rain steps between blocks round off
     double stormTopStepM = 250;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
@@ -56,8 +57,9 @@ struct Config {
     int stormRimRings = 3;           // 1..3: how many fading rings of rim cells go around a storm (more = softer, rounder edge, more records)
     bool stormReplacesFill = true;   // no background (gap-fill) tile where a confirmed storm cell covers: its low deck would cut a canyon through the storm
     bool stormFillPits = true;       // a block much lower than the ring of blocks around it is lifted toward them (no sheer rectangular craters inside a storm)
-    double stormTopMaxDropM = 1500;  // largest top difference allowed between neighbouring storm cells, per cell width (0 = off)
+    double stormTopMaxDropM = 0;     // largest top difference allowed between neighbouring storm cells, per cell width (0 = off)
     bool stormBaseSmooth = true;     // storm cells next to each other share a smoothed cloud base, so the underside has no steps where nearest stations differ
+    bool stormContour = true;        // draw one smooth, randomised outline around the storm blocks (instead of random rim rings) and keep the records inside it
     bool stormRim = true;            // ragged, tapered rim cells around the confirmed storm blocks (and in their inner corners), so outlines are not square walls
     bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
     double radarCellNm = 12;      // block size one storm record represents
@@ -66,7 +68,7 @@ struct Config {
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
-    double stormCoreCoverage = 1.0;  // coverage of storm cells that are surrounded by other storm cells (35+ dBZ); rim cells keep storm_coverage_max, so only the outline breaks up
+    double stormCoreCoverage = 0.95; // coverage of storm cells that are surrounded by other storm cells (35+ dBZ); rim cells keep storm_coverage_max, so only the outline breaks up
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud
     double manualRefreshGapS = 60;   // menu refreshes closer together than this are coalesced into one
     bool manualRefreshImmediate = false; // Refresh Weather from the menu: true = the new weather appears at once but the sim freezes for a few seconds; false = it fades in

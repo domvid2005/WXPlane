@@ -165,7 +165,13 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     }
 
     // 3) NOAA winds & temperatures aloft (FD winds), so the cruise levels follow real data too.
-    if (cfg.useAloft) res.aloft = fetchAloft(rq, now, res.aloftNote);
+    if (cfg.useAloft) res.aloft = fetchAloft(rq, now, res.aloftNote, res.stations);
+    if (cfg.useAloft && cfg.upperAir) {   // the global model: above FL390, and where no FD station is near
+        std::string upNote;
+        std::vector<AloftStation> up = fetchUpperAir(rq, now, upNote, res.stations);
+        for (auto& u : up) res.aloft.push_back(std::move(u));
+        if (!upNote.empty()) res.aloftNote += (res.aloftNote.empty() ? "" : "; ") + upNote;
+    }
 
     // 4) Radar storm cells.
     if (cfg.radar) res.radar = fetchRadar(rq, now);
@@ -179,7 +185,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     return res;
 }
 
-std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_t now, std::string& note) {
+std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_t now, std::string& note, const std::vector<Station>& known) {
     const Config& cfg = rq.cfg;
     std::string region;
     char prefix = 'K';
@@ -208,7 +214,10 @@ std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_
         }
     }
 
-    // FD stations come without coordinates; look them up once through their METAR ("ABI" -> "KABI").
+    // FD stations come without coordinates. Many of them are airports we already have a report for ("ABI" -> "KABI"): take the position from there.
+    for (const auto& k : known)
+        if (k.icao.size() == 4 && k.icao[0] == prefix && !coords_.count(k.icao.substr(1))) coords_[k.icao.substr(1)] = {k.lat, k.lon};
+    // The rest are looked up once through their METAR.
     std::vector<std::string> need;
     for (const auto& s : alCache_) {
         if (coords_.count(s.id)) continue;
@@ -216,13 +225,13 @@ std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_
         if (miss != coordsMiss_.end() && now - miss->second < 6 * 3600) continue;
         need.push_back(s.id);
     }
-    for (size_t i = 0; i < need.size(); i += 90) {
+    for (size_t i = 0; i < need.size(); i += 30) {   // small batches: one bad id or one failed request must not stop the others
         std::string ids;
-        size_t end = std::min(need.size(), i + 90);
+        size_t end = std::min(need.size(), i + 30);
         for (size_t j = i; j < end; ++j) ids += (j > i ? "," : "") + std::string(1, prefix) + need[j];
         std::string body, err;
         long st = 0;
-        if (!httpGet("https://aviationweather.gov/api/data/metar?format=json&ids=" + ids, body, st, err, 15)) break;
+        if (!httpGet("https://aviationweather.gov/api/data/metar?format=json&ids=" + ids, body, st, err, 15)) continue;   // tried again at the next update
         for (const auto& m : parseAwcMetarJson(body))
             if (m.icao.size() == 4) coords_[m.icao.substr(1)] = {m.lat, m.lon};
         for (size_t j = i; j < end; ++j)
@@ -236,7 +245,7 @@ std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_
         s.lat = c->second.first;
         s.lon = c->second.second;
         s.located = true;
-        if (distNm(rq.lat, rq.lon, s.lat, s.lon) <= cfg.aloftRangeNm + cfg.searchNm + 60) out.push_back(std::move(s));
+        if (distNm(rq.lat, rq.lon, s.lat, s.lon) <= std::max(1200.0, cfg.aloftRangeNm + cfg.searchNm + 60)) out.push_back(std::move(s));   // far ones too: places without a closer station use the nearest
     }
     if (out.empty() && note.empty()) note = "no NOAA winds-aloft stations near this position (US/Pacific coverage only)";
     return out;
@@ -364,6 +373,51 @@ RadarResult Fetcher::fetchRainViewer(const FetchRequest& rq, std::time_t now) {
     out.dataTime = dt;
     out.note = "colour-decoded image tiles: intensities and tops are approximate";
     return out;
+}
+
+std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::time_t now, std::string& note, const std::vector<Station>& known) {
+    if (!upCache_.empty() && now - upTime_ < 2700 && distNm(rq.lat, rq.lon, upLat_, upLon_) < 60.0) return upCache_;
+    // Up to 9 points spread over the stations (farthest-point order, at least 40 nm apart); one point at the aircraft if there are no stations.
+    std::vector<std::pair<double, double>> pts;
+    if (known.empty()) pts.push_back({rq.lat, rq.lon});
+    else {
+        pts.push_back({known[0].lat, known[0].lon});
+        while (pts.size() < 9) {
+            double bestD = 0; size_t bi = known.size();
+            for (size_t i = 0; i < known.size(); ++i) {
+                double md = 1e9;
+                for (const auto& p : pts) md = std::min(md, distNm(known[i].lat, known[i].lon, p.first, p.second));
+                if (md > bestD) { bestD = md; bi = i; }
+            }
+            if (bi == known.size() || bestD < 40.0) break;
+            pts.push_back({known[bi].lat, known[bi].lon});
+        }
+    }
+    const std::vector<int> full = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
+    const std::vector<int> safe = {925, 850, 700, 500, 400, 300, 250, 200};   // if the endpoint refuses the highest levels
+    std::vector<AloftStation> got;
+    std::string err, why;
+    for (const auto* lv : {&full, &safe}) {
+        std::string body;
+        long st = 0;
+        if (!httpGet(openMeteoUrl(pts, *lv), body, st, err, 20)) { if (why.empty()) why = err; continue; }
+        std::string perr;
+        got = parseOpenMeteo(body, pts, *lv, (long long)now, &perr);
+        if (!got.empty()) break;
+        if (why.empty()) why = perr;
+    }
+    if (got.empty()) {
+        note = "global-model winds aloft unavailable (" + (why.empty() ? std::string("no data") : why) + ")";
+        if (!upCache_.empty() && now - upTime_ < 3 * 3600) { note += ", using the earlier download"; return upCache_; }
+        return {};
+    }
+    upCache_ = got; upTime_ = now; upLat_ = rq.lat; upLon_ = rq.lon;
+    double top = 0;
+    for (const auto& g : got) for (const auto& L : g.levels) if (L.hasWind) top = std::max(top, L.altFt);
+    char b[160];
+    std::snprintf(b, sizeof b, "global-model winds aloft: %zu point(s), up to FL%.0f", got.size(), top / 100.0);
+    note = b;
+    return got;
 }
 
 } // namespace wx

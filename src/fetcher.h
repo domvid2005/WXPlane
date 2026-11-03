@@ -50,7 +50,7 @@ public:
 private:
     void run();
     FetchResult fetch(const FetchRequest& r);
-    std::vector<AloftStation> fetchAloft(const FetchRequest& r, std::time_t now, std::string& note);
+    std::vector<AloftStation> fetchAloft(const FetchRequest& r, std::time_t now, std::string& note, const std::vector<Station>& known = {});
     RadarResult fetchRadar(const FetchRequest& r, std::time_t now);
     RadarResult fetchRainViewer(const FetchRequest& r, std::time_t now);
 
@@ -70,6 +70,11 @@ private:
     std::vector<AloftStation> alCache_;
     std::map<std::string, std::pair<double, double>> coords_; // FD id -> lat/lon
     std::map<std::string, std::time_t> coordsMiss_;
+    // global-model winds aloft (Open-Meteo GFS), worker thread only
+    std::vector<AloftStation> upCache_;
+    std::time_t upTime_ = 0;
+    double upLat_ = 0, upLon_ = 0;
+    std::vector<AloftStation> fetchUpperAir(const FetchRequest& r, std::time_t now, std::string& note, const std::vector<Station>& known);
     GribField lastTops_;              // last echo-top grid that downloaded fine, reused when a later download fails (worker thread only)
     std::string lastTopsRegion_;
     std::time_t lastTopsAt_ = 0;      // when it was downloaded

@@ -24,6 +24,7 @@ struct RadarCell {
     bool synthetic = false;    // made up around/between confirmed blocks (rim or hole fill), not measured
     float coverScale = 1.0f;   // cloud coverage multiplier (rim rings get thinner the further out they are)
     float radiusScale = 1.0f;  // record radius multiplier (rim cells are smaller and vary, so the outline is lumpy, not a circle chain)
+    float contourScale = 1.0f; // radius multiplier that keeps the record inside the storm outline (see addStormContour)
     float edge = 0;            // 0 = inside a cluster of storm blocks .. 1 = isolated / on the rim of one (see markStormEdges)
 };
 
@@ -55,6 +56,13 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend 
 // weather beside it; applyStorm gives rim blocks a lower top and less coverage in proportion, so the cluster slopes off. Interior blocks
 // (5 or more neighbours within 1.7 block widths) are not touched.
 void markStormEdges(std::vector<RadarCell>& cells, double cellNm);
+
+// Storm outline: a smooth, slightly randomised contour is drawn around all blocks (a soft union of rounded squares, so concave corners and notches
+// fill in and convex corners round off, with a low-frequency random wobble). Small "skin" cells are then placed just inside the contour so the
+// edge follows it, and every measured block's record radius is limited so its circle does not reach beyond the contour (contourScale).
+// Returns how many skin cells were added (nearest to the aircraft first, at most maxAdd). baseRadiusNm = unscaled storm record radius.
+int addStormContour(std::vector<RadarCell>& cells, double cellNm, double baseRadiusNm, double aircraftLat, double aircraftLon,
+                    double stepM, double minDbz, int maxAdd);
 
 struct RadarResult {
     bool attempted = false;

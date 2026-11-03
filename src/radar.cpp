@@ -331,6 +331,127 @@ int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat
     return (int)fresh.size();
 }
 
+namespace {
+// Value noise in -1..1 on an absolute lattice (so the wobble of an outline is the same from one update to the next).
+double latticeNoise(double lat, double lon, double cellNm) {
+    const double u = lon * 60.0 / (cellNm * 1.3), v = lat * 60.0 / cellNm;
+    const long iu = (long)std::floor(u), iv = (long)std::floor(v);
+    const double fu = u - iu, fv = v - iv;
+    auto val = [&](long a, long b) { return unit(hashStr(std::to_string(a) + "," + std::to_string(b), 77), 3) * 2.0 - 1.0; };
+    const double su = fu * fu * (3 - 2 * fu), sv = fv * fv * (3 - 2 * fv);
+    const double top = val(iu, iv) * (1 - su) + val(iu + 1, iv) * su, bot = val(iu, iv + 1) * (1 - su) + val(iu + 1, iv + 1) * su;
+    return top * (1 - sv) + bot * sv;
+}
+}   // namespace
+
+int addStormContour(std::vector<RadarCell>& cells, double cellNm, double baseRadiusNm, double aircraftLat, double aircraftLon,
+                    double stepM, double minDbz, int maxAdd) {
+    if (cells.empty() || cellNm <= 0) return 0;
+    double lat0 = 0, lon0 = 0;
+    for (const auto& c : cells) { lat0 += c.lat; lon0 += c.lon; }
+    lat0 = std::round(lat0 / cells.size()); lon0 = std::round(lon0 / cells.size());
+    const double cosL = std::max(0.2, std::cos(lat0 * kPi / 180.0));
+    auto toX = [&](double lon) { return (lon - lon0) * 60.0 * cosL; };
+    auto toY = [&](double lat) { return (lat - lat0) * 60.0; };
+    const double h = cellNm * 0.5, sigma = cellNm * 0.4, reachSq = std::pow(sigma * 2.6, 2.0);
+    struct P { double x, y; };
+    std::vector<P> pc;
+    pc.reserve(cells.size());
+    for (const auto& c : cells) if (!c.synthetic) pc.push_back({toX(c.lon), toY(c.lat)});
+    if (pc.empty()) return 0;
+    auto field = [&](double x, double y) {
+        double keep = 1.0;
+        for (const auto& p : pc) {
+            const double dx = std::max(std::fabs(x - p.x) - h, 0.0), dy = std::max(std::fabs(y - p.y) - h, 0.0);
+            const double dd = dx * dx + dy * dy;
+            if (dd > reachSq) continue;
+            keep *= 1.0 - std::exp(-dd / (sigma * sigma));
+        }
+        return 1.0 - keep;
+    };
+    auto inside = [&](double x, double y) {
+        const double lat = lat0 + y / 60.0, lon = lon0 + x / (60.0 * cosL);
+        return field(x, y) >= 0.5 + 0.12 * latticeNoise(lat, lon, cellNm);   // the wobble: the threshold moves by up to +-0.12
+    };
+    double minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    for (const auto& p : pc) { minX = std::min(minX, p.x); maxX = std::max(maxX, p.x); minY = std::min(minY, p.y); maxY = std::max(maxY, p.y); }
+    const double g = cellNm / 6.0, pad = cellNm * 1.2;
+    const int x0 = (int)std::floor((minX - pad) / g), x1 = (int)std::ceil((maxX + pad) / g);
+    const int y0 = (int)std::floor((minY - pad) / g), y1 = (int)std::ceil((maxY + pad) / g);
+    const int W = x1 - x0 + 1, H = y1 - y0 + 1;
+    if (W <= 2 || H <= 2 || (long)W * H > 400000) return 0;
+    std::vector<unsigned char> in((size_t)W * H, 0);
+    for (int j = 0; j < H; ++j) for (int i = 0; i < W; ++i) in[(size_t)j * W + i] = inside((x0 + i) * g, (y0 + j) * g) ? 1 : 0;
+    std::vector<P> boundary;
+    for (int j = 1; j < H - 1; ++j)
+        for (int i = 1; i < W - 1; ++i) {
+            if (!in[(size_t)j * W + i]) continue;
+            if (!in[(size_t)j * W + i - 1] || !in[(size_t)j * W + i + 1] || !in[(size_t)(j - 1) * W + i] || !in[(size_t)(j + 1) * W + i])
+                boundary.push_back({(x0 + i) * g, (y0 + j) * g});
+        }
+    if (boundary.empty()) return 0;
+    // 1) keep every measured block's circle inside the outline
+    for (auto& c : cells) {
+        if (c.synthetic) continue;
+        const double cx = toX(c.lon), cy = toY(c.lat);
+        double best = 1e9;
+        for (const auto& b : boundary) best = std::min(best, std::hypot(b.x - cx, b.y - cy));
+        c.contourScale = (float)clampf((float)((best + 0.05 * cellNm) / std::max(1.0, baseRadiusNm)), 0.4f, 1.0f);
+    }
+    // 2) skin cells just inside the outline, at random but evenly spread spots
+    std::vector<size_t> order(boundary.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::vector<unsigned> hv(boundary.size());
+    for (size_t i = 0; i < boundary.size(); ++i) hv[i] = hashStr(std::to_string((long)std::lround(boundary[i].x / g)) + "," + std::to_string((long)std::lround(boundary[i].y / g)) + "@" + std::to_string((long)lat0) + "," + std::to_string((long)lon0), 5);
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return hv[a] < hv[b]; });
+    std::vector<size_t> chosen;
+    const double minSep = cellNm * 0.55;
+    for (size_t oi : order) {
+        bool ok = true;
+        for (size_t ci : chosen) if (std::hypot(boundary[oi].x - boundary[ci].x, boundary[oi].y - boundary[ci].y) < minSep) { ok = false; break; }
+        if (ok) chosen.push_back(oi);
+    }
+    std::vector<RadarCell> fresh;
+    for (size_t oi : chosen) {
+        const P b = boundary[oi];
+        double gx = field(b.x + g, b.y) - field(b.x - g, b.y), gy = field(b.x, b.y + g) - field(b.x, b.y - g);
+        double len = std::hypot(gx, gy);
+        // the field falls off outwards: outward = -gradient
+        double nx = len > 1e-9 ? -gx / len : 0.0, ny = len > 1e-9 ? -gy / len : 0.0;
+        size_t src = 0; double bd = 1e18;
+        size_t k = 0;
+        for (size_t ci = 0; ci < cells.size(); ++ci) {
+            if (cells[ci].synthetic) continue;
+            const double d = std::hypot(pc[k].x - b.x, pc[k].y - b.y);
+            ++k;
+            if (d < bd) { bd = d; src = ci; }
+        }
+        const RadarCell& s = cells[src];
+        const unsigned hh = hv[oi];
+        const double depth = cellNm * (0.26 + 0.1 * unit(hh, 1));
+        const double cx = b.x - nx * depth, cy = b.y - ny * depth;
+        RadarCell r;
+        r.lat = lat0 + cy / 60.0; r.lon = lon0 + cx / (60.0 * cosL);
+        r.synthetic = true;
+        r.dbzFine = std::max((float)minDbz, s.dbzFine - (float)(4.0 + 4.0 * unit(hh, 2)));
+        r.frac = std::max(0.25f, std::round(s.frac * 0.7f * 4.0f) / 4.0f);
+        r.topM = s.topM > 0 ? std::max(3000.0f, s.topM * (float)(0.6 + 0.2 * unit(hh, 3))) : 0.0f;
+        r.topKnown = r.topM > 0;
+        if (r.topM > 0 && stepM > 0) r.topM = std::round(r.topM / (float)stepM) * (float)stepM;
+        r.dbz = std::max(5.0f, std::round(r.dbzFine / 5.0f) * 5.0f);
+        r.rateMmH = rateFromDbz(r.dbzFine);
+        r.coverScale = 0.7f;
+        r.radiusScale = (float)clampf((float)((depth + 0.03 * cellNm) / std::max(1.0, baseRadiusNm)), 0.25f, 1.0f);
+        r.distNm = distNm(aircraftLat, aircraftLon, r.lat, r.lon);
+        r.key = "C" + std::to_string((long)std::lround(r.lat * 60.0 / (cellNm * 0.5))) + ":" + std::to_string((long)std::lround(r.lon * 60.0 * cosL / (cellNm * 0.5)));
+        fresh.push_back(r);
+    }
+    std::sort(fresh.begin(), fresh.end(), [](const RadarCell& a, const RadarCell& b) { return a.distNm < b.distNm; });
+    if ((int)fresh.size() > maxAdd) fresh.resize((size_t)std::max(0, maxAdd));
+    for (auto& f : fresh) cells.push_back(f);
+    return (int)fresh.size();
+}
+
 void markStormEdges(std::vector<RadarCell>& cells, double cellNm) {
     const double reach = cellNm * 1.7;
     for (size_t i = 0; i < cells.size(); ++i) {
@@ -439,11 +560,13 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     std::vector<RadarCell> droppedCells;
     if ((int)all.size() > cfg.radarMaxCells) { droppedCells.assign(all.begin() + cfg.radarMaxCells, all.end()); all.resize((size_t)cfg.radarMaxCells); }
     if (cfg.stormFillHoles) res.holesFilled = fillStormHoles(all, droppedCells, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, 5, std::max(4, cfg.radarMaxCells / 4));
-    if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells), cfg.stormRimRings);
+    if (cfg.stormContour) res.rimCells = addStormContour(all, cfg.radarCellNm, std::max(6.0, cfg.radarCellNm * cfg.stormRadiusFactor), lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells));
+    else if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells), cfg.stormRimRings);
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM, cfg.stormFillPits);
     if (cfg.stormSmoothTops) limitStormTopSlope(all, cfg.radarCellNm, cfg.stormTopMaxDropM, std::max(50.0, cfg.stormTopStepM));
     smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend, cfg.stormFillPits);
     markStormEdges(all, cfg.radarCellNm);
+    if (cfg.stormContour) for (auto& c : all) if (!c.synthetic) c.radiusScale = std::min(1.0f, c.contourScale);   // the outline decides how far a measured block reaches
     res.cells = std::move(all);
     res.ok = true;
     res.topsFromRadar = tops != nullptr;

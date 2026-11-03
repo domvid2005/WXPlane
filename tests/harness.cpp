@@ -221,6 +221,21 @@ CURLcode curl_easy_perform(CURL* c) {
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
     }
+    if (e->url.find("api.open-meteo.com") != std::string::npos) {   // one location, the hour 'now' is among the two returned
+        std::string b = "[{\"latitude\":37.7,\"longitude\":-97.4,\"hourly\":{\"time\":[1000000000,1000003600]";
+        const int lv[] = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
+        const double gh[] = {800, 1500, 3100, 5600, 7200, 9200, 10400, 11800, 13500, 16600, 18700};
+        for (size_t i = 0; i < sizeof lv / sizeof lv[0]; ++i) {
+            char t[400];
+            std::snprintf(t, sizeof t, ",\"wind_speed_%dhPa\":[%d,%d],\"wind_direction_%dhPa\":[250,250],\"temperature_%dhPa\":[%d,%d],\"geopotential_height_%dhPa\":[%g,%g]",
+                          lv[i], 20 + (int)i * 8, 20 + (int)i * 8, lv[i], lv[i], -5 - (int)i * 5, -5 - (int)i * 5, lv[i], gh[i], gh[i]);
+            b += t;
+        }
+        b += "}}]";
+        e->status = 200;
+        e->wf((char*)b.data(), 1, b.size(), e->wd);
+        return 0;
+    }
     bool fd = e->url.find("windtemp") != std::string::npos;
     bool ids = e->url.find("ids=KICT,KSLN,KFAR") != std::string::npos || e->url.find("ids=KFAR") != std::string::npos || e->url.find("ids=KICT") != std::string::npos;
     if (fd) ++g_fdRequests;
@@ -582,7 +597,7 @@ int main() {
         CHECK(maxTop > 8500 && maxTop < 13100);   // echo top ~12 km in the mock; the default top smoothing + centroid placement lower its lone peak       // echo top ~12 km from the mock product
         CHECK(maxPrecip >= 0.99f);
         CHECK(maxTurb > 0.8f);
-        CHECK(radius > 16.0 && radius < 19.0);   // 12 nm cells x 1.3 (inner-corner rim cells up to x1.05)
+        CHECK(radius > 14.5 && radius < 17.0);   // 12 nm cells x 1.3 (inner-corner rim cells up to x1.05)
         // the viewer window lists the radar section
         g_menuHandler(nullptr, (void*)(intptr_t)5);
         g_drawn.clear();
