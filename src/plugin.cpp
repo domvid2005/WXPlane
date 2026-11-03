@@ -57,6 +57,8 @@ Clock::time_point g_lastApplyLogAt{};
 XPLMDataRef g_drFramePeriod = nullptr;
 XPLMDataRef g_drLat = nullptr, g_drLon = nullptr, g_drLevels = nullptr, g_drAgl = nullptr, g_drLoading = nullptr;
 float g_levelsM[XPLM_NUM_TEMPERATURE_LAYERS];
+float g_windAltM[XPLM_NUM_WIND_LAYERS];
+bool g_haveWindAlts = false;
 bool g_haveLevels = false;
 
 bool g_pluginEnabled = false;
@@ -230,14 +232,43 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
         info.wind_layers[i].alt_msl = 0.0f;
         info.wind_layers[i].speed = XPLM_WIND_UNDEFINED_LAYER; // undefined layers fall back to X-Plane's own data
     }
-    for (size_t i = 0; i < x.winds.size() && i < (size_t)XPLM_NUM_WIND_LAYERS; ++i) {
+    // The sim keeps its wind layers at fixed altitudes of its own (the log showed it ignoring layers placed anywhere else),
+    // so when it tells us those altitudes we resample our profile onto them instead of using our own grid.
+    std::vector<wx::XpWind> winds = x.winds;
+    if (g_haveWindAlts && x.winds.size() >= 2) {
+        winds.clear();
+        const auto& src = x.winds;
+        for (int k = 0; k < XPLM_NUM_WIND_LAYERS; ++k) {
+            const float a = g_windAltM[k];
+            wx::XpWind w = src.front();
+            if (a >= src.back().altMsl) w = src.back();
+            else if (a > src.front().altMsl) {
+                size_t j = 1;
+                while (j + 1 < src.size() && src[j].altMsl < a) ++j;
+                const wx::XpWind &lo = src[j - 1], &hi = src[j];
+                const float span = hi.altMsl - lo.altMsl, t = span > 0 ? (a - lo.altMsl) / span : 0.0f;
+                const float rad = 3.14159265f / 180.0f;
+                const float ux = (1 - t) * lo.ms * std::sin(lo.dir * rad) + t * hi.ms * std::sin(hi.dir * rad);
+                const float uy = (1 - t) * lo.ms * std::cos(lo.dir * rad) + t * hi.ms * std::cos(hi.dir * rad);
+                w = lo;
+                w.ms = std::sqrt(ux * ux + uy * uy);
+                w.dir = w.ms > 0.01f ? std::fmod(std::atan2(ux, uy) / rad + 360.0f, 360.0f) : lo.dir;
+                w.gustMs = (1 - t) * lo.gustMs + t * hi.gustMs;
+                w.shearDeg = (1 - t) * lo.shearDeg + t * hi.shearDeg;
+                w.turbulence = (1 - t) * lo.turbulence + t * hi.turbulence;
+            }
+            w.altMsl = a;
+            winds.push_back(w);
+        }
+    }
+    for (size_t i = 0; i < winds.size() && i < (size_t)XPLM_NUM_WIND_LAYERS; ++i) {
         XPLMWeatherInfoWinds_t& w = info.wind_layers[i];
-        w.alt_msl = x.winds[i].altMsl;
-        w.speed = x.winds[i].ms;
-        w.direction = x.winds[i].dir;
-        w.gust_speed = x.winds[i].gustMs;
-        w.shear = x.winds[i].shearDeg;
-        w.turbulence = x.winds[i].turbulence;
+        w.alt_msl = winds[i].altMsl;
+        w.speed = winds[i].ms;
+        w.direction = winds[i].dir;
+        w.gust_speed = winds[i].gustMs;
+        w.shear = winds[i].shearDeg;
+        w.turbulence = winds[i].turbulence;
     }
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
         // A layer with coverage 0 is removed, which is what we want when the METAR reports clear skies.
@@ -275,6 +306,15 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     g_haveLevels = false;
     if (g_drLevels && XPLMGetDatavf(g_drLevels, nullptr, 0, 0) == XPLM_NUM_TEMPERATURE_LAYERS)
         g_haveLevels = XPLMGetDatavf(g_drLevels, g_levelsM, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
+    g_haveWindAlts = false;
+    {   // the sim's own wind layer altitudes (ascending, 13 of them); if it won't say, our own grid is used
+        XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m");
+        if (dr && XPLMGetDatavf(dr, g_windAltM, 0, XPLM_NUM_WIND_LAYERS) == XPLM_NUM_WIND_LAYERS) {
+            bool ok = g_windAltM[0] > 0;
+            for (int k = 1; k < XPLM_NUM_WIND_LAYERS; ++k) ok = ok && g_windAltM[k] > g_windAltM[k - 1];
+            g_haveWindAlts = ok;
+        }
+    }
     // Only stations whose data changed are touched, and stations that left range are erased. Re-setting identical
     // records makes X-Plane rebuild their cloud layers, which shows up as hitches, so unchanged ones are left alone.
     const bool full = g_recs.empty() || !g_firstApplyDone;
