@@ -327,3 +327,8 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 - Every confirmed block now checks its 8 sides. Each open side (no confirmed block there) adds edge taper and shrinks the block's circle, down to 75% when fully open, so the square's corners are carved away and the outline ramps down in a curve.
 - Rim cells carry a coverage multiplier (`coverScale`): 0.6 on the first ring, 0.45 on the second, about 0.34 on the third, 0.85 in inner corners. The storm now thins out ring by ring instead of stopping at one coverage step (the station deck underneath still sets the floor).
 - Defaults: 3 rings, rim budget up to `radar_max_cells` (60) extra cells. More records than before; lower `storm_rim_rings` if the load is too high.
+
+### Tops that fail to download, and light rain
+
+- A truncated echo-top download is retried once; if it still fails, the last good tops are reused for up to 45 minutes (the log says so). Before, the update fell back to heights estimated from reflectivity, which changed every storm's height at once (13.5 km measured became 10.5 km estimated in one log) and rebuilt the sky with different shapes.
+- `storm_replaces_fill` now only applies under storm cells with a top of 6 km or more. Under light, low echoes (20-30 dBZ cells with 4 km tops) the background fill tile stays: removing 53 tiles there left 40-58% cumulus patches as the only cloud, which rendered as small odd clumps with dark shadows.

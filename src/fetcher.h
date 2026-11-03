@@ -70,6 +70,9 @@ private:
     std::vector<AloftStation> alCache_;
     std::map<std::string, std::pair<double, double>> coords_; // FD id -> lat/lon
     std::map<std::string, std::time_t> coordsMiss_;
+    GribField lastTops_;              // last echo-top grid that downloaded fine, reused when a later download fails (worker thread only)
+    std::string lastTopsRegion_;
+    std::time_t lastTopsAt_ = 0;      // when it was downloaded
     std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
 };
 

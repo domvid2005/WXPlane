@@ -303,6 +303,13 @@ static int runStaged() {
     { bool metar = false, mrms = false; for (auto& u : g_urls) { metar = metar || u.find("aviationweather.gov/api/data/metar") != std::string::npos; mrms = mrms || u.find("mrms.ncep") != std::string::npos; }
       CHECK(!metar && mrms); }
     CHECK(g_end == endsBefore || g_lastImm == 0);   // nothing forced: either nothing changed, or the update was left to fade in
+    {   // the echo-top download breaks: the last good tops are reused (storms keep their measured heights), not estimates
+        const std::string savedTop = g_mrmsTop;
+        g_mrmsTop.clear();
+        for (int i = 0; i < 2000 && g_logAll.find("reusing the last good tops") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        CHECK(g_logAll.find("reusing the last good tops") != std::string::npos);
+        g_mrmsTop = savedTop;
+    }
     XPluginDisable();
     XPluginStop();
     std::printf("%s (%d failures)\n", g_fail ? "STAGED FAILED" : "STAGED OK", g_fail);

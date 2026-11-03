@@ -286,13 +286,24 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
         GribField tops;
         std::string topErr;
         bool haveTops = false;
-        if (cfg.radarEchoTops) haveTops = loadMrms(mrmsUrl(region, "EchoTop_18"), win, tops, topErr);
+        bool oldTops = false;
+        if (cfg.radarEchoTops) {
+            haveTops = loadMrms(mrmsUrl(region, "EchoTop_18"), win, tops, topErr);
+            if (!haveTops) { tops = GribField(); haveTops = loadMrms(mrmsUrl(region, "EchoTop_18"), win, tops, topErr); }   // one retry (truncated downloads happen)
+            if (haveTops) { lastTops_ = tops; lastTopsRegion_ = region; lastTopsAt_ = now; }
+            else if (lastTops_.valid() && lastTopsRegion_ == region && now - lastTopsAt_ < 45 * 60) {
+                // Falling back to heights estimated from reflectivity changes every storm's height at once (13.5 km measured became 10.5 km estimated
+                // in one update, and the whole sky was rebuilt): keep the last measured tops instead.
+                tops = lastTops_; haveTops = true; oldTops = true;
+            }
+        }
         out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg, &radarPrev_);
         radarPrev_.clear();
         for (const auto& c : out.cells) radarPrev_.insert(c.key);
         out.source = "NOAA MRMS (" + name + ")";
         out.dataTime = refl.refTime;
-        if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
+        if (oldTops) out.note = "echo-top download failed (" + topErr + "), reusing the last good tops" + " from " + std::to_string((now - lastTopsAt_) / 60) + " min ago";
+        else if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
         return out;
     }
     if (cfg.radarGlobal) {

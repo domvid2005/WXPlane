@@ -416,9 +416,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                         // renders that as a sheer canyon through the storm. The storm cells cover this spot, so the tile is not needed. Rim cells (the faint
                         // outskirts) do not count: below them the deck stays.
                         bool under = false;
+                        // Only tall storms (top 6 km or more): under light, low echoes the background deck is the better cloud.
                         const double reach = std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * 0.8;
                         for (const auto& rc : res.radar.cells)
-                            if (!rc.synthetic || (!rc.key.empty() && rc.key[0] != 'Q')) { if (wx::distNm(latc, lonc, rc.lat, rc.lon) < reach) { under = true; break; } }
+                            if ((!rc.synthetic || (!rc.key.empty() && rc.key[0] != 'Q')) && rc.topM >= 6000.0f) { if (wx::distNm(latc, lonc, rc.lat, rc.lon) < reach) { under = true; break; } }
                         if (under) { ++fillUnderStorm; continue; }
                     }
                     wx::Station syn = wx::blendAt(res.stations, latc, lonc);
