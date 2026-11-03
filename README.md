@@ -313,3 +313,7 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 
 - `storm_rim_rings` (default 2, 1-3): the rim is built in rings. The second ring starts from the first ring's cells and is fainter, lower and smaller again, so the storm fades out over two steps instead of ending at one wall. More rings = softer edge, more records.
 - An inner corner now means two or more confirmed blocks right next to the spot (within 1.2 cells). Before, a spot beside a straight side of a wide storm counted as a corner and got a full-strength cell, which pushed the wall outward instead of rounding it.
+
+### Pits
+
+`storm_fill_pits` (default on): with `storm_smooth_tops`, a block whose top is under 60% of the mean of at least four blocks around it (typically a weak-echo block with no measured echo top, whose height was only estimated from reflectivity) is lifted to exactly that mean. Such a block otherwise renders as a sheer rectangular crater in the middle of a storm. Blocks at the edge of a cluster (fewer than four neighbours) are left alone.

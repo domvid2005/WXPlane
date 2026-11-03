@@ -59,7 +59,7 @@ std::string mrmsUrl(const std::string& region, const std::string& product) {
     return u + product + "/MRMS_" + product + ".latest.grib2.gz";
 }
 
-void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend, double stepM) {
+void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend, double stepM, bool fillPits) {
     std::vector<float> orig(cells.size());
     for (size_t i = 0; i < cells.size(); ++i) orig[i] = cells[i].topM;
     const double reach = cellNm * 1.7;
@@ -73,6 +73,10 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend,
         }
         float cap = n == 0 ? 8000.0f : (float)(sum / n) + 2000.0f;
         if (cells[i].topM > cap) cells[i].topM = std::max(1500.0f, std::round(cap / 500.0f) * 500.0f);
+        // the opposite of a spike: a pit. A block much lower than the ring of blocks around it (typically one with a weak echo and no echo top,
+        // whose height was only estimated from reflectivity) renders as a sheer rectangular crater in the middle of a storm. Lift it toward its neighbours.
+        else if (fillPits && n >= 4 && cells[i].topM < 0.6f * (float)(sum / n))
+            cells[i].topM = std::round((float)(sum / n) / 500.0f) * 500.0f;
     }
     // optional real smoothing: pull each top toward the distance-weighted mean of its neighbours (rounds the steps between cells)
     if (blend > 0.0 && stepM > 0.0) {
@@ -353,7 +357,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     if ((int)all.size() > cfg.radarMaxCells) { droppedCells.assign(all.begin() + cfg.radarMaxCells, all.end()); all.resize((size_t)cfg.radarMaxCells); }
     if (cfg.stormFillHoles) res.holesFilled = fillStormHoles(all, droppedCells, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, 5, std::max(4, cfg.radarMaxCells / 4));
     if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells * 3 / 4), cfg.stormRimRings);
-    if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM);
+    if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM, cfg.stormFillPits);
     smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend);
     markStormEdges(all, cfg.radarCellNm);
     res.cells = std::move(all);

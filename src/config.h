@@ -54,6 +54,7 @@ struct Config {
     double stormTopBlend = 0.4;      // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
     double stormTopVariationKnownM = 0; // fixed per-block height variation (m) added to MEASURED echo tops too (estimated tops always use storm_top_variation_m)
     int stormRimRings = 2;           // 1..3: how many fading rings of rim cells go around a storm (more = softer, rounder edge, more records)
+    bool stormFillPits = true;       // a block much lower than the ring of blocks around it is lifted toward them (no sheer rectangular craters inside a storm)
     bool stormRim = true;            // ragged, tapered rim cells around the confirmed storm blocks (and in their inner corners), so outlines are not square walls
     bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
     double radarCellNm = 12;      // block size one storm record represents

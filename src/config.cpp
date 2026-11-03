@@ -90,6 +90,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_top_blend") c.stormTopBlend = d < 0 ? 0 : (d > 0.8 ? 0.8 : d);
         else if (k == "storm_top_variation_known_m") c.stormTopVariationKnownM = d < 0 ? 0 : (d > 1000 ? 1000 : d);
         else if (k == "storm_rim_rings") c.stormRimRings = (int)(d < 1 ? 1 : (d > 3 ? 3 : d));
+        else if (k == "storm_fill_pits") c.stormFillPits = toBool(v);
         else if (k == "storm_rim") c.stormRim = toBool(v);
         else if (k == "storm_centroid") c.stormCentroid = toBool(v);
         else if (k == "storm_rain_blend") c.stormRainBlend = d < 0 ? 0 : (d > 0.8 ? 0.8 : d);

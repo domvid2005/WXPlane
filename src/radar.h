@@ -41,7 +41,7 @@ float stormPrecipAt(const std::vector<RadarCell>& cells, double lat, double lon,
 // Returns how many cells were added (at most maxAdd); each takes the mean reflectivity, top and coverage of its neighbours.
 int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& dropped, double cellNm, double aircraftLat, double aircraftLon,
                    double stepM, double minDbz, int minNeighbours, int maxAdd);
-void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend = 0.0, double stepM = 500.0);
+void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend = 0.0, double stepM = 500.0, bool fillPits = false);
 
 // Rim of a storm cluster: a block with few neighbouring blocks among the applied cells (the rim of a system, or the cut made by the cell
 // limit) gets edge up to 1. A storm record stops sharply at its circle, so a full-depth block at the rim shows up as a cliff against the

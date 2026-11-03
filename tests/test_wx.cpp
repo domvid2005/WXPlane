@@ -266,6 +266,20 @@ int main() {
         CHECK(v[3].topM <= 12500 && v[3].topM > 10000);
         CHECK(v[4].topM == 8000);
     }
+    // --- pits: a low block ringed by tall ones is lifted (unless switched off); a low block at the edge of a cluster is left alone
+    {
+        std::vector<RadarCell> v;
+        const double dl = 12.0 / 60.0, dn = dl / std::cos(35.0 * 3.14159265 / 180.0);
+        for (int j = -1; j <= 1; ++j) for (int i = -1; i <= 1; ++i) { RadarCell c; c.lat = 35.0 + j * dl; c.lon = -97.0 + i * dn; c.topM = (i == 0 && j == 0) ? 3500.0f : 11000.0f; v.push_back(c); }
+        std::vector<RadarCell> off = v;
+        smoothStormTops(off, 12.0, 0.0, 500.0, false);
+        smoothStormTops(v, 12.0, 0.0, 500.0, true);
+        CHECK(off[4].topM == 3500 && v[4].topM == 11000);   // lifted to the exact mean of the ring around it
+        CHECK(v[0].topM >= 10000 && v[8].topM >= 10000);   // corners keep (nearly) their height; the existing spike limit may trim a little
+        std::vector<RadarCell> e = v; e[0].topM = 3500;      // a low corner block has only 3 neighbours: not a pit
+        smoothStormTops(e, 12.0, 0.0, 500.0, true);
+        CHECK(e[0].topM == 3500);
+    }
     // --- optional storm-top smoothing: a blend pulls neighbouring tops together; 0 leaves ordinary clusters exactly as before
     {
         auto row = [](float a, float b) { std::vector<RadarCell> v(2); v[0].lat = 35.0; v[0].lon = -97.0; v[0].topM = a; v[1].lat = 35.0; v[1].lon = -96.8; v[1].topM = b; return v; };
