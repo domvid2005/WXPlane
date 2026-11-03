@@ -138,8 +138,8 @@ void limitStormTopSlope(std::vector<RadarCell>& cells, double cellNm, double max
         for (auto& c : cells) if (c.topM > 0 && !c.synthetic) c.topM = std::max(1500.0f, (float)(std::round(c.topM / stepM) * stepM));
 }
 
-void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend) {
-    if (blend <= 0.0) return;
+void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend, bool fillPits) {
+    if (blend <= 0.0 && !fillPits) return;
     std::vector<float> orig(cells.size());
     for (size_t i = 0; i < cells.size(); ++i) orig[i] = cells[i].dbzFine;
     const double sigma = cellNm * 0.9, reach = cellNm * 1.7;
@@ -157,6 +157,22 @@ void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend)
         const float f = (float)((1.0 - blend) * orig[i] + blend * (sum / ws));
         cells[i].dbzFine = std::max(f, 0.0f);   // may rise or fall: this is smoothing, not a limiter
         cells[i].rateMmH = rateFromDbz(cells[i].dbzFine);
+    }
+    if (!fillPits) return;
+    // pits: judged on the unsmoothed values of the 8 surrounding blocks
+    for (size_t i = 0; i < cells.size(); ++i) {
+        if (cells[i].synthetic) continue;
+        double sum = 0; int n = 0;
+        for (size_t j = 0; j < cells.size(); ++j) {
+            if (j == i || cells[j].synthetic) continue;
+            if (distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon) <= cellNm * 1.5) { sum += orig[j]; ++n; }
+        }
+        if (n < 4) continue;
+        const float mean = (float)(sum / n);
+        if (cells[i].dbzFine < mean - 6.0f) {
+            cells[i].dbzFine = mean - 2.0f;
+            cells[i].rateMmH = rateFromDbz(cells[i].dbzFine);
+        }
     }
 }
 
@@ -426,7 +442,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells), cfg.stormRimRings);
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM, cfg.stormFillPits);
     if (cfg.stormSmoothTops) limitStormTopSlope(all, cfg.radarCellNm, cfg.stormTopMaxDropM, std::max(50.0, cfg.stormTopStepM));
-    smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend);
+    smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend, cfg.stormFillPits);
     markStormEdges(all, cfg.radarCellNm);
     res.cells = std::move(all);
     res.ok = true;

@@ -348,3 +348,14 @@ After the spike/pit smoothing, no two neighbouring storm cells (closer than 1.5 
 ### Storm settings window
 
 `Plugins > WXPlane > Storm Settings (turbulence)...` opens a small window with a slider for the storm turbulence, 0-200 % in 5 % steps (`radar_turbulence`, 100 % = scaled to the radar reflectivity as before). It is saved when you release the slider and the storms are rebuilt with the new value.
+
+### Storm coverage stays at 95 %
+
+`storm_coverage_max` is 0.95 again. A trial at 1.0 removed the natural breakup of the cloud; set `storm_coverage_max = 1.0` in `WXPlane.cfg` if you want solid storm cores. Config files that were moved to 1.0 by that trial (config version 23) are put back to 0.95 once.
+
+### Rain pits and wider overlap (v24)
+
+* `storm_fill_pits` now also covers rain: a measured block at least 6 dBZ below the mean of its 4+ neighbours is lifted to 2 dBZ under that mean, so no pocket of light rain sits in the middle of a storm (a block on an edge, with fewer neighbours, is left alone).
+* `storm_radius_factor` 1.3 -> 1.45 (storm records of about 17 nm instead of 15.6 nm at 12 nm cells) so neighbouring circles overlap more and the outline between them is smoother.
+(`storm_rain_blend` stays at 0.4: 0.6 pulled the heaviest core's rain below full strength.)
+Config files older than version 24 take the new radius once.

@@ -582,7 +582,7 @@ int main() {
         CHECK(maxTop > 8500 && maxTop < 13100);   // echo top ~12 km in the mock; the default top smoothing + centroid placement lower its lone peak       // echo top ~12 km from the mock product
         CHECK(maxPrecip >= 0.99f);
         CHECK(maxTurb > 0.8f);
-        CHECK(radius > 14.5 && radius < 17.0);   // 12 nm cells x 1.3 (inner-corner rim cells up to x1.05)
+        CHECK(radius > 16.0 && radius < 19.0);   // 12 nm cells x 1.3 (inner-corner rim cells up to x1.05)
         // the viewer window lists the radar section
         g_menuHandler(nullptr, (void*)(intptr_t)5);
         g_drawn.clear();

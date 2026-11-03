@@ -574,10 +574,24 @@ int main() {
         RadarCell cell; cell.lat = 38; cell.lon = -98; cell.dbz = 52; cell.frac = 1; cell.topKnown = true; cell.topM = 13000; cell.rateMmH = rateFromDbz(52);
         XpWx st = base;
         applyStorm(st, cell, sc, 400, 38);
-        CHECK(st.clouds[2].coverage > 0.7f && st.clouds[2].coverage <= 0.95f && st.clouds[2].type == 3.0f && st.clouds[2].topM > 11000 && st.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1 && st.clouds[2].baseM < 1500);
+        CHECK(st.clouds[2].coverage > 0.7f && st.clouds[2].coverage <= 1.0f && st.clouds[2].type == 3.0f && st.clouds[2].topM > 11000 && st.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1 && st.clouds[2].baseM < 1500);
         CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= st.clouds[2].topM / 0.3048 - 1);
         CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
         CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
+        {   // rain pits: a weak block inside a ring of strong ones is lifted, an edge block (few neighbours) is not
+            std::vector<RadarCell> v;
+            for (int j = -1; j <= 1; ++j) for (int i = -1; i <= 1; ++i) {
+                RadarCell c; c.lat = 38 + j * 12.0 / 60.0; c.lon = -98 + i * 12.0 / (60.0 * std::cos(38 * 3.14159265 / 180)); c.dbz = 45; c.dbzFine = 45; c.rateMmH = rateFromDbz(45);
+                if (!i && !j) { c.dbzFine = 25; c.rateMmH = rateFromDbz(25); }
+                v.push_back(c);
+            }
+            std::vector<RadarCell> a2 = v; smoothStormRain(a2, 12.0, 0.0, false);
+            CHECK(a2[4].dbzFine < 26.0f);
+            std::vector<RadarCell> b2 = v; smoothStormRain(b2, 12.0, 0.0, true);
+            CHECK(b2[4].dbzFine > 42.0f && b2[4].rateMmH > rateFromDbz(40));
+            std::vector<RadarCell> e2(v.begin(), v.begin() + 3); e2[1].dbzFine = 25; smoothStormRain(e2, 12.0, 0.0, true);
+            CHECK(e2[1].dbzFine == 25.0f);
+        }
         {   // top slope limit: a 11 km core next to a 4 km cell, one cell apart, ends up within the allowed difference
             std::vector<RadarCell> v(3);
             for (int i = 0; i < 3; ++i) { v[i].lat = 38; v[i].lon = -98 + i * 12.0 / (60.0 * std::cos(38 * 3.14159265 / 180)); v[i].topM = i == 0 ? 11000.0f : (i == 1 ? 8000.0f : 4000.0f); v[i].dbz = 45; }

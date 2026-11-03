@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 22;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 24;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -47,7 +47,7 @@ struct Config {
     bool radar = true;            // turn radar echoes into storm cells
     bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
     double radarRangeNm = 150;    // storms within this distance of the aircraft
-    double stormRadiusFactor = 1.3;  // storm record radius = this x radar cell size (min 6 nm); cells sit at the centre of their echo (storm_centroid), up to half a block off the grid, so 1.3 keeps them overlapping each other and the gap-fill tiles
+    double stormRadiusFactor = 1.45;  // storm record radius = this x radar cell size (min 6 nm); cells sit at the centre of their echo (storm_centroid), up to half a block off the grid, so 1.3 keeps them overlapping each other and the gap-fill tiles
     bool stormCentroid = true;       // a storm cell sits at the reflectivity-weighted centre of its echo instead of the block centre (breaks up the square grid)
     double stormRainBlend = 0.4;     // 0..0.8: pull each cell's reflectivity (rain rate) toward its neighbours', so rain steps between blocks round off
     double stormTopStepM = 250;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)

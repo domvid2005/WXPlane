@@ -31,7 +31,9 @@ struct RadarCell {
 // the neighbour mean + 2 km, and lone blocks to 8 km. Only ever lowers a top.
 // Rain a storm field gives at a point (0..1, same scale as XpWx::precip): inverse-distance mean of the cells within reachNm, 0 if none.
 // Station and gap-fill records use it so a dry-reporting station or fill tile inside a storm does not leave a round dry spot.
-void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend);
+// Rain pits: a measured cell whose reflectivity is far below the ring of cells around it (at least 4 neighbours, 6 dBZ lower than their mean)
+// is lifted to just under that mean, so no pocket of light rain shows in the middle of a storm. Run by smoothStormRain when fillPits is set.
+void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend, bool fillPits = false);
 // Ragged skirt: around every confirmed block, in each of 8 directions that has no block, a smaller, lighter, lower cell at a randomised
 // (but stable between updates) distance and angle; in inner corners (2+ blocks right next to the spot) a full cell with the neighbours' mean; further rings (up to 3) repeat this from the previous ring, fainter and smaller each time. At most maxAdd.
 int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat, double aircraftLon, double stepM, double minDbz, int maxAdd, int rings = 1);

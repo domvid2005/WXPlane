@@ -110,7 +110,9 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "update_transition_s") c.updateTransitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
-    if (version < kConfigVersion) {   // the start-up defaults changed: take the new ones once, keep everything else as the user set it
+    if (version < 24) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; }   // v24: wider overlap
+    if (version < 23) { Config d; c.stormCoverageMax = d.stormCoverageMax; }   // v23: back to 95 % (the 100 % trial removed the natural breakup)
+    if (version < 22) {   // the start-up defaults changed: take the new ones once, keep everything else as the user set it
         Config d;
         c.updateMinutes = d.updateMinutes;
         c.startupDelayS = d.startupDelayS;
