@@ -53,7 +53,7 @@ struct Config {
     double stormTopStepM = 250;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
     double stormTopBlend = 0.4;      // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
     double stormTopVariationKnownM = 0; // fixed per-block height variation (m) added to MEASURED echo tops too (estimated tops always use storm_top_variation_m)
-    int stormRimRings = 2;           // 1..3: how many fading rings of rim cells go around a storm (more = softer, rounder edge, more records)
+    int stormRimRings = 3;           // 1..3: how many fading rings of rim cells go around a storm (more = softer, rounder edge, more records)
     bool stormReplacesFill = true;   // no background (gap-fill) tile where a confirmed storm cell covers: its low deck would cut a canyon through the storm
     bool stormFillPits = true;       // a block much lower than the ring of blocks around it is lifted toward them (no sheer rectangular craters inside a storm)
     bool stormRim = true;            // ragged, tapered rim cells around the confirmed storm blocks (and in their inner corners), so outlines are not square walls

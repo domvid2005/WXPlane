@@ -22,6 +22,7 @@ struct RadarCell {
     double distNm = 0;         // from the aircraft when built
     std::string key;           // stable per block, used to diff updates
     bool synthetic = false;    // made up around/between confirmed blocks (rim or hole fill), not measured
+    float coverScale = 1.0f;   // cloud coverage multiplier (rim rings get thinner the further out they are)
     float radiusScale = 1.0f;  // record radius multiplier (rim cells are smaller and vary, so the outline is lumpy, not a circle chain)
     float edge = 0;            // 0 = inside a cluster of storm blocks .. 1 = isolated / on the rim of one (see markStormEdges)
 };

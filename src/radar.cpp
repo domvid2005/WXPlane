@@ -239,16 +239,19 @@ int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat
                     r.frac = std::max(0.25f, std::round((float)(sFrac / n) * 4.0f) / 4.0f);
                     r.topM = nTop > 0 ? (float)(sTop / nTop * 0.9) : 0.0f;
                     r.radiusScale = (float)(0.9 + 0.15 * unit(h, 4));
+                    r.coverScale = 0.85f;
                 } else if (ring == 1) {
                     r.dbzFine = std::max((float)minDbz, c.dbzFine - (float)(6.0 + 10.0 * unit(h, 5)));   // lighter and lower toward the outside
                     r.frac = std::max(0.25f, c.frac * 0.6f);
                     r.topM = c.topM > 0 ? std::max(3000.0f, c.topM * (float)(0.5 + 0.3 * unit(h, 6))) : 0.0f;
                     r.radiusScale = (float)(0.5 + 0.35 * unit(h, 7));
+                    r.coverScale = 0.6f;
                 } else {                                      // outer rings: fainter, lower, smaller again, so the edge fades out instead of ending at a wall
                     r.dbzFine = std::max((float)minDbz, c.dbzFine - (float)(4.0 + 6.0 * unit(h, 5)));
                     r.frac = std::max(0.25f, c.frac * 0.75f);
                     r.topM = c.topM > 0 ? std::max(3000.0f, c.topM * (float)(0.55 + 0.25 * unit(h, 6))) : 0.0f;
                     r.radiusScale = std::max(0.4f, c.radiusScale * (float)(0.65 + 0.2 * unit(h, 7)));
+                    r.coverScale = std::max(0.3f, c.coverScale * 0.75f);
                 }
                 r.topKnown = r.topM > 0;
                 if (r.topM > 0 && stepM > 0) r.topM = std::round(r.topM / (float)stepM) * (float)stepM;
@@ -273,6 +276,24 @@ void markStormEdges(std::vector<RadarCell>& cells, double cellNm) {
         for (size_t j = 0; j < cells.size(); ++j)
             if (j != i && distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon) <= reach) ++n;
         cells[i].edge = clampf((5.0f - (float)n) / 5.0f, 0.0f, 1.0f);
+    }
+    // Corner cut: a confirmed block that has open ground on some of its 8 sides (a convex corner of the storm, or a side) is pulled in:
+    // more edge taper, and a smaller circle, so its square corner is carved away and the outline ramps down in a curve instead of a corner.
+    for (size_t i = 0; i < cells.size(); ++i) {
+        if (cells[i].synthetic) continue;
+        const double cosL = std::max(0.2, std::cos(cells[i].lat * kPi / 180.0));
+        int open = 0;
+        for (int k = 0; k < 8; ++k) {
+            const double a = k * 45.0 * kPi / 180.0;
+            const double plat = cells[i].lat + std::cos(a) * cellNm / 60.0, plon = cells[i].lon + std::sin(a) * cellNm / 60.0 / cosL;
+            bool covered = false;
+            for (size_t j = 0; j < cells.size() && !covered; ++j)
+                covered = j != i && !cells[j].synthetic && distNm(plat, plon, cells[j].lat, cells[j].lon) < cellNm * 0.6;
+            if (!covered) ++open;
+        }
+        const float e = (float)open / 8.0f;
+        cells[i].edge = std::max(cells[i].edge, e);
+        cells[i].radiusScale = std::min(cells[i].radiusScale, 1.0f - 0.25f * e);   // a fully open block shrinks to 75%
     }
 }
 
@@ -356,7 +377,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     std::vector<RadarCell> droppedCells;
     if ((int)all.size() > cfg.radarMaxCells) { droppedCells.assign(all.begin() + cfg.radarMaxCells, all.end()); all.resize((size_t)cfg.radarMaxCells); }
     if (cfg.stormFillHoles) res.holesFilled = fillStormHoles(all, droppedCells, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, 5, std::max(4, cfg.radarMaxCells / 4));
-    if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells * 3 / 4), cfg.stormRimRings);
+    if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells), cfg.stormRimRings);
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM, cfg.stormFillPits);
     smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend);
     markStormEdges(all, cfg.radarCellNm);
@@ -490,6 +511,7 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     cl.type = (dbz >= 30.0f || (c.topKnown && c.topM > 6000.0f)) ? 3.0f : 2.0f;
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
+    cl.coverage *= c.coverScale;            // rim rings: thinner and thinner toward the outside
     cl.coverage *= 1.0f - 0.25f * c.edge;   // and up to 25% less coverage on the rim (the station deck it replaces still sets the floor below)
     // A storm inside a solid deck must not thin it: X-Plane blends coverage slot by slot, so a 58% storm over a 94% overcast punched a
     // sinuous hole-edged contour through the sheet (KFYV log). The station's own coverage is the floor.

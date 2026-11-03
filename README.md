@@ -311,7 +311,7 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 
 ### Rounded, fading edges
 
-- `storm_rim_rings` (default 2, 1-3): the rim is built in rings. The second ring starts from the first ring's cells and is fainter, lower and smaller again, so the storm fades out over two steps instead of ending at one wall. More rings = softer edge, more records.
+- `storm_rim_rings` (default 3, 1-3): the rim is built in rings. The second ring starts from the first ring's cells and is fainter, lower and smaller again, so the storm fades out over two steps instead of ending at one wall. More rings = softer edge, more records.
 - An inner corner now means two or more confirmed blocks right next to the spot (within 1.2 cells). Before, a spot beside a straight side of a wide storm counted as a corner and got a full-strength cell, which pushed the wall outward instead of rounding it.
 
 ### Pits
@@ -321,3 +321,9 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 ### Canyons: fill tiles under storms
 
 `storm_replaces_fill` (default on): a background gap-fill tile whose centre is within 0.8 x storm radius of a confirmed storm cell (rim cells excluded) is no longer sent. Reason (from a log of a canyon through a storm): a fill tile of 12 nm radius with a 2.3 km deck sat 4 nm from the aircraft, inside storm cells with 13 km tops; X-Plane blends overlapping records slot by slot, so the low tile cut a sheer trench. The overlap of fill tiles was widened to 1.0 earlier, which made this worse. The update log line now says how many tiles were left out.
+
+### Corner cut and thinner rings
+
+- Every confirmed block now checks its 8 sides. Each open side (no confirmed block there) adds edge taper and shrinks the block's circle, down to 75% when fully open, so the square's corners are carved away and the outline ramps down in a curve.
+- Rim cells carry a coverage multiplier (`coverScale`): 0.6 on the first ring, 0.45 on the second, about 0.34 on the third, 0.85 in inner corners. The storm now thins out ring by ring instead of stopping at one coverage step (the station deck underneath still sets the floor).
+- Defaults: 3 rings, rim budget up to `radar_max_cells` (60) extra cells. More records than before; lower `storm_rim_rings` if the load is too high.

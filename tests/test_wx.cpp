@@ -266,6 +266,18 @@ int main() {
         CHECK(v[3].topM <= 12500 && v[3].topM > 10000);
         CHECK(v[4].topM == 8000);
     }
+    // --- corner cut: open sides shrink a block's circle and add taper; the interior block of a 3x3 keeps full size
+    {
+        std::vector<RadarCell> v;
+        const double dl = 12.0 / 60.0, dn = dl / std::cos(35.0 * 3.14159265 / 180.0);
+        for (int j = -1; j <= 1; ++j) for (int i = -1; i <= 1; ++i) { RadarCell c; c.lat = 35.0 + j * dl; c.lon = -97.0 + i * dn; v.push_back(c); }
+        markStormEdges(v, 12.0);
+        CHECK(v[4].radiusScale == 1.0f && v[4].edge == 0.0f);              // centre: all 8 sides covered
+        CHECK(v[0].radiusScale < 0.85f && v[0].edge >= 0.6f);              // corner: 5 of 8 sides open
+        CHECK(v[1].radiusScale < 1.0f && v[1].radiusScale > v[0].radiusScale);   // side block: 3 open sides, less than a corner
+        std::vector<RadarCell> one(1); markStormEdges(one, 12.0);
+        CHECK(one[0].radiusScale <= 0.75f + 1e-4f && one[0].edge == 1.0f);   // lone block: fully open
+    }
     // --- pits: a low block ringed by tall ones is lifted (unless switched off); a low block at the edge of a cluster is left alone
     {
         std::vector<RadarCell> v;
@@ -370,6 +382,8 @@ int main() {
                 for (int j = 0; j < 3; ++j) apart = apart && wx::distNm(r.lat, r.lon, L[j].lat, L[j].lon) > 12.0 * 0.49;
             }
             CHECK(outer && fades && apart);
+            bool thin = true; for (int i = 0; i < n2; ++i) thin = thin && r2[3 + i].coverScale <= 0.85f && r2[3 + i].coverScale >= 0.3f;
+            CHECK(thin);
         }
         std::vector<RadarCell> c0 = L;
         CHECK(addStormRim(c0, 12.0, lat0, lon0, 500.0, 20.0, 0) == 0 && c0.size() == 3);   // budget 0
