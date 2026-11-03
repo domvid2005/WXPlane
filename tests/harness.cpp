@@ -575,7 +575,7 @@ int main() {
         CHECK(maxTop > 9500 && maxTop < 13100);       // echo top ~12 km from the mock product
         CHECK(maxPrecip >= 0.99f);
         CHECK(maxTurb > 0.8f);
-        CHECK(radius > 10 && radius < 11.5);
+        CHECK(radius > 11.5 && radius < 12.5);
         // the viewer window lists the radar section
         g_menuHandler(nullptr, (void*)(intptr_t)5);
         g_drawn.clear();

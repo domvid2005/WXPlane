@@ -207,7 +207,7 @@ X-Plane gives each weather record a weight based on its age, so every record WXP
 
 ## Cloud edges between records
 
-Each station's circle stops at 0.49 x the distance to its nearest neighbour (`station_radius_factor`) and gap-fill tiles at 0.8 x their cell size (`fill_radius_factor`), so neighbours only touch. Making them overlap (tried 0.65 / 0.95) softens the cloud walls where two reports differ, but X-Plane then stacks the overlapping cloud layers and the tops go dark grey, so the defaults stay at touching-only. Raise them in `WXPlane.cfg` if you prefer soft edges over clean tops.
+Each station's circle stops at 0.49 x the distance to its nearest neighbour (`station_radius_factor`) and gap-fill tiles at 1.0 x their cell size (`fill_radius_factor`). Making them overlap (tried 0.65 / 0.95) softens the cloud walls where two reports differ, but X-Plane then stacks the overlapping cloud layers and the tops go dark grey, so the defaults stay at touching-only. Raise them in `WXPlane.cfg` if you prefer soft edges over clean tops.
 
 ## Overcast that looked dark from above
 
@@ -284,3 +284,7 @@ None of these has been checked against X-Plane's renderer yet. Compare one at a 
 ## Storm holes
 
 Blocks enclosed on all four sides by storm cells, but with no cell of their own (cut by the cell cap, too weak, or empty), get a cell interpolated from their neighbours: mean reflectivity, top and coverage, at most a quarter of `radar_max_cells` extra. The radar log line reports how many (`N hole(s) interpolated`). Notches at the storm edge are left alone. `storm_fill_holes = 0` turns it off. Untested in X-Plane's NEXRAD map.
+
+## Overlap (no gaps)
+
+Gap-fill tiles (`fill_radius_factor`) and storm cells (`storm_radius_factor`) now default to 1.0 x their grid size: every tile reaches the centres of its neighbours, so fill tiles overlap each other, the storm cells and the station circles, and no uncovered ground is left between them. X-Plane blends overlapping records, so edges between records are softer but overlapped cloud layers can look denser or darker. If a value was set by hand in `WXPlane.cfg` it still wins (the old defaults were 0.8 and 0.9).

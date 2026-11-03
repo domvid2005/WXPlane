@@ -47,7 +47,7 @@ struct Config {
     bool radar = true;            // turn radar echoes into storm cells
     bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
     double radarRangeNm = 150;    // storms within this distance of the aircraft
-    double stormRadiusFactor = 0.9;  // storm record radius = this x radar cell size (min 6 nm); above ~1.0 neighbouring storm cells overlap more and blend their edges
+    double stormRadiusFactor = 1.0;  // storm record radius = this x radar cell size (min 6 nm); 1.0 = each cell reaches the centres of its neighbours, so storm cells overlap each other and the gap-fill tiles around them
     double stormTopStepM = 500;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
     double stormTopBlend = 0;        // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
     double stormTopVariationKnownM = 0; // fixed per-block height variation (m) added to MEASURED echo tops too (estimated tops always use storm_top_variation_m)
@@ -70,7 +70,7 @@ struct Config {
     int fillFarCellNm = 30;          // ...on a grid this size
     int fillCellNm = 12;             // ...using location records on a grid this size
     double stationRadiusFactor = 0.49; // station radius = this x distance to nearest neighbour (0.49 = circles just touch; above that they overlap and X-Plane blends the edge)
-    double fillRadiusFactor = 0.8;    // gap-fill record radius = this x grid cell size (0.8 = barely touching)
+    double fillRadiusFactor = 1.0;    // gap-fill record radius = this x grid cell size (0.71 would just cover the corners; 1.0 overlaps the neighbouring tiles and the storm cells so no gap is left)
     bool stationRadiusAuto = true;   // shrink each station's radius so close neighbours do not blend into it
     bool startupWaitFps = false;     // true: hold the first update until the frame rate has been steady for a few seconds (up to startup_max_wait_s)
     bool startupStaged = false;      // true: first update = METAR/ATIS/winds only, radar storms follow startup_radar_delay_s later
