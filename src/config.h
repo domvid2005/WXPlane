@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 21;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 22;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -53,9 +53,10 @@ struct Config {
     double stormTopStepM = 250;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
     double stormTopBlend = 0.4;      // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
     double stormTopVariationKnownM = 0; // fixed per-block height variation (m) added to MEASURED echo tops too (estimated tops always use storm_top_variation_m)
+    bool stormRim = true;            // ragged, tapered rim cells around the confirmed storm blocks (and in their inner corners), so outlines are not square walls
     bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
-    double radarCellNm = 6;       // block size one storm record represents
-    int radarMaxCells = 150;       // cap on storm records handed to X-Plane
+    double radarCellNm = 12;      // block size one storm record represents
+    int radarMaxCells = 60;       // cap on storm records handed to X-Plane
     double radarMinDbz = 20;      // ignore weaker echoes
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity

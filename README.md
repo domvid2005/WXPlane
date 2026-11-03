@@ -301,3 +301,10 @@ Three changes break up the 12 nm block grid. All three are settings, and config 
 - Off-grid placement: `storm_centroid` puts each cell at the reflectivity-weighted centre of its echo instead of the block centre, which removes the straight lines. Cells can sit up to half a block off the grid, so `storm_radius_factor` now defaults to 1.3 to keep them overlapping.
 
 Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm_top_blend = 0`, `storm_centroid = 0` to go back to the earlier look.
+
+## Ragged storm outlines (v22)
+
+- Storm blocks are back to 12 nm (`radar_cell_nm = 12`, `radar_max_cells = 60`; config files older than v22 take these once).
+- `storm_rim` (default on): around every confirmed block, in the directions that have no block, a smaller, lighter, lower "rim" cell is added at a randomised distance and angle (stable between updates, derived from the block's key). Only some directions get one, so a straight side becomes uneven. In an inner corner (3+ blocks nearby, like the notch of an L) a full cell is added with the neighbours' mean values. Rim cells have 50-85% of the normal radius (`RadarCell::radiusScale`), so the outline is lumpy instead of a chain of equal circles. At most half of `radar_max_cells` extra cells.
+- Rim and interpolated cells are not used as sources when smoothing tops or rain, so they cannot pull measured values down. Smoothing never takes more than 1.5 km off (or adds more than 1.5 km to) a measured top.
+- The log radar line ends with `N hole(s) interpolated, M rim cell(s)`.

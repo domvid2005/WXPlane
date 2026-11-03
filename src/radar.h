@@ -21,6 +21,8 @@ struct RadarCell {
     float rateMmH = 0;         // rain rate for dbzFine
     double distNm = 0;         // from the aircraft when built
     std::string key;           // stable per block, used to diff updates
+    bool synthetic = false;    // made up around/between confirmed blocks (rim or hole fill), not measured
+    float radiusScale = 1.0f;  // record radius multiplier (rim cells are smaller and vary, so the outline is lumpy, not a circle chain)
     float edge = 0;            // 0 = inside a cluster of storm blocks .. 1 = isolated / on the rim of one (see markStormEdges)
 };
 
@@ -29,6 +31,9 @@ struct RadarCell {
 // Rain a storm field gives at a point (0..1, same scale as XpWx::precip): inverse-distance mean of the cells within reachNm, 0 if none.
 // Station and gap-fill records use it so a dry-reporting station or fill tile inside a storm does not leave a round dry spot.
 void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend);
+// Ragged skirt: around every confirmed block, in each of 8 directions that has no block, a smaller, lighter, lower cell at a randomised
+// (but stable between updates) distance and angle; in inner corners (3+ blocks near) a full cell with the neighbours' mean. At most maxAdd.
+int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat, double aircraftLon, double stepM, double minDbz, int maxAdd);
 float stormPrecipAt(const std::vector<RadarCell>& cells, double lat, double lon, double reachNm, float rainFullMmH);
 
 // Interpolates cells into holes: positions enclosed on all four sides by kept cells (at least minNeighbours within ~1.4 cells)
@@ -52,6 +57,7 @@ struct RadarResult {
     std::time_t dataTime = 0;  // when the radar mosaic was valid (0 = unknown)
     int echoBlocks = 0;        // blocks with echo before the cap
     bool topsFromRadar = false;
+    int rimCells = 0;          // ragged rim cells added around the confirmed blocks
     int holesFilled = 0;       // cells interpolated into enclosed holes
     std::vector<RadarCell> cells;
 };

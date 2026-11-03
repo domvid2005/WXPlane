@@ -64,11 +64,11 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend,
     for (size_t i = 0; i < cells.size(); ++i) orig[i] = cells[i].topM;
     const double reach = cellNm * 1.7;
     for (size_t i = 0; i < cells.size(); ++i) {
-        if (!(cells[i].topM > 0)) continue;
+        if (!(cells[i].topM > 0) || cells[i].synthetic) continue;
         double sum = 0;
         int n = 0;
         for (size_t j = 0; j < cells.size(); ++j) {
-            if (j == i || !(orig[j] > 0)) continue;
+            if (j == i || !(orig[j] > 0) || cells[j].synthetic) continue;
             if (distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon) <= reach) { sum += orig[j]; ++n; }
         }
         float cap = n == 0 ? 8000.0f : (float)(sum / n) + 2000.0f;
@@ -80,10 +80,10 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend,
         for (size_t i = 0; i < cells.size(); ++i) clipped[i] = cells[i].topM;
         const double sigma = cellNm * 0.9;
         for (size_t i = 0; i < cells.size(); ++i) {
-            if (!(clipped[i] > 0)) continue;
+            if (!(clipped[i] > 0) || cells[i].synthetic) continue;
             double sum = 0, ws = 0;
             for (size_t j = 0; j < cells.size(); ++j) {
-                if (j == i || !(clipped[j] > 0)) continue;
+                if (j == i || !(clipped[j] > 0) || cells[j].synthetic) continue;
                 const double d = distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon);
                 if (d > reach) continue;
                 const double w = std::exp(-(d * d) / (2.0 * sigma * sigma));
@@ -91,7 +91,8 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend,
             }
             if (ws <= 0) continue;
             const float mean = (float)(sum / ws);
-            const float t = (float)((1.0 - blend) * clipped[i] + blend * mean);
+            // smoothing rounds the steps between cells but never takes more than 1.5 km off a measured top (or adds more), so tall cores stay tall
+            const float t = std::min(clipped[i] + 1500.0f, std::max(clipped[i] - 1500.0f, (float)((1.0 - blend) * clipped[i] + blend * mean)));
             cells[i].topM = std::max(1500.0f, (float)(std::round(t / stepM) * stepM));
         }
     }
@@ -103,9 +104,10 @@ void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend)
     for (size_t i = 0; i < cells.size(); ++i) orig[i] = cells[i].dbzFine;
     const double sigma = cellNm * 0.9, reach = cellNm * 1.7;
     for (size_t i = 0; i < cells.size(); ++i) {
+        if (cells[i].synthetic) continue;
         double sum = 0, ws = 0;
         for (size_t j = 0; j < cells.size(); ++j) {
-            if (j == i) continue;
+            if (j == i || cells[j].synthetic) continue;
             const double d = distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon);
             if (d > reach) continue;
             const double w = std::exp(-(d * d) / (2.0 * sigma * sigma));
@@ -183,6 +185,66 @@ int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& d
         for (auto& f : fresh) kept.push_back(f);
     }
     return added;
+}
+
+namespace {
+unsigned hashStr(const std::string& s, int k) {
+    unsigned h = 2166136261u ^ (unsigned)(k * 40503);
+    for (unsigned char ch : s) { h ^= ch; h *= 16777619u; }
+    h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+    return h;
+}
+double unit(unsigned h, int salt) { return (double)(hashStr(std::to_string(h), salt) % 10001u) / 10000.0; }   // 0..1
+}
+
+int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat, double aircraftLon, double stepM, double minDbz, int maxAdd) {
+    if (cells.empty() || maxAdd <= 0) return 0;
+    const size_t nReal = cells.size();
+    std::vector<RadarCell> fresh;
+    for (size_t i = 0; i < nReal && (int)fresh.size() < maxAdd; ++i) {
+        const RadarCell c = cells[i];
+        const double cosL = std::max(0.2, std::cos(c.lat * kPi / 180.0));
+        for (int k = 0; k < 8 && (int)fresh.size() < maxAdd; ++k) {
+            const unsigned h = hashStr(c.key, k);
+            const double ang = (k * 45.0 + (unit(h, 1) - 0.5) * 40.0) * kPi / 180.0;
+            const double dist = cellNm * (0.75 + 0.35 * unit(h, 2));
+            const double plat = c.lat + std::cos(ang) * dist / 60.0, plon = c.lon + std::sin(ang) * dist / 60.0 / cosL;
+            bool taken = false;
+            for (size_t j = 0; j < nReal && !taken; ++j) taken = distNm(plat, plon, cells[j].lat, cells[j].lon) < cellNm * 0.7;
+            for (size_t j = 0; j < fresh.size() && !taken; ++j) taken = distNm(plat, plon, fresh[j].lat, fresh[j].lon) < cellNm * 0.6;
+            if (taken) continue;
+            int n = 0; double sDbz = 0, sFrac = 0, sTop = 0; int nTop = 0;
+            for (size_t j = 0; j < nReal; ++j) {
+                if (distNm(plat, plon, cells[j].lat, cells[j].lon) > cellNm * 1.5) continue;
+                ++n; sDbz += cells[j].dbzFine; sFrac += cells[j].frac;
+                if (cells[j].topM > 0) { sTop += cells[j].topM; ++nTop; }
+            }
+            const bool corner = n >= 3;                       // an inner corner of the storm: fill it, almost as strong as its neighbours
+            if (!corner && unit(h, 3) > 0.7) continue;        // along a straight side only some directions get a cell: the outline stays uneven
+            RadarCell r;
+            r.lat = plat; r.lon = plon; r.synthetic = true;
+            if (corner) {
+                r.dbzFine = std::max((float)minDbz, (float)(sDbz / n) - 3.0f);
+                r.frac = std::max(0.25f, std::round((float)(sFrac / n) * 4.0f) / 4.0f);
+                r.topM = nTop > 0 ? (float)(sTop / nTop * 0.9) : 0.0f;
+                r.radiusScale = (float)(0.9 + 0.15 * unit(h, 4));
+            } else {
+                r.dbzFine = std::max((float)minDbz, c.dbzFine - (float)(6.0 + 10.0 * unit(h, 5)));   // lighter and lower toward the outside
+                r.frac = std::max(0.25f, c.frac * 0.6f);
+                r.topM = c.topM > 0 ? std::max(3000.0f, c.topM * (float)(0.5 + 0.3 * unit(h, 6))) : 0.0f;
+                r.radiusScale = (float)(0.5 + 0.35 * unit(h, 7));
+            }
+            r.topKnown = r.topM > 0;
+            if (r.topM > 0 && stepM > 0) r.topM = std::round(r.topM / (float)stepM) * (float)stepM;
+            r.dbz = std::max(5.0f, std::round(r.dbzFine / 5.0f) * 5.0f);
+            r.rateMmH = rateFromDbz(r.dbzFine);
+            r.distNm = distNm(aircraftLat, aircraftLon, r.lat, r.lon);
+            r.key = "Q" + c.key + ":" + std::to_string(k);
+            fresh.push_back(r);
+        }
+    }
+    for (auto& f : fresh) cells.push_back(f);
+    return (int)fresh.size();
 }
 
 void markStormEdges(std::vector<RadarCell>& cells, double cellNm) {
@@ -275,6 +337,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     std::vector<RadarCell> droppedCells;
     if ((int)all.size() > cfg.radarMaxCells) { droppedCells.assign(all.begin() + cfg.radarMaxCells, all.end()); all.resize((size_t)cfg.radarMaxCells); }
     if (cfg.stormFillHoles) res.holesFilled = fillStormHoles(all, droppedCells, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, 5, std::max(4, cfg.radarMaxCells / 4));
+    if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells / 2));
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM);
     smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend);
     markStormEdges(all, cfg.radarCellNm);
