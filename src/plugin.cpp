@@ -39,7 +39,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
@@ -456,6 +456,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // Radar storm cells: the weather of the nearest station with the storm applied on top, as location records.
     int stormCount = 0;
     if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
+        // Pass 1: each cell's station weather and the base its own station deck would give it.
+        struct StormPre { wx::XpWx x; const wx::Station* nearest; double nd; float base; };
+        std::vector<StormPre> pre;
+        pre.reserve(res.radar.cells.size());
         for (const auto& c : res.radar.cells) {
             const wx::Station* nearest = &res.stations[0];
             double nd = 1e9;
@@ -474,8 +478,31 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const bool overlapsStation = srit != stationRadius.end() && nd <= srit->second + std::max(6.0, g_cfg.radarCellNm * 0.9);
             if (nd > 60.0 || (x.visM < 5000.0f && !(overlapsStation && x.visM >= 1000.0f))) x.visM = (float)g_cfg.clearVisM;
             if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
+            pre.push_back({x, nearest, nd, wx::stormBaseFor(x, c, nearest->elevM)});
+        }
+        // Neighbouring cells take their base from different stations' decks (1051 m next to 1987 m in a log), which X-Plane blends into
+        // a stepped underside and walls. Cells within 1.7 cell widths therefore share a distance-weighted mean base.
+        std::vector<float> baseSm(pre.size(), -1.0f);
+        if (g_cfg.stormBaseSmooth) {
+            const double reach = g_cfg.radarCellNm * 1.7;
+            for (size_t i = 0; i < pre.size(); ++i) {
+                double sw = 0, sb = 0;
+                for (size_t j = 0; j < pre.size(); ++j) {
+                    const double d = wx::distNm(res.radar.cells[i].lat, res.radar.cells[i].lon, res.radar.cells[j].lat, res.radar.cells[j].lon);
+                    if (d > reach) continue;
+                    const double w = 1.0 - 0.6 * d / reach;
+                    sw += w; sb += w * pre[j].base;
+                }
+                if (sw > 0) baseSm[i] = (float)(sb / sw);
+            }
+        }
+        // Pass 2: apply the storm with the shared base and build the records.
+        for (size_t ci = 0; ci < res.radar.cells.size(); ++ci) {
+            const auto& c = res.radar.cells[ci];
+            const wx::Station* nearest = pre[ci].nearest;
+            wx::XpWx x = pre[ci].x;
             const int layersBefore = x.cloudCount;
-            wx::applyStorm(x, c, g_cfg, nearest->elevM, c.lat);
+            wx::applyStorm(x, c, g_cfg, nearest->elevM, c.lat, baseSm[ci]);
             if (layersBefore >= 3) ++stormClash;
             valFixes += wx::validateXp(x, true, &valNote);   // storms may overlap the station's layers on purpose; only sanity-checked
             XPLMWeatherInfo_t info;
@@ -979,6 +1006,78 @@ void drawWin(XPLMWindowID w, void*) {
 }
 
 int clickWin(XPLMWindowID, int, int, XPLMMouseStatus, void*) { return 1; }
+
+// ---- Storm settings window: a slider for the storm turbulence (0-200 %) -------------------------------------------------------------
+void keyWin(XPLMWindowID, char, XPLMKeyFlags, char, void*, int);
+XPLMCursorStatus cursorWin(XPLMWindowID, int, int, void*);
+int wheelWin(XPLMWindowID, int, int, int, int, void*);
+XPLMWindowID g_setWin = nullptr;
+bool g_setDrag = false;
+int g_sliderL = 0, g_sliderR = 0;   // track edges in screen coordinates, set while drawing
+
+void drawSettings(XPLMWindowID w, void*) {
+    int l, t, r, b;
+    XPLMGetWindowGeometry(w, &l, &t, &r, &b);
+    int cw = 0, ch = 0;
+    XPLMGetFontDimensions(xplmFont_Proportional, &cw, &ch, nullptr);
+    float white[3] = {0.9f, 0.9f, 0.9f}, grey[3] = {0.7f, 0.7f, 0.7f};
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "Storm turbulence: %d %%", (int)std::lround(g_cfg.radarTurbulence * 100.0));
+    XPLMDrawString(white, l + 14, t - 14 - ch, buf, nullptr, xplmFont_Proportional);
+    g_sliderL = l + 18; g_sliderR = r - 18;
+    const int ty = t - 52;
+    XPLMDrawTranslucentDarkBox(g_sliderL, ty + 3, g_sliderR, ty - 3);
+    const double f = std::max(0.0, std::min(1.0, g_cfg.radarTurbulence / 2.0));
+    const int tx = g_sliderL + (int)std::lround(f * (g_sliderR - g_sliderL));
+    XPLMDrawTranslucentDarkBox(tx - 5, ty + 10, tx + 5, ty - 10);
+    XPLMDrawTranslucentDarkBox(tx - 3, ty + 8, tx + 3, ty - 8);
+    XPLMDrawString(grey, g_sliderL, ty - 18 - ch, (char*)"0 % (calm)", nullptr, xplmFont_Proportional);
+    XPLMDrawString(grey, g_sliderR - 90, ty - 18 - ch, (char*)"200 % (severe)", nullptr, xplmFont_Proportional);
+    XPLMDrawString(grey, l + 14, b + 12, (char*)"100 % = scaled to the radar reflectivity. Applied when you release the slider.", nullptr, xplmFont_Proportional);
+}
+
+int clickSettings(XPLMWindowID w, int x, int y, XPLMMouseStatus st, void*) {
+    int l, t, r, b;
+    XPLMGetWindowGeometry(w, &l, &t, &r, &b);
+    const int ty = t - 52;
+    if (st == xplm_MouseDown && std::abs(y - ty) <= 16 && x >= g_sliderL - 8 && x <= g_sliderR + 8) g_setDrag = true;
+    if (g_setDrag && (st == xplm_MouseDown || st == xplm_MouseDrag) && g_sliderR > g_sliderL) {
+        double f = (double)(x - g_sliderL) / (double)(g_sliderR - g_sliderL);
+        f = std::max(0.0, std::min(1.0, f));
+        g_cfg.radarTurbulence = std::round(f * 2.0 * 20.0) / 20.0;   // steps of 5 %
+    }
+    if (st == xplm_MouseUp && g_setDrag) {
+        g_setDrag = false;
+        wx::saveConfig(g_cfgPath, g_cfg);
+        if (g_cfg.enabled && g_cfg.radar) { if (g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
+    }
+    return 1;
+}
+
+void showSettings() {
+    if (!g_setWin) {
+        int sl, st, sr, sb;
+        XPLMGetScreenBoundsGlobal(&sl, &st, &sr, &sb);
+        XPLMCreateWindow_t p;
+        std::memset(&p, 0, sizeof p);
+        p.structSize = sizeof p;
+        p.left = sl + 120; p.right = sl + 120 + 420;
+        p.top = st - 140;  p.bottom = st - 140 - 130;
+        p.visible = 1;
+        p.drawWindowFunc = drawSettings;
+        p.handleMouseClickFunc = clickSettings;
+        p.handleRightClickFunc = clickWin;
+        p.handleKeyFunc = keyWin;
+        p.handleCursorFunc = cursorWin;
+        p.handleMouseWheelFunc = wheelWin;
+        p.refcon = nullptr;
+        p.decorateAsFloatingWindow = xplm_WindowDecorationRoundRectangle;
+        p.layer = xplm_WindowLayerFloatingWindows;
+        g_setWin = XPLMCreateWindowEx(&p);
+        if (g_setWin) XPLMSetWindowTitle(g_setWin, "WXPlane - storm settings");
+    }
+    if (g_setWin) { XPLMSetWindowIsVisible(g_setWin, 1); XPLMBringWindowToFront(g_setWin); }
+}
 void keyWin(XPLMWindowID, char, XPLMKeyFlags, char, void*, int) {}
 XPLMCursorStatus cursorWin(XPLMWindowID, int, int, void*) { return xplm_CursorDefault; }
 int wheelWin(XPLMWindowID, int, int, int wheel, int clicks, void*) {
@@ -1038,6 +1137,9 @@ void menuHandler(void*, void* item) {
         case kShow:
             showWindow();
             break;
+        case kSettings:
+            showSettings();
+            break;
         case kRadar:
             g_cfg.radar = !g_cfg.radar;
             if (g_cfg.enabled) { if (g_cfg.radar && g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
@@ -1089,6 +1191,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxAloft = XPLMAppendMenuItem(g_menu, "Use NOAA Winds/Temps Aloft", (void*)(intptr_t)kAloft, 0);
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
+    XPLMAppendMenuItem(g_menu, "Storm Settings (turbulence)...", (void*)(intptr_t)kSettings, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);
@@ -1105,6 +1208,7 @@ PLUGIN_API void XPluginStop(void) {
         g_loop = nullptr;
     }
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
+    if (g_setWin) { XPLMDestroyWindow(g_setWin); g_setWin = nullptr; }
     if (g_menu) { XPLMDestroyMenu(g_menu); g_menu = nullptr; }
 }
 

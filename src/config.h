@@ -56,6 +56,8 @@ struct Config {
     int stormRimRings = 3;           // 1..3: how many fading rings of rim cells go around a storm (more = softer, rounder edge, more records)
     bool stormReplacesFill = true;   // no background (gap-fill) tile where a confirmed storm cell covers: its low deck would cut a canyon through the storm
     bool stormFillPits = true;       // a block much lower than the ring of blocks around it is lifted toward them (no sheer rectangular craters inside a storm)
+    double stormTopMaxDropM = 1500;  // largest top difference allowed between neighbouring storm cells, per cell width (0 = off)
+    bool stormBaseSmooth = true;     // storm cells next to each other share a smoothed cloud base, so the underside has no steps where nearest stations differ
     bool stormRim = true;            // ragged, tapered rim cells around the confirmed storm blocks (and in their inner corners), so outlines are not square walls
     bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
     double radarCellNm = 12;      // block size one storm record represents

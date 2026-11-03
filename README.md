@@ -336,3 +336,15 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 ### Channels
 
 Hole filling now also fills a **channel**: a spot between confirmed blocks on two opposite sides (north/south, east/west or either diagonal) with at least 3 blocks within 1.4 cells, even though its ends are open. Before, only spots enclosed on all four sides were filled, so a one-block-wide gap between two groups of storm cells stayed empty; X-Plane blends the low records under it and renders a sheer canyon through the storm. The fill runs 3 passes (was 2), so a gap up to about three blocks wide closes from both sides. Straight outer edges are not touched.
+
+### Shared storm base (`storm_base_smooth`, default on)
+
+Each storm cell grows out of the deck of its nearest station, so neighbouring cells could end up with bases about 900 m apart (1051 m next to 1987 m in one log). X-Plane blends the records, which gave a stepped underside and walls. Cells within 1.7 cell widths of each other now share one distance-weighted mean base. Tops, coverage and the rim taper are unchanged. Set `storm_base_smooth = 0` to return to per-station bases.
+
+### Level storm tops (`storm_top_max_drop_m`, default 1500)
+
+After the spike/pit smoothing, no two neighbouring storm cells (closer than 1.5 cells) may differ in top by more than this many metres per cell width. The excess is split between the taller and the lower cell, so a core eases down towards its neighbours instead of dropping off a wall; no cell moves more than 2.5 km from its measured top. Rim cells keep their own taper. `0` turns it off.
+
+### Storm settings window
+
+`Plugins > WXPlane > Storm Settings (turbulence)...` opens a small window with a slider for the storm turbulence, 0-200 % in 5 % steps (`radar_turbulence`, 100 % = scaled to the radar reflectivity as before). It is saved when you release the slider and the storms are rebuilt with the new value.

@@ -93,6 +93,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_replaces_fill") c.stormReplacesFill = toBool(v);
         else if (k == "storm_fill_pits") c.stormFillPits = toBool(v);
         else if (k == "storm_rim") c.stormRim = toBool(v);
+        else if (k == "storm_top_max_drop_m") c.stormTopMaxDropM = d < 0 ? 0 : (d > 20000 ? 20000 : d);
+        else if (k == "storm_base_smooth") c.stormBaseSmooth = toBool(v);
         else if (k == "storm_centroid") c.stormCentroid = toBool(v);
         else if (k == "storm_rain_blend") c.stormRainBlend = d < 0 ? 0 : (d > 0.8 ? 0.8 : d);
         else if (k == "storm_fill_holes") c.stormFillHoles = toBool(v);

@@ -578,6 +578,23 @@ int main() {
         CHECK(st.precip >= 0.99f && st.visM <= 800 && st.cloudCount == 2 && st.maxAltFt >= st.clouds[2].topM / 0.3048 - 1);
         CHECK(st.turbulence > 0.5f && st.gustMs > st.windMs + 5);
         CHECK(st.clouds[0].coverage == 0);                           // slot 0 is left for fog
+        {   // top slope limit: a 11 km core next to a 4 km cell, one cell apart, ends up within the allowed difference
+            std::vector<RadarCell> v(3);
+            for (int i = 0; i < 3; ++i) { v[i].lat = 38; v[i].lon = -98 + i * 12.0 / (60.0 * std::cos(38 * 3.14159265 / 180)); v[i].topM = i == 0 ? 11000.0f : (i == 1 ? 8000.0f : 4000.0f); v[i].dbz = 45; }
+            std::vector<RadarCell> w = v;
+            limitStormTopSlope(w, 12.0, 1500.0, 250.0);
+            CHECK(w[0].topM - w[1].topM <= 1500.0f + 300.0f && w[1].topM - w[2].topM <= 1500.0f + 300.0f);
+            CHECK(w[0].topM >= 8500.0f && w[2].topM <= 6500.0f);                // moved toward each other, not flattened to one value
+            std::vector<RadarCell> z = v; limitStormTopSlope(z, 12.0, 0.0, 250.0);
+            CHECK(z[0].topM == 11000.0f && z[2].topM == 4000.0f);               // 0 = off
+            v[1].synthetic = true; std::vector<RadarCell> y = v; limitStormTopSlope(y, 12.0, 1500.0, 250.0);
+            CHECK(y[1].topM == 8000.0f);                                         // rim/synthetic cells keep their own height
+        }
+        {   // a shared base replaces the station-derived one, and the top still stays 1500 m above it
+            XpWx ov = base; applyStorm(ov, cell, sc, 400, 38, 1300.0f);
+            CHECK(std::fabs(ov.clouds[2].baseM - 1300.0f) < 0.5f && ov.clouds[2].topM > 1300.0f + 1500.0f);
+            CHECK(std::fabs(stormBaseFor(base, cell, 400) - st.clouds[2].baseM) < 0.5f);
+        }
         {   // a measured echo top is used as it is, and the map label shows the same number
             RadarCell m = cell; m.key = "R5:5"; m.dbz = 48; m.topM = 11277; m.topKnown = true; m.frac = 0.5f;
             XpWx a = base; applyStorm(a, m, sc, 400, 38);

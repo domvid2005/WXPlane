@@ -102,6 +102,42 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend,
     }
 }
 
+void limitStormTopSlope(std::vector<RadarCell>& cells, double cellNm, double maxDropM, double stepM) {
+    if (maxDropM <= 0 || cellNm <= 0) return;
+    const size_t n = cells.size();
+    std::vector<float> start(n);
+    for (size_t i = 0; i < n; ++i) start[i] = cells[i].topM;
+    const double reach = cellNm * 1.5;
+    for (int pass = 0; pass < 8; ++pass) {
+        std::vector<float> delta(n, 0.0f);
+        bool any = false;
+        for (size_t i = 0; i < n; ++i) {
+            if (!(cells[i].topM > 0) || cells[i].synthetic) continue;
+            for (size_t j = i + 1; j < n; ++j) {
+                if (!(cells[j].topM > 0) || cells[j].synthetic) continue;
+                const double d = distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon);
+                if (d > reach) continue;
+                const double allowed = maxDropM * std::max(0.5, d / cellNm);
+                const double diff = (double)cells[i].topM - cells[j].topM;
+                const double excess = std::fabs(diff) - allowed;
+                if (excess <= 0) continue;
+                any = true;
+                const float h = (float)(excess * 0.5);
+                if (diff > 0) { delta[i] -= h; delta[j] += h; } else { delta[i] += h; delta[j] -= h; }
+            }
+        }
+        if (!any) break;
+        for (size_t i = 0; i < n; ++i) {
+            if (delta[i] == 0.0f) continue;
+            // a cell moves at most 2.5 km from where it started (its own measurement stays recognisable)
+            float t = std::min(start[i] + 2500.0f, std::max(start[i] - 2500.0f, cells[i].topM + delta[i] * 0.7f));
+            cells[i].topM = std::max(1500.0f, t);
+        }
+    }
+    if (stepM > 0)
+        for (auto& c : cells) if (c.topM > 0 && !c.synthetic) c.topM = std::max(1500.0f, (float)(std::round(c.topM / stepM) * stepM));
+}
+
 void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend) {
     if (blend <= 0.0) return;
     std::vector<float> orig(cells.size());
@@ -389,6 +425,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     if (cfg.stormFillHoles) res.holesFilled = fillStormHoles(all, droppedCells, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, 5, std::max(4, cfg.radarMaxCells / 4));
     if (cfg.stormRim) res.rimCells = addStormRim(all, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, std::max(4, cfg.radarMaxCells), cfg.stormRimRings);
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM, cfg.stormFillPits);
+    if (cfg.stormSmoothTops) limitStormTopSlope(all, cfg.radarCellNm, cfg.stormTopMaxDropM, std::max(50.0, cfg.stormTopStepM));
     smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend);
     markStormEdges(all, cfg.radarCellNm);
     res.cells = std::move(all);
@@ -486,7 +523,27 @@ float stormTopM(const RadarCell& c, const Config&, float baseM) {
     return topM;
 }
 
-void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElevM, double /*lat*/) {
+static int stormSlot(const XpWx& x) {
+    int slot = 2;
+    if (x.clouds[2].coverage > 0 && x.clouds[1].coverage <= 0) slot = 1;   // else every slot is taken: slot 2 (the highest, layers are packed bottom-up) is replaced
+    return slot;
+}
+
+float stormBaseFor(const XpWx& x, const RadarCell& c, double fieldElevM) {
+    const int slot = stormSlot(x);
+    float baseM = (float)fieldElevM + (c.dbz >= 40 ? 900.0f : 600.0f);
+    if (x.clouds[slot].coverage > 0 && x.clouds[slot].baseM <= fieldElevM + 2500.0f) {
+        // X-Plane blends records slot by slot, bases and tops included. A storm base 700 m below the deck it replaces turned the
+        // blend at the station into a thin 560-6000 m column (seen in a log at KFYV), so the storm grows from the replaced deck's base.
+        baseM = x.clouds[slot].baseM;
+    } else {
+        for (int i = 0; i < 3; ++i)    // otherwise do not float above the station's own lowest layer
+            if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
+    }
+    return baseM;
+}
+
+void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElevM, double /*lat*/, float baseOverrideM) {
     const float dbz = c.dbz;
     // Precipitation: X-Plane takes 0..1.
     float p = clampf(c.rateMmH / (float)cfg.radarRainFullMmH, 0.05f, 1.0f);
@@ -500,17 +557,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
 
     // Slot choice: the station's own layers must survive. Use the top slot if it is free, else the middle one; only when all
     // are taken does the storm replace the highest of them (slot 0 may hold ground fog and is never used).
-    int slot = 2;
-    if (x.clouds[2].coverage > 0 && x.clouds[1].coverage <= 0) slot = 1;   // else every slot is taken: slot 2 (the highest, layers are packed bottom-up) is replaced
-    float baseM = (float)fieldElevM + (dbz >= 40 ? 900.0f : 600.0f);
-    if (x.clouds[slot].coverage > 0 && x.clouds[slot].baseM <= fieldElevM + 2500.0f) {
-        // X-Plane blends records slot by slot, bases and tops included. A storm base 700 m below the deck it replaces turned the
-        // blend at the station into a thin 560-6000 m column (seen in a log at KFYV), so the storm grows from the replaced deck's base.
-        baseM = x.clouds[slot].baseM;
-    } else {
-        for (int i = 0; i < 3; ++i)    // otherwise do not float above the station's own lowest layer
-            if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
-    }
+    const int slot = stormSlot(x);
+    float baseM = baseOverrideM > 0 ? baseOverrideM : stormBaseFor(x, c, fieldElevM);
     float topM = stormTopM(c, cfg, baseM);
     // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a wall.
     if (c.edge > 0) topM = std::max(baseM + 1500.0f, baseM + (topM - baseM) * (1.0f - 0.45f * c.edge));

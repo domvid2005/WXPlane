@@ -43,6 +43,9 @@ float stormPrecipAt(const std::vector<RadarCell>& cells, double lat, double lon,
 // Returns how many cells were added (at most maxAdd); each takes the mean reflectivity, top and coverage of its neighbours.
 int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& dropped, double cellNm, double aircraftLat, double aircraftLon,
                    double stepM, double minDbz, int minNeighbours, int maxAdd);
+// Levels tops between neighbouring cells: no pair closer than 1.5 cells may differ by more than maxDropM per cell width; the excess is split
+// between the taller and the lower cell. Synthetic (rim) cells keep their deliberate taper. maxDropM <= 0 does nothing.
+void limitStormTopSlope(std::vector<RadarCell>& cells, double cellNm, double maxDropM, double stepM);
 void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend = 0.0, double stepM = 500.0, bool fillPits = false);
 
 // Rim of a storm cluster: a block with few neighbouring blocks among the applied cells (the rim of a system, or the cut made by the cell
@@ -99,6 +102,9 @@ void tileRange(double lat, double lon, double rangeNm, int z, int& x0, int& x1, 
 // there is one (capped at tropopause + 2.5 km), otherwise an estimate from reflectivity. baseM is the cloud base (MSL) it will sit on.
 float stormTopM(const RadarCell& c, const Config& cfg, float baseM);
 
-void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElevM, double lat);
+// The base applyStorm would give this cell (from the slot it takes and the station deck it grows out of).
+float stormBaseFor(const XpWx& x, const RadarCell& c, double fieldElevM);
+// baseOverrideM > 0 replaces that base (used to share one smoothed base between neighbouring cells).
+void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElevM, double lat, float baseOverrideM = -1.0f);
 
 } // namespace wx
