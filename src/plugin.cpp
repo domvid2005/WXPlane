@@ -633,7 +633,7 @@ void logCoveringRecords(double lat, double lon, const char* label) {
 }
 
 // The wind profile we sent next to the one X-Plane reports back, so "the winds aloft look low" can be checked from Log.txt.
-void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char* where) {
+void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char* where, double lat, double lon) {
     std::string sent, back;
     char b[64];
     for (const auto& w : x.winds) { std::snprintf(b, sizeof b, " %.0fft %03.0f/%.0fkt", w.altMsl / 0.3048f, w.dir, w.ms / 0.514444f); sent += b; }
@@ -645,6 +645,28 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
     }
     logf("  winds aloft we sent for %s:%s", where, sent.empty() ? " none" : sent.c_str());
     logf("  winds aloft X-Plane reports there:%s", back.empty() ? " none" : back.c_str());
+    // What the sim says the wind is at a few flight levels over the same spot (the wind_*_alt fields are the values at the altitude asked for).
+    std::string lv;
+    for (double ft : {3000.0, 10000.0, 18000.0, 24000.0, 30000.0, 36000.0, 45000.0}) {
+        XPLMWeatherInfo_t q;
+        std::memset(&q, 0, sizeof q);
+        q.structSize = sizeof q;
+        XPLMGetWeatherAtLocation(lat, lon, ft * 0.3048, &q);
+        std::snprintf(b, sizeof b, " FL%03.0f %03.0f/%.0fkt", ft / 100.0, q.wind_dir_alt, q.wind_spd_alt / 0.514444f);
+        lv += b;
+    }
+    logf("  X-Plane's wind at flight levels there:%s", lv.c_str());
+    // And the sim's own region arrays, which are what the map and the instruments read.
+    static XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"), drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
+    if (drA && drS && drD) {
+        float al[13] = {0}, sp[13] = {0}, di[13] = {0};
+        XPLMGetDatavf(drA, al, 0, 13); XPLMGetDatavf(drS, sp, 0, 13); XPLMGetDatavf(drD, di, 0, 13);
+        std::string rg;
+        for (int i = 0; i < 13; ++i) { std::snprintf(b, sizeof b, " %.0fft %03.0f/%.0fkt", al[i] / 0.3048f, di[i], sp[i] / 0.514444f); rg += b; }
+        logf("  X-Plane region wind datarefs:%s", rg.c_str());
+    } else {
+        logf("  X-Plane region wind datarefs: not found");
+    }
 }
 
 void weatherWatch() {
@@ -674,7 +696,7 @@ void weatherWatch() {
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].type, x.clouds[i].coverage, x.clouds[i].baseM, x.clouds[i].topM, el);
-    logWindProfile(x, info, "the aircraft");
+    logWindProfile(x, info, "the aircraft", lat, lon);
     logCoveringRecords(lat, lon, "the aircraft");
 }
 
@@ -713,7 +735,7 @@ void visibilityCheck() {
         logf("    layer %d: type %.1f coverage %.2f base %.0f m top %.0f m (we set: %s)", i, info.cloud_layers[i].cloud_type,
              info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].coverage > 0 ? "coverage>0" : "none");
-    logWindProfile(x, info, best->icao.c_str());
+    logWindProfile(x, info, best->icao.c_str(), best->lat, best->lon);
     logCoveringRecords(best->lat, best->lon, best->icao.c_str());
     if (!g_cfg.visAutocal || x.visM >= 20000.0f || info.visibility < 100.0f || g_calIter >= 2) return;
     // X-Plane fades new weather in over minutes (longer while it is busy loading), so right after an update the read-back

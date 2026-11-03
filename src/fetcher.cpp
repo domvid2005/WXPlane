@@ -418,6 +418,11 @@ std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::ti
     char b[160];
     std::snprintf(b, sizeof b, "global-model winds aloft: %zu of %zu point(s), up to FL%.0f", got.size(), pts.size(), top / 100.0);
     note = b;
+    {   // what the global model says at the first point, level by level, so a wrong profile can be traced to its source
+        std::string lv;
+        for (const auto& L : got[0].levels) if (L.hasWind) { char q[64]; std::snprintf(q, sizeof q, " %.0fft %03.0f/%.0fkt", L.altFt, L.dirDeg, L.speedKt); lv += q; }
+        note += "; model profile at the first point:" + lv;
+    }
     if (got.size() < pts.size()) note += " [answer starts: " + sample + "]";   // fewer points than asked for: show what came back
     return got;
 }
