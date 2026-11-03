@@ -305,6 +305,11 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 ## Ragged storm outlines (v22)
 
 - Storm blocks are back to 12 nm (`radar_cell_nm = 12`, `radar_max_cells = 60`; config files older than v22 take these once).
-- `storm_rim` (default on): around every confirmed block, in the directions that have no block, a smaller, lighter, lower "rim" cell is added at a randomised distance and angle (stable between updates, derived from the block's key). Only some directions get one, so a straight side becomes uneven. In an inner corner (3+ blocks nearby, like the notch of an L) a full cell is added with the neighbours' mean values. Rim cells have 50-85% of the normal radius (`RadarCell::radiusScale`), so the outline is lumpy instead of a chain of equal circles. At most half of `radar_max_cells` extra cells.
+- `storm_rim` (default on): around every confirmed block, in the directions that have no block, a smaller, lighter, lower "rim" cell is added at a randomised distance and angle (stable between updates, derived from the block's key). Only some directions get one, so a straight side becomes uneven. In an inner corner (3+ blocks nearby, like the notch of an L) a full cell is added with the neighbours' mean values. Rim cells have 50-85% of the normal radius (`RadarCell::radiusScale`), so the outline is lumpy instead of a chain of equal circles. At most three quarters of `radar_max_cells` extra cells.
 - Rim and interpolated cells are not used as sources when smoothing tops or rain, so they cannot pull measured values down. Smoothing never takes more than 1.5 km off (or adds more than 1.5 km to) a measured top.
 - The log radar line ends with `N hole(s) interpolated, M rim cell(s)`.
+
+### Rounded, fading edges
+
+- `storm_rim_rings` (default 2, 1-3): the rim is built in rings. The second ring starts from the first ring's cells and is fainter, lower and smaller again, so the storm fades out over two steps instead of ending at one wall. More rings = softer edge, more records.
+- An inner corner now means two or more confirmed blocks right next to the spot (within 1.2 cells). Before, a spot beside a straight side of a wide storm counted as a corner and got a full-strength cell, which pushed the wall outward instead of rounding it.

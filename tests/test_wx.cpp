@@ -333,7 +333,7 @@ int main() {
             L[q].key = "R" + std::to_string(q);
         }
         std::vector<RadarCell> a = L, b = L;
-        const int na = addStormRim(a, 12.0, lat0, lon0, 500.0, 20.0, 20), nb = addStormRim(b, 12.0, lat0, lon0, 500.0, 20.0, 20);
+        const int na = addStormRim(a, 12.0, lat0, lon0, 500.0, 20.0, 20, 1), nb = addStormRim(b, 12.0, lat0, lon0, 500.0, 20.0, 20, 1);
         CHECK(na >= 6 && na <= 20 && na == nb);                                          // some, not all, directions; stable between builds
         bool same = true, tapered = true, small = false, corner = false, lumpy = true;
         for (int i = 0; i < na; ++i) {
@@ -345,6 +345,18 @@ int main() {
             for (int j = 0; j < 3; ++j) lumpy = lumpy && wx::distNm(r.lat, r.lon, L[j].lat, L[j].lon) > 12.0 * 0.69;   // never on top of a confirmed block
         }
         CHECK(same && tapered && small && corner && lumpy);
+        {   // a second ring fades further out: smaller, lighter, lower than the first, never on top of a block or another cell
+            std::vector<RadarCell> r2 = L;
+            const int n2 = addStormRim(r2, 12.0, lat0, lon0, 500.0, 20.0, 60, 2);
+            CHECK(n2 > na && r2.size() == 3 + (size_t)n2);
+            bool outer = false, fades = true, apart = true;
+            for (int i = 0; i < n2; ++i) {
+                const RadarCell& r = r2[3 + i];
+                if (r.key.size() > 1 && r.key[1] == '2') { outer = true; fades = fades && r.radiusScale <= 0.86f && r.dbzFine < 50 && r.topM < 11000; }
+                for (int j = 0; j < 3; ++j) apart = apart && wx::distNm(r.lat, r.lon, L[j].lat, L[j].lon) > 12.0 * 0.49;
+            }
+            CHECK(outer && fades && apart);
+        }
         std::vector<RadarCell> c0 = L;
         CHECK(addStormRim(c0, 12.0, lat0, lon0, 500.0, 20.0, 0) == 0 && c0.size() == 3);   // budget 0
     }

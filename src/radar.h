@@ -32,8 +32,8 @@ struct RadarCell {
 // Station and gap-fill records use it so a dry-reporting station or fill tile inside a storm does not leave a round dry spot.
 void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend);
 // Ragged skirt: around every confirmed block, in each of 8 directions that has no block, a smaller, lighter, lower cell at a randomised
-// (but stable between updates) distance and angle; in inner corners (3+ blocks near) a full cell with the neighbours' mean. At most maxAdd.
-int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat, double aircraftLon, double stepM, double minDbz, int maxAdd);
+// (but stable between updates) distance and angle; in inner corners (2+ blocks right next to the spot) a full cell with the neighbours' mean; further rings (up to 3) repeat this from the previous ring, fainter and smaller each time. At most maxAdd.
+int addStormRim(std::vector<RadarCell>& cells, double cellNm, double aircraftLat, double aircraftLon, double stepM, double minDbz, int maxAdd, int rings = 1);
 float stormPrecipAt(const std::vector<RadarCell>& cells, double lat, double lon, double reachNm, float rainFullMmH);
 
 // Interpolates cells into holes: positions enclosed on all four sides by kept cells (at least minNeighbours within ~1.4 cells)
