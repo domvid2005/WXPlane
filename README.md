@@ -359,3 +359,7 @@ After the spike/pit smoothing, no two neighbouring storm cells (closer than 1.5 
 * `storm_radius_factor` 1.3 -> 1.45 (storm records of about 17 nm instead of 15.6 nm at 12 nm cells) so neighbouring circles overlap more and the outline between them is smoother.
 (`storm_rain_blend` stays at 0.4: 0.6 pulled the heaviest core's rain below full strength.)
 Config files older than version 24 take the new radius once.
+
+### Solid storm cores (`storm_core_coverage`, default 1.0)
+
+Cells with no open side (surrounded by other storm cells) and 35 dBZ or more get this coverage instead of `storm_coverage_max` (0.95). The 5 % breakup stays on the rim and on weaker cells, where it looks natural; inside the storm it showed up as 1-2 nm pockets of clear air and rain-free spots on the NEXRAD map. Set `storm_core_coverage = 0.95` to turn it off.

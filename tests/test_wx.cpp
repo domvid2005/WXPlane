@@ -604,6 +604,15 @@ int main() {
             v[1].synthetic = true; std::vector<RadarCell> y = v; limitStormTopSlope(y, 12.0, 1500.0, 250.0);
             CHECK(y[1].topM == 8000.0f);                                         // rim/synthetic cells keep their own height
         }
+        {   // core cells (no open side) reach the core coverage, edge cells keep the normal one, 0.95 switches the core rule off
+            RadarCell k = cell; k.key = "R9:9"; k.dbz = 45; k.frac = 0.5f; k.edge = 0; k.topM = 0; k.topKnown = false;
+            XpWx a1 = base; applyStorm(a1, k, sc, 400, 38);
+            CHECK(a1.clouds[2].coverage >= 0.999f);
+            k.edge = 0.5f; XpWx a2 = base; applyStorm(a2, k, sc, 400, 38);
+            CHECK(a2.clouds[2].coverage < 0.95f);
+            k.edge = 0; sc.stormCoreCoverage = 0.95; XpWx a3 = base; applyStorm(a3, k, sc, 400, 38);
+            CHECK(a3.clouds[2].coverage <= 0.95f); sc.stormCoreCoverage = 1.0;
+        }
         {   // a shared base replaces the station-derived one, and the top still stays 1500 m above it
             XpWx ov = base; applyStorm(ov, cell, sc, 400, 38, 1300.0f);
             CHECK(std::fabs(ov.clouds[2].baseM - 1300.0f) < 0.5f && ov.clouds[2].topM > 1300.0f + 1500.0f);
@@ -619,11 +628,12 @@ int main() {
         }
         {   // weaker/smaller cells are thinner and lower than strong ones
             XpWx lo = base, hi = base; RadarCell e = cell; e.key = "R1:1"; e.topM = 0; e.topKnown = false;
+            sc.stormCoreCoverage = 0.95;   // this block is about the coverage ramp, not the core rule
             e.dbz = 28; e.frac = 0.25f; applyStorm(lo, e, sc, 400, 38);
             e.dbz = 55; e.frac = 1.0f; applyStorm(hi, e, sc, 400, 38);
             CHECK(lo.clouds[2].topM < hi.clouds[2].topM && lo.clouds[2].coverage < hi.clouds[2].coverage);
             sc.stormCoverageMax = 1.0; XpWx full = base; applyStorm(full, e, sc, 400, 38);
-            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.95;
+            CHECK(full.clouds[2].coverage > hi.clouds[2].coverage); sc.stormCoverageMax = 0.95; sc.stormCoreCoverage = 1.0;
         }
         XpWx w2 = base; cell.dbz = 24; cell.rateMmH = rateFromDbz(24); cell.topKnown = false; cell.topM = estimateTopM(24, 38);
         applyStorm(w2, cell, sc, 400, 38);

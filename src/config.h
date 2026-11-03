@@ -66,6 +66,7 @@ struct Config {
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
+    double stormCoreCoverage = 1.0;  // coverage of storm cells that are surrounded by other storm cells (35+ dBZ); rim cells keep storm_coverage_max, so only the outline breaks up
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud
     double manualRefreshGapS = 60;   // menu refreshes closer together than this are coalesced into one
     bool manualRefreshImmediate = false; // Refresh Weather from the menu: true = the new weather appears at once but the sim freezes for a few seconds; false = it fades in

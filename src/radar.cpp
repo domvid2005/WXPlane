@@ -585,6 +585,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     cl.type = (dbz >= 30.0f || (c.topKnown && c.topM > 6000.0f)) ? 3.0f : 2.0f;
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
+    if (!c.synthetic && c.edge <= 0.01f && dbz >= 35.0f)   // deep inside a storm: solid, so X-Plane draws no clear-air pockets (and no rain-free spots on the map) there
+        cl.coverage = std::max(cl.coverage, (float)cfg.stormCoreCoverage);
     cl.coverage *= c.coverScale;            // rim rings: thinner and thinner toward the outside
     cl.coverage *= 1.0f - 0.25f * c.edge;   // and up to 25% less coverage on the rim (the station deck it replaces still sets the floor below)
     // A storm inside a solid deck must not thin it: X-Plane blends coverage slot by slot, so a 58% storm over a 94% overcast punched a
