@@ -709,11 +709,39 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
     }
 }
 
+// The sim kept ignoring the upper wind layers of our records (FL100 and up read 180 deg / 1 kt), so as well as the records
+// the profile for the aircraft's position is written into the sim's own region wind arrays. Throttled, and only if writable.
+void pushRegionWinds(const wx::XpWx& x) {
+    static std::time_t last = 0;
+    static bool reported = false;
+    const std::time_t now = std::time(nullptr);
+    if (now - last < 20 || x.winds.size() < 2) return;
+    last = now;
+    XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
+                drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
+    if (!drA || !drS || !drD || !XPLMCanWriteDataRef(drA) || !XPLMCanWriteDataRef(drS) || !XPLMCanWriteDataRef(drD)) {
+        if (!reported) { reported = true; logf("region wind datarefs are missing or read-only: not writing winds aloft there"); }
+        return;
+    }
+    float al[XPLM_NUM_WIND_LAYERS], sp[XPLM_NUM_WIND_LAYERS], di[XPLM_NUM_WIND_LAYERS];
+    for (int k = 0; k < XPLM_NUM_WIND_LAYERS; ++k) {
+        const size_t i = std::min((size_t)k, x.winds.size() - 1);
+        al[k] = x.winds[i].altMsl + (float)(k >= (int)x.winds.size() ? (k - (int)x.winds.size() + 1) * 500 : 0);
+        sp[k] = x.winds[i].ms;
+        di[k] = x.winds[i].dir;
+    }
+    XPLMSetDatavf(drA, al, 0, XPLM_NUM_WIND_LAYERS);
+    XPLMSetDatavf(drS, sp, 0, XPLM_NUM_WIND_LAYERS);
+    XPLMSetDatavf(drD, di, 0, XPLM_NUM_WIND_LAYERS);
+    if (!reported) { reported = true; logf("writing winds aloft into the sim's region wind datarefs (every 20 s)"); }
+}
+
 void weatherWatch() {
     if (!g_haveLast || g_lastRes.stations.empty() || !g_drElev) return;
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), el = XPLMGetDatad(g_drElev);
     wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
     wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, std::time(nullptr) < g_fogUntil);
+    pushRegionWinds(x);
     XPLMWeatherInfo_t info;
     std::memset(&info, 0, sizeof info);
     info.structSize = sizeof info;

@@ -2,6 +2,7 @@
 #include "XPLMDefs.h"
 XPLMDataRef XPLMFindDataRef(const char*);
 double XPLMGetDatad(XPLMDataRef);
+void XPLMSetDatavf(XPLMDataRef, float*, int, int);
 int XPLMGetDatavf(XPLMDataRef, float*, int, int);
 float XPLMGetDataf(XPLMDataRef);
 int XPLMGetDatai(XPLMDataRef);

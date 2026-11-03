@@ -124,6 +124,7 @@ static int g_realWx = 0, g_realWxSets = 0;
 int XPLMGetDatai(XPLMDataRef r) { return r == (void*)77 ? g_realWx : g_loadingFlag; }
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) { return r == (void*)77 ? xplmType_Int : xplmType_Int | xplmType_Float | xplmType_Double; }
 int XPLMCanWriteDataRef(XPLMDataRef) { return 1; }
+void XPLMSetDatavf(XPLMDataRef, float*, int, int) {}
 void XPLMSetDatai(XPLMDataRef r, int v) { if (r == (void*)77) { g_realWx = v; ++g_realWxSets; } }
 XPLMMapLayerID XPLMCreateMapLayer(XPLMCreateMapLayer_t* p) { g_mapLabelCb = p->labelCallback; return (void*)77; }
 int XPLMDestroyMapLayer(XPLMMapLayerID) { g_mapDestroyed = true; return 1; }
