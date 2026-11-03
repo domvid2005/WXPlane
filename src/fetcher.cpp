@@ -396,13 +396,14 @@ std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::ti
     const std::vector<int> full = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
     const std::vector<int> safe = {925, 850, 700, 500, 400, 300, 250, 200};   // if the endpoint refuses the highest levels
     std::vector<AloftStation> got;
-    std::string err, why;
+    std::string err, why, sample;
     for (const auto* lv : {&full, &safe}) {
         std::string body;
         long st = 0;
         if (!httpGet(openMeteoUrl(pts, *lv), body, st, err, 20)) { if (why.empty()) why = err; continue; }
         std::string perr;
         got = parseOpenMeteo(body, pts, *lv, (long long)now, &perr);
+        sample = body.substr(0, 200);
         if (!got.empty()) break;
         if (why.empty()) why = perr;
     }
@@ -415,8 +416,9 @@ std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::ti
     double top = 0;
     for (const auto& g : got) for (const auto& L : g.levels) if (L.hasWind) top = std::max(top, L.altFt);
     char b[160];
-    std::snprintf(b, sizeof b, "global-model winds aloft: %zu point(s), up to FL%.0f", got.size(), top / 100.0);
+    std::snprintf(b, sizeof b, "global-model winds aloft: %zu of %zu point(s), up to FL%.0f", got.size(), pts.size(), top / 100.0);
     note = b;
+    if (got.size() < pts.size()) note += " [answer starts: " + sample + "]";   // fewer points than asked for: show what came back
     return got;
 }
 

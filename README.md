@@ -392,3 +392,11 @@ NOAA's FD winds stop at FL390 and cover only the US and a few Pacific stations. 
 * **Safety:** if the endpoint refuses the highest levels the request is repeated with the levels up to 200 hPa; if both fail the previous download is kept for up to 3 hours, and `Log.txt` gets a line `global-model winds aloft unavailable (reason)`. A normal update logs `global-model winds aloft: N point(s), up to FLxxx`.
 * `upper_air = 0` turns it off (FD only, as before).
 * This could not be tried against the real service while it was written; the request and answer formats follow Open-Meteo's published pattern and are covered by tests with made-up answers. If the log shows "unavailable" or "answered without wind levels", send it.
+
+### Winds aloft in the log
+
+The "weather watch" and "visibility check" blocks now also print `winds aloft we sent for ...` (altitude, direction/speed in knots) and `winds aloft X-Plane reports there:` (what the sim's own read-back shows), so a wind that looks wrong can be checked against what was sent. The global-model line also says how many points came back out of how many were asked for, and shows the start of the answer when fewer came back.
+
+### Same wind layers in every record
+
+Every record that carries winds aloft now has exactly 13 wind layers: the surface wind plus the same 12 altitudes (3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000 ft), interpolated as vectors from the NOAA/model levels. Before, a station on high terrain skipped the levels under its ground and a record without the model's top levels stopped lower; the unused slots were left undefined, and X-Plane fills those from its own winds, which are calm after WXPlane resets the weather. Blending such records with full ones gave about 1 kt at FL360 where the real wind was close to 100 kt. A level under the terrain carries the wind of the lowest level above it, at an altitude 1 m over the previous layer so the list stays ascending.

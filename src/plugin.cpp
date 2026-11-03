@@ -632,6 +632,21 @@ void logCoveringRecords(double lat, double lon, const char* label) {
     }
 }
 
+// The wind profile we sent next to the one X-Plane reports back, so "the winds aloft look low" can be checked from Log.txt.
+void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char* where) {
+    std::string sent, back;
+    char b[64];
+    for (const auto& w : x.winds) { std::snprintf(b, sizeof b, " %.0fft %03.0f/%.0fkt", w.altMsl / 0.3048f, w.dir, w.ms / 0.514444f); sent += b; }
+    for (int i = 0; i < XPLM_NUM_WIND_LAYERS; ++i) {
+        const auto& w = info.wind_layers[i];
+        if (w.speed < 0 || w.alt_msl < 0 || (w.alt_msl == 0 && w.speed == 0 && w.direction == 0 && i > 0)) continue;
+        std::snprintf(b, sizeof b, " %.0fft %03.0f/%.0fkt", w.alt_msl / 0.3048f, w.direction, w.speed / 0.514444f);
+        back += b;
+    }
+    logf("  winds aloft we sent for %s:%s", where, sent.empty() ? " none" : sent.c_str());
+    logf("  winds aloft X-Plane reports there:%s", back.empty() ? " none" : back.c_str());
+}
+
 void weatherWatch() {
     if (!g_haveLast || g_lastRes.stations.empty() || !g_drElev) return;
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), el = XPLMGetDatad(g_drElev);
@@ -659,6 +674,7 @@ void weatherWatch() {
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].type, x.clouds[i].coverage, x.clouds[i].baseM, x.clouds[i].topM, el);
+    logWindProfile(x, info, "the aircraft");
     logCoveringRecords(lat, lon, "the aircraft");
 }
 
@@ -697,6 +713,7 @@ void visibilityCheck() {
         logf("    layer %d: type %.1f coverage %.2f base %.0f m top %.0f m (we set: %s)", i, info.cloud_layers[i].cloud_type,
              info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].coverage > 0 ? "coverage>0" : "none");
+    logWindProfile(x, info, best->icao.c_str());
     logCoveringRecords(best->lat, best->lon, best->icao.c_str());
     if (!g_cfg.visAutocal || x.visM >= 20000.0f || info.visibility < 100.0f || g_calIter >= 2) return;
     // X-Plane fades new weather in over minutes (longer while it is busy loading), so right after an update the read-back

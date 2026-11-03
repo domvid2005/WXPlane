@@ -609,6 +609,24 @@ int main() {
             auto g = sampleAloft(only, 50, -70, 250, 4);                          // no FD at all, far from the point: the model alone, from up to 2500 nm
             CHECK(g.size() == 3);
         }
+        {   // every record gets the same 12 wind altitudes above its surface wind, whatever the terrain
+            auto lv = [](double alt, double dir, double kt) { AloftLevel L; L.altFt = alt; L.hasWind = true; L.dirDeg = dir; L.speedKt = kt; return L; };
+            AloftStation F; F.id = "FFF"; F.lat = 40; F.lon = -100; F.located = true;
+            F.levels = {lv(3000, 270, 10), lv(9000, 270, 30), lv(18000, 270, 60), lv(34000, 270, 100), lv(39000, 270, 110)};
+            std::vector<AloftStation> fd{F};
+            Config wc;
+            Station lo, hi;
+            lo.lat = 40; lo.lon = -100; lo.elevM = 100; hi.lat = 40.1; hi.lon = -100; hi.elevM = 2200;   // the second one is above the 3000 and 9000 ft levels
+            parseReport("KLOW 301553Z 18010KT 10SM FEW040 20/10 A3010", lo.report);
+            parseReport("KHIG 301553Z 18010KT 10SM FEW040 20/10 A3010", hi.report);
+            XpWx a = buildXp(lo, wc, 0, &fd, false), b = buildXp(hi, wc, 0, &fd, false);
+            CHECK(a.winds.size() == 13 && b.winds.size() == 13);
+            bool asc = true; for (size_t i = 1; i < b.winds.size(); ++i) if (b.winds[i].altMsl <= b.winds[i - 1].altMsl) asc = false;
+            CHECK(asc);
+            CHECK(std::fabs(a.winds[9].altMsl - b.winds[9].altMsl) < 1.0f && std::fabs(a.winds[12].altMsl - 60000 * 0.3048f) < 1.0f);   // FL390+ slots at the same height
+            CHECK(a.winds[8].ms > 55 * 0.514f && a.winds[12].ms > 100 * 0.514f);   // ~34000 ft: 100 kt, held above the top level
+            CHECK(b.winds[1].ms == b.winds[2].ms || b.winds[1].ms > 8 * 0.514f);   // under-terrain levels carry the lowest level's wind, not nothing
+        }
         {   // winds aloft without gaps
             auto lv = [](double alt, double dir, double kt, bool wind, bool temp, double tc) { AloftLevel L; L.altFt = alt; L.hasWind = wind; L.dirDeg = dir; L.speedKt = kt; L.hasTemp = temp; L.tempC = tc; return L; };
             AloftStation A; A.id = "AAA"; A.lat = 38; A.lon = -98; A.located = true;

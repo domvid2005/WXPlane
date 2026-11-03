@@ -98,25 +98,47 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     // NOAA winds/temps aloft, blended from the nearest FD stations to this report's location.
     if (cfg.useAloft && aloft && !aloft->empty()) {
         std::vector<AloftSample> smp = sampleAloft(*aloft, st.lat, st.lon, cfg.aloftRangeNm, cfg.aloftStations);
-        const double floorM = st.elevM + 300.0; // skip levels at/under the terrain
         if (x.hasTemp) x.tempProfile.emplace_back((float)st.elevM, (float)r.tempC);
+        // Temperatures: every NOAA/model level above the terrain.
+        const double floorM = st.elevM + 300.0;
         for (const auto& a : smp) {
-            float altM = (float)(a.altFt * kFtToM);
-            if (altM <= floorM) continue;
-            if (a.hasWind && x.winds.size() < 13) {
-                XpWind w;
-                w.altMsl = altM; w.dir = (float)a.dirDeg; w.ms = (float)(a.speedKt * kKtToMs); w.gustMs = w.ms;
-                x.winds.push_back(w);
-            }
-            if (a.hasTemp) x.tempProfile.emplace_back(altM, (float)a.tempC);
+            const float altM = (float)(a.altFt * kFtToM);
+            if (altM > floorM && a.hasTemp) x.tempProfile.emplace_back(altM, (float)a.tempC);
         }
-        // Hold the highest NOAA wind up to the ceiling so X-Plane's own winds never take over above the top FD level.
-        if (!x.winds.empty() && x.winds.size() > (x.hasWind ? 1u : 0u) && x.winds.size() < 13) {
-            float ceilM = (float)(cfg.cruiseCeilingFt * kFtToM);
-            if (x.winds.back().altMsl < ceilM - 100.0f) {
-                XpWind top = x.winds.back();
-                top.altMsl = ceilM;
-                x.winds.push_back(top);
+        // Winds: the SAME 12 altitudes in every record, whatever the station's terrain or which sources reached it. X-Plane blends
+        // overlapping records layer by layer, and a record with fewer layers (a high-terrain station that skips 3000 and 6000 ft, or one
+        // without the model's top levels) left slots undefined, which fall back to the sim's own winds - calm after our reset. A level under
+        // the terrain gets the wind of the lowest level above it, at an altitude just over the previous layer.
+        std::vector<AloftSample> ws;
+        for (const auto& a : smp) if (a.hasWind) ws.push_back(a);
+        if (!ws.empty()) {
+            static const double kGridFt[] = {3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000};
+            double prevM = x.winds.empty() ? st.elevM : x.winds.back().altMsl;
+            for (double gft : kGridFt) {
+                auto uv = [](const AloftSample& q, double& u, double& v) { const double rad = q.dirDeg * 3.14159265358979 / 180.0; u = -q.speedKt * std::sin(rad); v = -q.speedKt * std::cos(rad); };
+                double u = 0, v = 0;
+                if (gft <= ws.front().altFt) uv(ws.front(), u, v);
+                else if (gft >= ws.back().altFt) uv(ws.back(), u, v);
+                else {
+                    for (size_t i = 1; i < ws.size(); ++i) {
+                        if (gft <= ws[i].altFt) {
+                            double u0, v0, u1, v1;
+                            uv(ws[i - 1], u0, v0); uv(ws[i], u1, v1);
+                            const double f = (gft - ws[i - 1].altFt) / std::max(1.0, ws[i].altFt - ws[i - 1].altFt);
+                            u = u0 + (u1 - u0) * f; v = v0 + (v1 - v0) * f;
+                            break;
+                        }
+                    }
+                }
+                XpWind w;
+                const double kt = std::sqrt(u * u + v * v);
+                double dir = std::atan2(-u, -v) * 180.0 / 3.14159265358979;
+                if (dir < 0) dir += 360.0;
+                w.altMsl = (float)std::max(gft * kFtToM, prevM + 1.0);
+                w.dir = (float)(kt < 0.5 ? 0 : dir);
+                w.ms = (float)(kt * kKtToMs); w.gustMs = w.ms;
+                prevM = w.altMsl;
+                if (x.winds.size() < 13) x.winds.push_back(w);
             }
         }
         x.aloft = x.winds.size() > (x.hasWind ? 1u : 0u) || x.tempProfile.size() > 1;
