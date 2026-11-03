@@ -288,3 +288,16 @@ Blocks enclosed on all four sides by storm cells, but with no cell of their own 
 ## Overlap (no gaps)
 
 Gap-fill tiles (`fill_radius_factor`) and storm cells (`storm_radius_factor`) now default to 1.0 x their grid size: every tile reaches the centres of its neighbours, so fill tiles overlap each other, the storm cells and the station circles, and no uncovered ground is left between them. X-Plane blends overlapping records, so edges between records are softer but overlapped cloud layers can look denser or darker. If a value was set by hand in `WXPlane.cfg` it still wins (the old defaults were 0.8 and 0.9).
+
+## Round dry spots
+
+Station and gap-fill records inside a radar storm now take the storm's rain (inverse-distance mean of the cells within one cell radius, never lowering a station's own reported rain). Before, a station that reported no rain left a round dry spot the size of its own circle inside the storm in X-Plane's NEXRAD view.
+
+## Square radar shapes (v21)
+
+Three changes break up the 12 nm block grid. All three are settings, and config files older than v21 take the new values once.
+- Finer blocks: `radar_cell_nm` 6 (was 12) and `radar_max_cells` 150 (was 60). Note 150 cells of 6 nm cover less ground than 60 of 12 nm, so far storms drop out first (closest and strongest are kept).
+- Smoother values: `storm_rain_blend` 0.4 pulls each cell's reflectivity (rain rate, now at 1 dBZ resolution) toward its neighbours; `storm_top_blend` 0.4 and `storm_top_step_m` 250 do the same for tops.
+- Off-grid placement: `storm_centroid` puts each cell at the reflectivity-weighted centre of its echo instead of the block centre, which removes the straight lines. Cells can sit up to half a block off the grid, so `storm_radius_factor` now defaults to 1.3 to keep them overlapping.
+
+Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm_top_blend = 0`, `storm_centroid = 0` to go back to the earlier look.

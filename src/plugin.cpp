@@ -352,6 +352,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         valFixes += wx::validateXp(x, false, &valNote);
         baseWx[s.icao] = x;
+        if (g_cfg.radar && res.radar.ok)   // a station inside a storm must not leave a round dry spot in the radar picture
+            x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, s.lat, s.lon, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
         fillInfo(info, x);
@@ -413,6 +415,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
                     if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
                     valFixes += wx::validateXp(x, false, &valNote);
+                    if (g_cfg.radar && res.radar.ok)
+                        x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, latc, lonc, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
                     if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
                     XPLMWeatherInfo_t info;
                     fillInfo(info, x);

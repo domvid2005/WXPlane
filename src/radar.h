@@ -17,7 +17,8 @@ struct RadarCell {
     float frac = 1;            // fraction of the block that is echo (0..1)
     float topM = 0;            // echo top, metres MSL; 0 = unknown (estimated later)
     bool topKnown = false;
-    float rateMmH = 0;         // rain rate for dbz
+    float dbzFine = 0;         // reflectivity at 1 dBZ resolution (rain rate comes from this, not from the 5 dBZ class)
+    float rateMmH = 0;         // rain rate for dbzFine
     double distNm = 0;         // from the aircraft when built
     std::string key;           // stable per block, used to diff updates
     float edge = 0;            // 0 = inside a cluster of storm blocks .. 1 = isolated / on the rim of one (see markStormEdges)
@@ -25,6 +26,11 @@ struct RadarCell {
 
 // Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
 // the neighbour mean + 2 km, and lone blocks to 8 km. Only ever lowers a top.
+// Rain a storm field gives at a point (0..1, same scale as XpWx::precip): inverse-distance mean of the cells within reachNm, 0 if none.
+// Station and gap-fill records use it so a dry-reporting station or fill tile inside a storm does not leave a round dry spot.
+void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend);
+float stormPrecipAt(const std::vector<RadarCell>& cells, double lat, double lon, double reachNm, float rainFullMmH);
+
 // Interpolates cells into holes: positions enclosed on all four sides by kept cells (at least minNeighbours within ~1.4 cells)
 // that have no cell of their own. `dropped` are real blocks that lost out to the cell cap; their position and key are reused.
 // Returns how many cells were added (at most maxAdd); each takes the mean reflectivity, top and coverage of its neighbours.

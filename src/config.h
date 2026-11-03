@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 20;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 21;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -47,13 +47,15 @@ struct Config {
     bool radar = true;            // turn radar echoes into storm cells
     bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
     double radarRangeNm = 150;    // storms within this distance of the aircraft
-    double stormRadiusFactor = 1.0;  // storm record radius = this x radar cell size (min 6 nm); 1.0 = each cell reaches the centres of its neighbours, so storm cells overlap each other and the gap-fill tiles around them
-    double stormTopStepM = 500;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
-    double stormTopBlend = 0;        // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
+    double stormRadiusFactor = 1.3;  // storm record radius = this x radar cell size (min 6 nm); cells sit at the centre of their echo (storm_centroid), up to half a block off the grid, so 1.3 keeps them overlapping each other and the gap-fill tiles
+    bool stormCentroid = true;       // a storm cell sits at the reflectivity-weighted centre of its echo instead of the block centre (breaks up the square grid)
+    double stormRainBlend = 0.4;     // 0..0.8: pull each cell's reflectivity (rain rate) toward its neighbours', so rain steps between blocks round off
+    double stormTopStepM = 250;      // storm tops are rounded to this step (smaller = fewer terraces between neighbouring cells, more records change between updates)
+    double stormTopBlend = 0.4;      // 0 = only tall spikes are clipped; 0.3-0.5 also pulls every top toward its neighbours (rounds plateau steps)
     double stormTopVariationKnownM = 0; // fixed per-block height variation (m) added to MEASURED echo tops too (estimated tops always use storm_top_variation_m)
     bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
-    double radarCellNm = 12;      // block size one storm record represents
-    int radarMaxCells = 60;       // cap on storm records handed to X-Plane
+    double radarCellNm = 6;       // block size one storm record represents
+    int radarMaxCells = 150;       // cap on storm records handed to X-Plane
     double radarMinDbz = 20;      // ignore weaker echoes
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity

@@ -97,6 +97,38 @@ void smoothStormTops(std::vector<RadarCell>& cells, double cellNm, double blend,
     }
 }
 
+void smoothStormRain(std::vector<RadarCell>& cells, double cellNm, double blend) {
+    if (blend <= 0.0) return;
+    std::vector<float> orig(cells.size());
+    for (size_t i = 0; i < cells.size(); ++i) orig[i] = cells[i].dbzFine;
+    const double sigma = cellNm * 0.9, reach = cellNm * 1.7;
+    for (size_t i = 0; i < cells.size(); ++i) {
+        double sum = 0, ws = 0;
+        for (size_t j = 0; j < cells.size(); ++j) {
+            if (j == i) continue;
+            const double d = distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon);
+            if (d > reach) continue;
+            const double w = std::exp(-(d * d) / (2.0 * sigma * sigma));
+            sum += orig[j] * w; ws += w;
+        }
+        if (ws <= 0) continue;
+        const float f = (float)((1.0 - blend) * orig[i] + blend * (sum / ws));
+        cells[i].dbzFine = std::max(f, 0.0f);   // may rise or fall: this is smoothing, not a limiter
+        cells[i].rateMmH = rateFromDbz(cells[i].dbzFine);
+    }
+}
+
+float stormPrecipAt(const std::vector<RadarCell>& cells, double lat, double lon, double reachNm, float rainFullMmH) {
+    double sw = 0, sp = 0;
+    for (const auto& c : cells) {
+        const double d = distNm(lat, lon, c.lat, c.lon);
+        if (d > reachNm) continue;
+        const double w = 1.0 / (0.25 * reachNm + d);
+        sw += w; sp += w * clampf(c.rateMmH / std::max(1.0f, rainFullMmH), 0.05f, 1.0f);
+    }
+    return sw > 0 ? (float)(sp / sw) : 0.0f;
+}
+
 int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& dropped, double cellNm, double aircraftLat, double aircraftLon,
                    double stepM, double minDbz, int minNeighbours, int maxAdd) {
     if (kept.size() < (size_t)minNeighbours || maxAdd <= 0) return 0;
@@ -138,7 +170,8 @@ int fillStormHoles(std::vector<RadarCell>& kept, const std::vector<RadarCell>& d
             h.frac = std::max(0.25f, std::round((float)(sFrac / n) * 4.0f) / 4.0f);
             h.topKnown = nTop > 0;
             h.topM = nTop > 0 ? (float)(std::round(sTop / nTop / stepM) * stepM) : std::round(estimateTopM(h.dbz, h.lat) / (float)stepM) * (float)stepM;
-            h.rateMmH = rateFromDbz(h.dbz);
+            h.dbzFine = (float)(sDbz / n);
+            h.rateMmH = rateFromDbz(h.dbzFine);
             h.distNm = distNm(aircraftLat, aircraftLon, h.lat, h.lon);
             if (c.src) h.key = c.src->key;
             else { char kb[48]; std::snprintf(kb, sizeof kb, "H%ld:%ld", (long)std::lround(h.lat * 100.0), (long)std::lround(h.lon * 100.0)); h.key = kb; }
@@ -168,7 +201,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     res.attempted = true;
     if (!refl.valid()) { res.note = "no reflectivity grid"; return res; }
     const double blockLat = cfg.radarCellNm / 60.0;
-    struct Acc { float maxDbz = -999; int n = 0; float top = 0; double lat = 0, lon = 0, step = 0; };
+    struct Acc { float maxDbz = -999; int n = 0; float top = 0; double lat = 0, lon = 0, step = 0; double sw = 0, sLat = 0, sLon = 0; };
     std::map<std::pair<long, long>, Acc> blocks;
     const float minDbz = (float)cfg.radarMinDbz;
     std::set<std::pair<long, long>> prevBlocks;
@@ -193,6 +226,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
             Acc& a = blocks[{bj, bi}];
             if (a.n == 0) { a.step = step; a.lat = 90.0 - (bj + 0.5) * blockLat; a.lon = (bi + 0.5) * step - 180.0; }
             ++a.n;
+            { const double w = std::max(1.0f, v - 15.0f); a.sw += w; a.sLat += w * la; a.sLon += w * lo; }
             a.maxDbz = std::max(a.maxDbz, std::min(v, 70.0f));    // above ~70 dBZ is hail/ground clutter, not heavier rain
             if (tops) {
                 float t = tops->at(la, lo);
@@ -206,6 +240,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         const Acc& a = kv.second;
         RadarCell c;
         c.lat = a.lat; c.lon = a.lon;
+        if (cfg.stormCentroid && a.sw > 0) { c.lat = a.sLat / a.sw; c.lon = a.sLon / a.sw; }   // centre of the echo, not of the grid block
         if (a.maxDbz < minDbz - 5.0f) continue;
         c.dbz = std::max(5.0f, std::round(a.maxDbz / 5.0f) * 5.0f);
         double pxPerBlock = (blockLat / refl.dLat) * (a.step / refl.dLon);
@@ -224,7 +259,8 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
             const double v = (double)(h % 2001u) / 1000.0 - 1.0;   // -1 .. +1
             c.topM = std::max(3000.0f, std::round((c.topM + (float)(v * amp)) / step) * step);
         }
-        c.rateMmH = rateFromDbz(c.dbz);
+        c.dbzFine = std::max(5.0f, std::round(std::min(a.maxDbz, 70.0f)));
+        c.rateMmH = rateFromDbz(c.dbzFine);
         c.distNm = distNm(lat, lon, c.lat, c.lon);
         char key[48];
         std::snprintf(key, sizeof key, "R%ld:%ld", kv.first.first, kv.first.second);
@@ -240,6 +276,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     if ((int)all.size() > cfg.radarMaxCells) { droppedCells.assign(all.begin() + cfg.radarMaxCells, all.end()); all.resize((size_t)cfg.radarMaxCells); }
     if (cfg.stormFillHoles) res.holesFilled = fillStormHoles(all, droppedCells, cfg.radarCellNm, lat, lon, std::max(50.0, cfg.stormTopStepM), cfg.radarMinDbz, 5, std::max(4, cfg.radarMaxCells / 4));
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM);
+    smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend);
     markStormEdges(all, cfg.radarCellNm);
     res.cells = std::move(all);
     res.ok = true;

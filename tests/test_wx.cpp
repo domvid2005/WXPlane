@@ -3,6 +3,7 @@
 #include <ctime>
 #include <string>
 
+#include "../src/geo.h"
 #include "../src/json_mini.h"
 #include "../src/metar.h"
 #include "../src/radar.h"
@@ -156,7 +157,7 @@ int main() {
         { FILE* f = std::fopen(fn, "w"); std::fputs("update_minutes = 5\nstartup_delay_s = 15\nstartup_staged = 1\nvis_autocal = 1\ntransition_s = 90\napply_per_tick = 4\nsearch_nm = 90\n", f); std::fclose(f); }
         Config old; loadConfig(fn, old);
         CHECK(old.updateMinutes == 5 && old.startupDelayS == 0 && !old.startupStaged && old.visAutocal && old.transitionS == 0 && old.applyPerTick == 500 && old.searchNm == 90);
-        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 20\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 21\nupdate_minutes = 10\nstartup_staged = 1\nlow_cloud_type = 2\nstation_radius_factor = 0.65\n", f); std::fclose(f); }
         Config cur; loadConfig(fn, cur);
         CHECK(cur.updateMinutes == 10 && cur.startupStaged && cur.lowCloudType == 2.0 && cur.stationRadiusFactor == 0.65);   // current files keep their values
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
@@ -165,9 +166,15 @@ int main() {
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 18\ntop_bumps = 1\nbump_count = 30\nupdate_minutes = 10\nsearch_nm = 77\n", f); std::fclose(f); }
         Config v18; loadConfig(fn, v18);
         CHECK(!v18.topBumps && v18.bumpCount == 10 && v18.updateMinutes == 5 && v18.searchNm == 77);   // rough tops switched off once; other settings kept
-        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 20\ntop_bumps = 1\nbump_count = 30\n", f); std::fclose(f); }
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 21\ntop_bumps = 1\nbump_count = 30\n", f); std::fclose(f); }
         Config v19; loadConfig(fn, v19);
         CHECK(v19.topBumps && v19.bumpCount == 30);   // a later opt-in is respected
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 20\nradar_cell_nm = 12\nradar_max_cells = 60\nsearch_nm = 77\n", f); std::fclose(f); }
+        Config v20; loadConfig(fn, v20);
+        CHECK(v20.radarCellNm == 6 && v20.radarMaxCells == 150 && v20.stormCentroid && v20.searchNm == 77);   // finer storm blocks taken once (v21)
+        { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 21\nradar_cell_nm = 12\nradar_max_cells = 60\n", f); std::fclose(f); }
+        Config v21; loadConfig(fn, v21);
+        CHECK(v21.radarCellNm == 12 && v21.radarMaxCells == 60);   // and a later choice is kept
         { Config d; CHECK(!d.topBumps); }
         std::remove(fn);
     }
@@ -296,6 +303,26 @@ int main() {
         CHECK(fillStormHoles(r3, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 0) == 0);
         CHECK(fillStormHoles(r4, none, 12.0, lat0, lon0, 500.0, 20.0, 5, 10) == 0);
     }
+    // --- stations and fill tiles inside a storm take its rain (no round dry spots); far away they get none
+    {
+        std::vector<RadarCell> v(2);
+        v[0].lat = 35.0; v[0].lon = -97.0; v[0].rateMmH = 40; v[1].lat = 35.0; v[1].lon = -96.8; v[1].rateMmH = 40;
+        CHECK(stormPrecipAt(v, 35.0, -96.9, 12.0, 40.0f) > 0.95f);
+        CHECK(stormPrecipAt(v, 36.5, -97.0, 12.0, 40.0f) == 0.0f);
+        v[1].rateMmH = 4;   // a lighter neighbour pulls the mean down but never below the weakest cell's value
+        const float m = stormPrecipAt(v, 35.0, -96.9, 12.0, 40.0f);
+        CHECK(m > 0.09f && m < 1.0f);
+    }
+    // --- rain smoothing: neighbouring cells' reflectivity is pulled together; blend 0 changes nothing
+    {
+        std::vector<RadarCell> v(2);
+        v[0].lat = 35.0; v[0].lon = -97.0; v[0].dbzFine = 30; v[1].lat = 35.0; v[1].lon = -96.9; v[1].dbzFine = 50;
+        std::vector<RadarCell> w = v;
+        smoothStormRain(w, 6.0, 0.0);
+        CHECK(w[0].dbzFine == 30 && w[1].dbzFine == 50);
+        smoothStormRain(w, 6.0, 0.4);
+        CHECK(w[0].dbzFine > 30 && w[1].dbzFine < 50 && w[1].dbzFine - w[0].dbzFine < 20 && w[0].rateMmH > 0);
+    }
     // --- mist with a low ceiling: the ceiling stays where it is reported and all three decks are kept
     {
         Station st; st.elevM = 132;
@@ -401,6 +428,18 @@ int main() {
         RadarResult rr2 = buildRadarCells(refl, &tops, 38.1, -98.1, rc);
         std::string k1, k2; for (auto& c : rr.cells) if (c.dbz > 40) k1 += c.key + ";"; for (auto& c : rr2.cells) if (c.dbz > 40) k2 += c.key + ";";
         CHECK(!k1.empty() && k1 == k2);
+        {   // cells sit at the weighted centre of their echo (not the block centre) and keep their keys; off = block centre
+            Config cc = rc; cc.radarMaxCells = 100; cc.stormCentroid = true;
+            Config nc = cc; nc.stormCentroid = false;
+            RadarResult ca = buildRadarCells(refl, &tops, 38.0, -98.0, cc), cb = buildRadarCells(refl, &tops, 38.0, -98.0, nc);
+            bool same = ca.cells.size() == cb.cells.size(), moved = false, near = true;
+            for (size_t i = 0; same && i < ca.cells.size(); ++i) {
+                same = same && ca.cells[i].key == cb.cells[i].key;
+                const double d = wx::distNm(ca.cells[i].lat, ca.cells[i].lon, cb.cells[i].lat, cb.cells[i].lon);
+                moved = moved || d > 0.05; near = near && d < cc.radarCellNm;
+            }
+            CHECK(same && moved && near);
+        }
         rc.radarMaxCells = 2; RadarResult rr3 = buildRadarCells(refl, nullptr, 38.0, -98.0, rc);
         CHECK(rr3.cells.size() == 2 && rr3.echoBlocks >= 3 && !rr3.topsFromRadar && rr3.cells[0].topM > 3000 && !rr3.cells[0].topKnown);
         {   // estimated tops (no echo-top grid) vary per block by a fixed amount: not one plateau, stable between builds, bounded
