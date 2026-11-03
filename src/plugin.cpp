@@ -386,7 +386,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // on fixed grids cover everything around the aircraft: a fine grid close by and a coarse one further out (up to the METAR
     // search radius). Each record holds a smooth inverse-distance blend of the nearest stations (the closest one dominates), so
     // the weather changes gradually from airport to airport and no two stations compete over the same spot.
-    int fillCount = 0;
+    int fillCount = 0, fillUnderStorm = 0;
     if (g_cfg.fillGaps && g_cfg.stationRadiusAuto && !res.stations.empty()) {
         auto addGrid = [&](int cellNm, double rMin, double rMax, const char* tag) {
             const double stepLat = cellNm / 60.0;
@@ -411,6 +411,16 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     }
                     auto rit = stationRadius.find(nearest->icao);
                     if (rit != stationRadius.end() && nd <= rit->second * 0.9) continue;   // inside the station's own circle
+                    if (g_cfg.radar && g_cfg.stormReplacesFill && res.radar.ok) {
+                        // A background tile inside a confirmed storm would blend its low deck (tops of 2-3 km) into the storm's 13 km tops, and X-Plane
+                        // renders that as a sheer canyon through the storm. The storm cells cover this spot, so the tile is not needed. Rim cells (the faint
+                        // outskirts) do not count: below them the deck stays.
+                        bool under = false;
+                        const double reach = std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * 0.8;
+                        for (const auto& rc : res.radar.cells)
+                            if (!rc.synthetic || (!rc.key.empty() && rc.key[0] != 'Q')) { if (wx::distNm(latc, lonc, rc.lat, rc.lon) < reach) { under = true; break; } }
+                        if (under) { ++fillUnderStorm; continue; }
+                    }
                     wx::Station syn = wx::blendAt(res.stations, latc, lonc);
                     wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
                     if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
@@ -506,7 +516,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (res.noaaFixes > 0 || res.filledElements > 0)
         logf("NOAA crosscheck: %d of %zu reports corrected or completed from NOAA's decoded fields, %d missing elements filled from neighbouring stations",
              res.noaaFixes, res.stations.size(), res.filledElements);
-    logf("update (+%d s after the sim started running): %zu stations, %d gap-fill records, %d storm cells, %zu changed, %zu removed%s%s", g_loopStarted ? (int)std::chrono::duration<double>(Clock::now() - g_enabledAt).count() : -1, res.stations.size(), fillCount, stormCount, todo.size(), gone.size(), full ? " (full)" : (res.radarOnly ? " (radar only)" : ""),
+    logf("update (+%d s after the sim started running): %zu stations, %d gap-fill records (%d left out under storms), %d storm cells, %zu changed, %zu removed%s%s", g_loopStarted ? (int)std::chrono::duration<double>(Clock::now() - g_enabledAt).count() : -1, res.stations.size(), fillCount, fillUnderStorm, stormCount, todo.size(), gone.size(), full ? " (full)" : (res.radarOnly ? " (radar only)" : ""),
          (g_pendingTodo.empty() && g_pendingGone.empty()) ? "" : " [queued, sent a few at a time]");
     if (g_cfg.radar) {
         if (res.radar.ok) {

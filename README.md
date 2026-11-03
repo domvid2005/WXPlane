@@ -317,3 +317,7 @@ Set `radar_cell_nm = 12`, `radar_max_cells = 60`, `storm_rain_blend = 0`, `storm
 ### Pits
 
 `storm_fill_pits` (default on): with `storm_smooth_tops`, a block whose top is under 60% of the mean of at least four blocks around it (typically a weak-echo block with no measured echo top, whose height was only estimated from reflectivity) is lifted to exactly that mean. Such a block otherwise renders as a sheer rectangular crater in the middle of a storm. Blocks at the edge of a cluster (fewer than four neighbours) are left alone.
+
+### Canyons: fill tiles under storms
+
+`storm_replaces_fill` (default on): a background gap-fill tile whose centre is within 0.8 x storm radius of a confirmed storm cell (rim cells excluded) is no longer sent. Reason (from a log of a canyon through a storm): a fill tile of 12 nm radius with a 2.3 km deck sat 4 nm from the aircraft, inside storm cells with 13 km tops; X-Plane blends overlapping records slot by slot, so the low tile cut a sheer trench. The overlap of fill tiles was widened to 1.0 earlier, which made this worse. The update log line now says how many tiles were left out.
