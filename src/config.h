@@ -10,7 +10,10 @@ struct Config {
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
     bool upperAir = true;        // global model (Open-Meteo GFS) winds/temps for the levels above FD (FL390) and where no FD station is near
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
-    double lowCloudType = 3.0;    // X-Plane cloud type for low/overcast layers: 1 = smooth stratus sheet (curtain-like edges), 2 = cumulus, 3 = billowy cumulonimbus
+    // X-Plane cloud type for low/overcast layers: 1 = stratus (smooth sheet, curtain-like edges), 2 = cumulus, 3 = cumulonimbus.
+    // 2 since 2026-11-04: X-Plane flies 3 as a thunderstorm cloud, with strong up- and downdrafts, so with every deck at 3 an aircraft
+    // in or near ordinary cloud (around mountains especially) lost 2000 ft and could not hold altitude.
+    double lowCloudType = 2.0;
     double stormTopVariationM = 1500; // estimated storm tops (no radar echo-top data) vary by up to +/- this, stable per block, so tops are not one flat plateau
     double startupCalmS = 1.5;        // scenery loading must have been finished this long before the first download starts
     double regenWaitS = 1.5;          // pause between X-Plane's weather reset and our first update

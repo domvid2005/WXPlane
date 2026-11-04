@@ -288,7 +288,9 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 o.coverage = (float)cov;
                 o.alt_base = (float)(a[k].cb / a[k].wc);
                 o.alt_top = (float)(a[k].ct / a[k].wc);
-                o.cloud_type = (float)(a[k].cy / a[k].wc);
+                // the type is blended too, but a real thunderstorm core (type 3) keeps its type, and nothing is made more convective than
+                // the records around it: X-Plane flies type 3 with strong up- and downdrafts
+                o.cloud_type = (isReal[i][k] && L[k].cloud_type >= 2.9f) ? L[k].cloud_type : (float)std::min(2.0, a[k].cy / a[k].wc);
                 if (o.alt_top < o.alt_base + 300.0f) o.alt_top = o.alt_base + 300.0f;   // never a thin sliver (X-Plane dropped an update full of them)
                 outReal[i][k] = true;
             }
@@ -331,6 +333,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             if (src.alt_base < lo || src.alt_top > hi) continue;   // does not fit whole: leave the slot empty
             L[k] = src;
             L[k].coverage = ph;
+            L[k].cloud_type = 1.0f;   // a filler is (almost) invisible; as stratus it brings none of the up- and downdrafts of a convective cloud
         }
     }
     // the empty slots go out as before (0 m, no coverage), so X-Plane drops them

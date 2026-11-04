@@ -1146,7 +1146,9 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     const float replacedCov = cl.coverage;   // the deck this storm grows out of (0 if the slot was free)
     // Cumulonimbus from 30 dBZ up (and for any measured echo top above 6 km); a weak echo is cumulus (2.0), not a deep anvil. Ramping
     // further down to 1.0 made smooth stratus sheets with curtain edges, so the floor stays at cumulus.
-    cl.type = (dbz >= 30.0f || (c.topKnown && c.topM > 6000.0f)) ? 3.0f : 2.0f;
+    // 3 (cumulonimbus) only for real thunderstorm cores: X-Plane gives that type strong up- and downdrafts. Ordinary rain clouds are
+    // cumulus (2), even when they are tall (before: 30 dBZ or a top over 6 km already made a cumulonimbus, 2026-11-04 altitude-loss log).
+    cl.type = dbz >= 40.0f ? 3.0f : 2.0f;
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
     if (!c.synthetic && c.edge <= 0.01f && dbz >= 35.0f)   // deep inside a storm: solid, so X-Plane draws no clear-air pockets (and no rain-free spots on the map) there

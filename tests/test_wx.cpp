@@ -163,7 +163,7 @@ int main() {
         CHECK(cur.updateMinutes == 10 && cur.startupStaged && cur.lowCloudType == 2.0 && cur.stationRadiusFactor == 0.65);   // current files keep their values
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
         Config v6; loadConfig(fn, v6);
-        CHECK(v6.lowCloudType == 3.0 && v6.stationRadiusFactor == 0.49 && v6.fillRadiusFactor == 1.0 && v6.radarMinutes == 5 && v6.searchNm == 80);   // stale cloud settings from earlier builds reset once
+        CHECK(v6.lowCloudType == 2.0 && v6.stationRadiusFactor == 0.49 && v6.fillRadiusFactor == 1.0 && v6.radarMinutes == 5 && v6.searchNm == 80);   // stale cloud settings from earlier builds reset once
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 18\ntop_bumps = 1\nbump_count = 30\nupdate_minutes = 10\nsearch_nm = 77\n", f); std::fclose(f); }
         Config v18; loadConfig(fn, v18);
         CHECK(!v18.topBumps && v18.bumpCount == 10 && v18.updateMinutes == 5 && v18.searchNm == 77);   // rough tops switched off once; other settings kept
@@ -973,7 +973,7 @@ int main() {
             XpWx ws = ob; applyStorm(ws, wk, oc, 300, 38);
             int sl = ws.clouds[2].coverage > 0 && ws.clouds[2].topM > ws.clouds[1].topM ? 2 : 1;
             CHECK(ws.clouds[sl].type == 2.0f && ws.clouds[sl].topM < 9000);
-            wk.dbz = 36; XpWx ms = ob; applyStorm(ms, wk, oc, 300, 38);
+            wk.dbz = 42; XpWx ms = ob; applyStorm(ms, wk, oc, 300, 38);   // a thunderstorm core (40 dBZ and up)
             CHECK(ms.clouds[2].type == 3.0f || ms.clouds[1].type == 3.0f);
         }
         // three layers: the storm replaces the highest and grows from ITS base, not from the lowest layer (slot-wise blending in X-Plane)
