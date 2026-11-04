@@ -273,7 +273,7 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 // HARNESS_RAMP=1: the first load is released evenly over transition_s instead of in one burst.
 static int runRamp() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
     XPluginStart(n, s, d);
@@ -424,7 +424,7 @@ int main() {
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
@@ -583,7 +583,7 @@ int main() {
             const Call& c = g_calls[i];
             int sl = -1;   // the storm layer: a real layer 3 km deep or more (its slot depends on the height bands, see matchEmptyLayers)
             for (int k = 0; k < 3; ++k) if (c.info.cloud_layers[k].coverage > 0.05f && c.info.cloud_layers[k].cloud_type >= 1.0f && c.info.cloud_layers[k].alt_top - c.info.cloud_layers[k].alt_base >= 3000.0f) sl = k;
-            if (c.airport || sl < 0) continue;
+            if (c.airport || sl < 0 || c.info.precip_rate <= 0) continue;   // (rain: a dry record next to a storm may carry some of its smoothed edge)
             ++storms;
             for (int k = 0; k < 3; ++k)                                     // station fog (a thin layer at the ground) is not copied onto storms
                 CHECK(!(c.info.cloud_layers[k].coverage > 0.05f && c.info.cloud_layers[k].alt_base < 600.0f && c.info.cloud_layers[k].alt_top - c.info.cloud_layers[k].alt_base < 300.0f));
@@ -613,6 +613,15 @@ int main() {
             }
             std::printf("  records with a thin filler layer: %d, with a gap below a layer: %d\n", bad, gaps);
             CHECK(bad == 0);
+        }
+        if (const char* dp = std::getenv("WX_DUMP")) {   // for the cloud-edge picture (tools)
+            FILE* f = std::fopen(dp, "w");
+            for (size_t i = before; i < g_calls.size(); ++i) {
+                const Call& c = g_calls[i];
+                float cov = 0; for (int k = 0; k < 3; ++k) cov = std::max(cov, c.info.cloud_layers[k].coverage);
+                std::fprintf(f, "%.5f %.5f %.3f %.2f %.3f\n", c.lat, c.lon, c.info.radius_nm, cov, c.info.precip_rate);
+            }
+            std::fclose(f);
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);

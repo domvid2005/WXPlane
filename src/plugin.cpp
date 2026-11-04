@@ -175,6 +175,24 @@ bool underStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon,
     return false;
 }
 
+// Smooth value noise -1..1 on absolute nm coordinates (two octaves), the same from one update to the next.
+double noise2(double X, double Y, double scale, int salt) {
+    auto one = [&](double sc, int s2) {
+        const double u = X / sc + s2 * 13.7, v = Y / sc - s2 * 7.3;
+        const long iu = (long)std::floor(u), iv = (long)std::floor(v);
+        const double fu = u - iu, fv = v - iv;
+        auto val = [&](long a, long b) {
+            uint32_t h = (uint32_t)a * 0x8da6b343u ^ (uint32_t)b * 0xd8163841u ^ (uint32_t)(s2 + 31) * 0xcb1ab31fu;
+            h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+            return (double)(h % 20001u) / 10000.0 - 1.0;
+        };
+        const double su = fu * fu * (3 - 2 * fu), sv = fv * fv * (3 - 2 * fv);
+        const double t = val(iu, iv) * (1 - su) + val(iu + 1, iv) * su, b = val(iu, iv + 1) * (1 - su) + val(iu + 1, iv + 1) * su;
+        return t * (1 - sv) + b * sv;
+    };
+    return 0.67 * one(scale, salt) + 0.33 * one(scale * 0.45, salt + 5);
+}
+
 // Cloud layers line up across all records (see the call in applyResult). X-Plane drops empty slots and moves the rest down (the read-back
 // showed our slot 1 deck as its layer 0), then blends layer 0 with layer 0 of the neighbouring record, layer 1 with layer 1 and so on.
 // So a record with fog + deck next to one with only the deck blended the fog into the deck, and a record whose deck sat in another slot
@@ -186,7 +204,7 @@ bool underStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon,
 void matchEmptyLayers(std::vector<Todo>& todo) {
     const int K = XPLM_NUM_CLOUD_LAYERS;
     const float ph = (float)g_cfg.emptyLayerCoverage;
-    if (ph <= 0.0f || todo.empty()) return;
+    if (todo.empty() || (ph <= 0.0f && g_cfg.cloudSmoothNm <= 0.0)) return;
     auto real = [](const XPLMWeatherInfoClouds_t& c) { return c.coverage > 0.05f && c.alt_top > c.alt_base; };
     // 1) height bands: the layer bases, sorted, split at the largest jumps in height (at most 3 bands, a jump of 300 m or more), so layers
     // at nearly the same height always share a band (k-means once put a 761 m deck in a different band than the 695 m one next to it)
@@ -224,6 +242,65 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         }
         for (int k = 0; k < K; ++k) L[k] = out[k];
         isReal[i] = used;
+    }
+    // 2b) Smooth cloud edges (2026-11-04: "no sign of a square grid anywhere"). Each record stood for its own square or tile, so where a
+    // cloudy one met a clear one the edge of the deck ran along the record grid. Now every layer's coverage, base, top and type is a
+    // Gaussian-weighted mean over the records around it (sigma cloud_smooth_nm, each record weighted by its area), with a gentle
+    // random wobble in the coverage (fixed to the ground), so a deck thins out over several miles along a curve that has nothing to do
+    // with the grid. Airport records keep exactly their own METAR layers (they are used as sources only), and ground fog stays local.
+    if (g_cfg.cloudSmoothNm > 0.0) {
+        // sigma grows with the record's own size, so the coarse 30 nm tiles further out are smoothed against their neighbours too
+        auto sigOf = [&](size_t i) { return std::max(g_cfg.cloudSmoothNm, 0.7 * (double)todo[i].rec.info.radius_nm); };
+        auto isFog = [&](size_t i, int k) { const auto& c = todo[i].rec.info.cloud_layers[k]; return isReal[i][k] && c.alt_base < todo[i].rec.elev + 250.0; };
+        struct Acc { double w = 0, wc = 0, cb = 0, ct = 0, cy = 0; };
+        std::vector<std::array<XPLMWeatherInfoClouds_t, 3>> out(n);
+        std::vector<std::array<bool, 3>> outReal(n);
+        for (size_t i = 0; i < n; ++i) {
+            const XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
+            for (int k = 0; k < K; ++k) { out[i][k] = L[k]; outReal[i][k] = isReal[i][k]; }
+            if (todo[i].rec.airport) continue;
+            Acc a[3];
+            const double sig = sigOf(i), reach = 3.0 * sig;
+            for (size_t j = 0; j < n; ++j) {
+                const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
+                if (d > reach) continue;
+                const double r = std::max(1.0, (double)todo[j].rec.info.radius_nm);
+                const double w = std::exp(-d * d / (2.0 * sig * sig)) * r * r;
+                for (int k = 0; k < K; ++k) {
+                    if (isFog(j, k)) continue;
+                    const XPLMWeatherInfoClouds_t& c = todo[j].rec.info.cloud_layers[k];
+                    a[k].w += w;
+                    if (!isReal[j][k]) continue;
+                    a[k].wc += w * c.coverage; a[k].cb += w * c.coverage * c.alt_base; a[k].ct += w * c.coverage * c.alt_top; a[k].cy += w * c.coverage * c.cloud_type;
+                }
+            }
+            for (int k = 0; k < K; ++k) {
+                if (isFog(i, k) || a[k].w <= 0) continue;
+                double cov = a[k].wc / a[k].w;
+                if (cov > 0.02) {   // the wobble: up to +-0.12, smooth over ~15 nm, only where the deck is thinning (not inside a solid one)
+                    const double X = todo[i].rec.lon * 60.0 * std::cos(todo[i].rec.lat * 3.14159265358979 / 180.0), Y = todo[i].rec.lat * 60.0;
+                    const double edge = 4.0 * cov * (1.0 - cov);   // 1 at 50 %, 0 at 0 and 100 %
+                    cov += 0.12 * edge * noise2(X, Y, 15.0, k);
+                }
+                cov = std::min(1.0, std::max(0.0, cov));
+                XPLMWeatherInfoClouds_t& o = out[i][k];
+                if (cov < 0.05 || a[k].wc <= 0) { o.coverage = 0; o.cloud_type = 0; o.alt_base = 0; o.alt_top = 0; outReal[i][k] = false; continue; }
+                o.coverage = (float)cov;
+                o.alt_base = (float)(a[k].cb / a[k].wc);
+                o.alt_top = (float)(a[k].ct / a[k].wc);
+                o.cloud_type = (float)(a[k].cy / a[k].wc);
+                if (o.alt_top < o.alt_base + 300.0f) o.alt_top = o.alt_base + 300.0f;   // never a thin sliver (X-Plane dropped an update full of them)
+                outReal[i][k] = true;
+            }
+        }
+        for (size_t i = 0; i < n; ++i) {
+            for (int k = 0; k < K; ++k) todo[i].rec.info.cloud_layers[k] = out[i][k];
+            isReal[i] = outReal[i];
+        }
+    }
+    if (ph <= 0.0f) {
+        for (size_t i = 0; i < n; ++i) for (int k = 0; k < K; ++k) { auto& c = todo[i].rec.info.cloud_layers[k]; if (c.coverage <= 0) { c.cloud_type = 0; c.alt_base = 0; c.alt_top = 0; } }
+        return;
     }
     // 3) a nearly empty layer only in a slot BELOW a record's own layers (that is where X-Plane's compaction would shift its layers down
     // a slot): at the height of the nearest record with a real layer in that slot, and only where it fits whole (at least 400 m deep,
