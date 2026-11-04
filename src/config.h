@@ -69,6 +69,7 @@ struct Config {
     // Natural radar picture (2026-11): instead of 12 nm blocks, the radar mosaic is smoothed, given a gentle random warp (stable between
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
+    double emptyLayerCoverage = 0.01;   // coverage given to an empty cloud slot that takes a neighbour's height (no ribbons; 1% shows nothing, but keeps the height)
     int radarNaturalMax = 150;          // records the natural picture may use (rain and the dry records around it)
     double radarNaturalFineNm = 3.0;    // smallest record near the aircraft (grows with distance, and when the budget runs short)
     double radarMinDbz = 20;      // ignore weaker echoes

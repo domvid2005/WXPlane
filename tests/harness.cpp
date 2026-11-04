@@ -456,7 +456,7 @@ int main() {
         CHECK(i.visibility > 390 && i.visibility < 420);                 // 1/4 SM fog
         CHECK(i.cloud_layers[0].cloud_type == 1.0f && i.cloud_layers[0].coverage == 1.0f);
         CHECK(i.cloud_layers[0].alt_base < 410 && i.cloud_layers[0].alt_top > 520 && i.cloud_layers[0].alt_top < 535); // VV001: fog layer 120 m deep (minimum), from the 407 m field
-        CHECK(i.cloud_layers[1].coverage == 0 && i.cloud_layers[2].coverage == 0);
+        CHECK(i.cloud_layers[1].coverage < 0.05f && i.cloud_layers[2].coverage < 0.05f);   // (an empty slot may carry a neighbour's height at 1 %)
         CHECK(i.pressure_alt > 101900 && i.pressure_alt < 102000);        // ATIS altimeter 30.11 overrides METAR 30.10
         CHECK(i.max_altitude_msl_ft == 60000 && i.radius_nm >= 0.5 && i.radius_nm <= 30); // carries aloft data, so it reaches cruise levels
         CHECK(i.wind_layers[0].speed == 0 && i.wind_layers[1].speed > 0);
@@ -580,9 +580,9 @@ int main() {
         float minVis = 1e9f, maxTop = 0, maxTurb = 0, maxPrecip = 0, radius = 0;
         for (size_t i = before; i < g_calls.size(); ++i) {
             const Call& c = g_calls[i];
-            if (c.airport || c.info.cloud_layers[2].cloud_type < 1.0f || c.info.cloud_layers[2].coverage <= 0) continue;
+            if (c.airport || c.info.cloud_layers[2].cloud_type < 1.0f || c.info.cloud_layers[2].coverage <= 0.05f) continue;
             ++storms;
-            CHECK(c.info.cloud_layers[0].coverage == 0);                    // station fog is not copied onto storms
+            CHECK(c.info.cloud_layers[0].coverage < 0.05f);                 // station fog is not copied onto storms (an empty slot may carry a neighbour's height at 1 %)
             if (c.info.cloud_layers[2].cloud_type >= 2.9f) ++heavy;
             minVis = std::min(minVis, c.info.visibility);
             maxTop = std::max(maxTop, c.info.cloud_layers[2].alt_top);

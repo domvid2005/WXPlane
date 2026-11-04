@@ -173,6 +173,42 @@ bool underStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon,
     return false;
 }
 
+// See the call in applyResult: empty cloud slots take the height of the nearest record's cloud in that slot (within 60 nm), with coverage
+// g_cfg.emptyLayerCoverage, so X-Plane's blend between a cloudy and a clear record does not slope the layer down to 0 m.
+void matchEmptyLayers(std::vector<Todo>& todo) {
+    const size_t n = todo.size();
+    for (int k = 0; k < XPLM_NUM_CLOUD_LAYERS; ++k) {
+        std::vector<size_t> has;
+        for (size_t i = 0; i < n; ++i) {   // ground fog (a layer starting within 250 m of the ground) is local: not a height to copy
+            const XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
+            if (c.coverage > 0.05f && c.alt_base > todo[i].rec.elev + 250.0) has.push_back(i);
+        }
+        if (has.empty()) continue;
+        for (size_t i = 0; i < n; ++i) {
+            XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
+            if (c.coverage > 0.0f) continue;
+            double bd = 60.0; size_t bj = n;
+            for (size_t j : has) {
+                const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
+                if (d < bd) { bd = d; bj = j; }
+            }
+            if (bj == n) continue;
+            const XPLMWeatherInfoClouds_t& src = todo[bj].rec.info.cloud_layers[k];
+            // the empty slot must not cut through another layer of this record
+            bool clash = false;
+            for (int m = 0; m < XPLM_NUM_CLOUD_LAYERS; ++m) {
+                const XPLMWeatherInfoClouds_t& o = todo[i].rec.info.cloud_layers[m];
+                if (m != k && o.coverage > 0.0f && src.alt_base < o.alt_top && o.alt_base < src.alt_top) clash = true;
+            }
+            if (clash) continue;
+            c.cloud_type = src.cloud_type;
+            c.alt_base = src.alt_base;
+            c.alt_top = src.alt_top;
+            c.coverage = (float)g_cfg.emptyLayerCoverage;
+        }
+    }
+}
+
 void sendRec(Todo& t) {
     if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &t.rec.info);
     else XPLMSetWeatherAtLocation(t.rec.lat, t.rec.lon, t.rec.elev, &t.rec.info);
@@ -409,7 +445,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             seen[key] = true;
             ++bumpCount;
             auto bit = g_recs.find(key);
-            if (!full && bit != g_recs.end() && std::memcmp(&bit->second.info, &e.info, sizeof e.info) == 0) continue;
+            (void)bit;
             e.info.age = info.age;
             todo.push_back({key, e});
         }
@@ -456,8 +492,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         seen[s.icao] = true;
         addBumps(x, info, s.lat, s.lon, info.radius_nm, s.elevM, s.icao, g_cfg.bumpCount, 0.15, 0.85);
         auto it = g_recs.find(s.icao);
-        if (!full && it != g_recs.end() && it->second.airport == r.airport && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0)
-            continue; // identical to what the sim already has
+        (void)it;   // compared with what the sim already has after the cloud-slot pass (see matchEmptyLayers)
         r.info.age = info.age; // keep the real age for the call itself
         todo.push_back({s.icao, r});
     }
@@ -537,7 +572,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     seen[key] = true;
                     ++fillCount;
                     auto it = g_recs.find(key);
-                    if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
+                    (void)it;
                     r.info.age = info.age;
                     todo.push_back({key, r});
                 }
@@ -613,7 +648,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             seen[key] = true;
             ++stormCount;
             auto it = g_recs.find(key);
-            if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
+            (void)it;
             r.info.age = info.age;
             todo.push_back({key, r});
         }
@@ -646,10 +681,29 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             seen[key] = true;
             ++dryCount;
             auto it = g_recs.find(key);
-            if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
+            (void)it;
             r.info.age = info.age;
             todo.push_back({key, r});
         }
+    }
+    // Cloud ribbons (2026-11-03 screenshots): X-Plane blends each of the 3 cloud slots between neighbouring records, base and top included.
+    // An empty slot was sent at 0-0 m, so between a record with a deck at 700-2100 m and one without it the blend made a thin sheet that
+    // sloped down to the ground; seen from above, where its coverage still showed, that was a long thin ribbon or a ring in clear air.
+    // An empty slot now carries the base, top and type of the same slot in the nearest record that has a cloud there, with (almost) no
+    // coverage, so towards the clear side the deck only thins out, at its own height.
+    matchEmptyLayers(todo);
+    if (!full) {   // only what changed goes to X-Plane
+        std::vector<Todo> changed;
+        for (auto& t : todo) {
+            auto it = g_recs.find(t.key);
+            if (it != g_recs.end() && it->second.airport == t.rec.airport) {
+                XPLMWeatherInfo_t a = t.rec.info;
+                a.age = 0.0f;
+                if (std::memcmp(&it->second.info, &a, sizeof a) == 0) continue;
+            }
+            changed.push_back(t);
+        }
+        todo.swap(changed);
     }
     std::vector<std::string> gone;
     if (!full)

@@ -857,7 +857,8 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
         c.sizeNm = (float)L.s;
         {   // a fixed small offset per record (up to 18% of its size), so the splits between records do not run along straight rows
             const unsigned hh = hashStr(std::to_string((long)std::floor(L.X / L.s)) + "," + std::to_string((long)std::floor(L.Y / L.s)) + "s" + std::to_string((int)std::lround(L.s * 4)), 29);
-            c.lat = toLat(L.Y + (unit(hh, 1) - 0.5) * 0.36 * L.s); c.lon = toLon(L.X + (unit(hh, 2) - 0.5) * 0.36 * L.s);
+            (void)hh;   // no offset after all: irregular record spacing made ribbons (as the staggered fill grid did, 2026-11-03)
+            c.lat = toLat(L.Y); c.lon = toLon(L.X);
         }
         c.distNm = distNm(acLat, acLon, c.lat, c.lon);
         char key[64];
