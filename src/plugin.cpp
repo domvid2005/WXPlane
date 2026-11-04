@@ -396,7 +396,10 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
 
 void sendRec(Todo& t) {
     if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &t.rec.info);
-    else XPLMSetWeatherAtLocation(t.rec.lat, t.rec.lon, t.rec.elev, &t.rec.info);
+    // X-Plane calibrates a location record's QNH at the ground altitude passed here. Gap-fill and radar records used to pass the nearest
+    // station's elevation, which jumps by thousands of feet between neighbouring tiles in the mountains; with one smooth QNH field that
+    // still gave each record a slightly different pressure at the same height. They now all calibrate at sea level (QNH = sea-level pressure).
+    else XPLMSetWeatherAtLocation(t.rec.lat, t.rec.lon, (t.rec.icao.empty() && g_cfg.fillQnhAtSeaLevel) ? 0.0 : t.rec.elev, &t.rec.info);
     t.rec.info.age = 0.0f;
     g_recs[t.key] = t.rec;
 }
@@ -1028,7 +1031,7 @@ void logCoveringRecords(double lat, double lon, const char* label) {
         buf[0] = 0;
         for (int j = 0; j < XPLM_NUM_CLOUD_LAYERS && n < 200; ++j)
             if (L[j].coverage > 0) n += std::snprintf(buf + n, sizeof buf - n, " [%d: t%.0f %.0f%% %.0f-%.0f m]", j, L[j].cloud_type, L[j].coverage * 100, L[j].alt_base, L[j].alt_top);
-        logf("    %s  %.1f nm of r=%.1f nm:%s", hits[i].key->c_str(), hits[i].d, hits[i].r->info.radius_nm, buf);
+        logf("    %s  %.1f nm of r=%.1f nm, QNH %.1f hPa:%s", hits[i].key->c_str(), hits[i].d, hits[i].r->info.radius_nm, hits[i].r->info.pressure_alt / 100.0f, buf);
     }
 }
 
@@ -1286,12 +1289,64 @@ Clock::time_point g_lastLoopAt{};
 int g_stallLogs = 0;
 Clock::time_point g_lastStallLog{};
 
+// ---- Altitude watch: one log line every 10 s while airborne --------------------------------------------------------------------------
+// For "the autopilot can't hold altitude": separates the two possible causes. If the indicated altitude moves while the true (geometric)
+// altitude stays put, the pressure field under the aircraft is changing (our records' QNH/temperatures); if the true altitude moves with
+// vertical air (updrafts/downdrafts from clouds, terrain or turbulence), the aircraft is really being pushed up and down.
+struct AltWatch {
+    bool init = false;
+    XPLMDataRef geo = nullptr, ind = nullptr, palt = nullptr, baro = nullptr, setting = nullptr, vs = nullptr, vy = nullptr, agl = nullptr, apAlt = nullptr, turb = nullptr;
+    int n = 0;
+    double geoMin = 0, geoMax = 0, indMin = 0, indMax = 0, dMin = 0, dMax = 0, pMin = 0, pMax = 0, vsMin = 0, vsMax = 0, vyMin = 0, vyMax = 0, tMax = 0;
+    Clock::time_point start;
+} g_aw;
+
+double awGet(XPLMDataRef r) {
+    if (!r) return NAN;
+    const XPLMDataTypeID t = XPLMGetDataRefTypes(r);
+    if (t & xplmType_Double) return XPLMGetDatad(r);
+    if (t & xplmType_Float) return XPLMGetDataf(r);
+    if (t & xplmType_Int) return XPLMGetDatai(r);
+    return NAN;
+}
+
+void altitudeWatch() {
+    AltWatch& a = g_aw;
+    if (!a.init) {
+        a.init = true;
+        a.geo = XPLMFindDataRef("sim/flightmodel/position/elevation");
+        a.ind = XPLMFindDataRef("sim/cockpit2/gauges/indicators/altitude_ft_pilot");
+        a.palt = XPLMFindDataRef("sim/flightmodel2/position/pressure_altitude");
+        a.baro = XPLMFindDataRef("sim/weather/aircraft/barometer_current_pas");
+        a.setting = XPLMFindDataRef("sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot");
+        a.vs = XPLMFindDataRef("sim/flightmodel/position/vh_ind_fpm");
+        a.vy = XPLMFindDataRef("sim/weather/aircraft/wind_now_y_msc");
+        a.agl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+        a.apAlt = XPLMFindDataRef("sim/cockpit/autopilot/altitude");
+        a.turb = XPLMFindDataRef("sim/weather/aircraft/turbulence");
+    }
+    const double agl = awGet(a.agl);
+    if (!(agl > 150.0)) { a.n = 0; return; }   // on the ground or about to land: nothing to watch
+    const double geoFt = awGet(a.geo) / 0.3048, ind = awGet(a.ind), d = ind - geoFt, p = awGet(a.baro) / 100.0, vs = awGet(a.vs), vy = awGet(a.vy), tb = awGet(a.turb);
+    auto mm = [&](double v, double& lo, double& hi) { if (std::isnan(v)) return; if (a.n == 0 || std::isnan(lo)) { lo = hi = v; } else { lo = std::min(lo, v); hi = std::max(hi, v); } };
+    if (a.n == 0) { a.start = Clock::now(); a.geoMin = a.indMin = a.dMin = a.pMin = a.vsMin = a.vyMin = NAN; a.tMax = 0; }
+    mm(geoFt, a.geoMin, a.geoMax); mm(ind, a.indMin, a.indMax); mm(d, a.dMin, a.dMax); mm(p, a.pMin, a.pMax); mm(vs, a.vsMin, a.vsMax); mm(vy, a.vyMin, a.vyMax);
+    if (!std::isnan(tb)) a.tMax = std::max(a.tMax, tb);
+    ++a.n;
+    if (Clock::now() - a.start < std::chrono::seconds(10)) return;
+    logf("altitude watch (%d samples over 10 s, %.0f ft AGL): true %.0f..%.0f ft, indicated %.0f..%.0f ft (indicated minus true %+.0f..%+.0f), outside pressure %.1f..%.1f hPa, "
+         "baro set %.2f inHg, VS %+.0f..%+.0f fpm, vertical air %+.1f..%+.1f m/s, turbulence %.2f, AP target %.0f ft",
+         a.n, agl / 0.3048, a.geoMin, a.geoMax, a.indMin, a.indMax, a.dMin, a.dMax, a.pMin, a.pMax, awGet(a.setting), a.vsMin, a.vsMax, a.vyMin, a.vyMax, a.tMax, awGet(a.apAlt));
+    a.n = 0;
+}
+
 float flightLoop(float, float, int, void*) {
     if (!g_pluginEnabled) {
         if (g_disableErase) { g_disableErase = false; g_checkPending = false; g_watchOn = false; eraseAll(); }
         return 0.0f;   // stop calling us until the plugin is enabled again
     }
     const auto nowT = Clock::now();
+    if (g_firstApplyDone) altitudeWatch();
     if (!g_loopStarted) {
         // X-Plane does not run flight loops while it is still loading (this can be well over a minute after the plugin was
         // enabled), so every start-up wait is counted from here, from the moment the sim starts running.
