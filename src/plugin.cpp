@@ -153,6 +153,18 @@ std::vector<std::string> g_pendingGone;
 std::vector<Todo> g_heldLevel;
 Clock::time_point g_heldLevelAt{};
 bool isLevelKey(const std::string& k) { return k.rfind("radar:L", 0) == 0 || k.rfind("radar:M", 0) == 0; }
+// Is this spot well inside a storm, i.e. are there 4 or more measured (or hole-filled) storm blocks within 1.2 block widths? Only then do
+// station and gap-fill records carry the storm's rain (on the rim, the storm records' own outline decides). Before, every record within ~16 nm of any storm cell got at least 5 % rain, so light rain spread out
+// around storms in 12 nm gap-fill squares on X-Plane's radar map (2026-11-03 screenshots); now the storm records' own rounded outline
+// decides where the rain ends.
+bool insideStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon, double cellNm) {
+    int n = 0;
+    for (const auto& c : cells) {
+        if (c.synthetic && (c.key.empty() || c.key[0] != 'H')) continue;
+        if (wx::distNm(lat, lon, c.lat, c.lon) < cellNm * 1.2 && ++n >= 4) return true;
+    }
+    return false;
+}
 
 void sendRec(Todo& t) {
     if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &t.rec.info);
@@ -399,7 +411,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         valFixes += wx::validateXp(x, false, &valNote);
         baseWx[s.icao] = x;
-        if (g_cfg.radar && res.radar.ok)   // a station inside a storm must not leave a round dry spot in the radar picture
+        if (g_cfg.radar && res.radar.ok && insideStorm(res.radar.cells, s.lat, s.lon, g_cfg.radarCellNm))   // a station inside a storm must not leave a round dry spot in the radar picture
             x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, s.lat, s.lon, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
@@ -484,7 +496,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
                     if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
                     valFixes += wx::validateXp(x, false, &valNote);
-                    if (g_cfg.radar && res.radar.ok)
+                    if (g_cfg.radar && res.radar.ok && insideStorm(res.radar.cells, latc, lonc, g_cfg.radarCellNm))
                         x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, latc, lonc, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
                     if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
                     XPLMWeatherInfo_t info;

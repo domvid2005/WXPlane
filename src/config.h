@@ -82,7 +82,7 @@ struct Config {
     int fillFarRangeNm = 120;        // coarse fill out to here (never beyond the METAR search radius)
     int fillFarCellNm = 30;          // ...on a grid this size
     int fillCellNm = 12;             // ...using location records on a grid this size
-    bool fillStagger = true;         // offset every other row of the fill grid by half a tile and wobble each tile a little, so cloud edges are not grid steps
+    bool fillStagger = false;         // offset every other row of the fill grid by half a tile and wobble each tile a little, so cloud edges are not grid steps. Off by default: in X-Plane it opened clear gaps under storms with thin ribbons of cloud along them (2026-11-03)
     double stationRadiusFactor = 0.49; // station radius = this x distance to nearest neighbour (0.49 = circles just touch; above that they overlap and X-Plane blends the edge)
     double fillRadiusFactor = 1.0;    // gap-fill record radius = this x grid cell size (0.71 would just cover the corners; 1.0 overlaps the neighbouring tiles and the storm cells so no gap is left)
     bool stationRadiusAuto = true;   // shrink each station's radius so close neighbours do not blend into it
