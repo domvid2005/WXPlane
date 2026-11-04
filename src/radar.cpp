@@ -796,6 +796,21 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
             if (distNm(acLat, acLon, toLat(cy), toLon(cx)) > R + root) continue;
             used.insert({rx, ry});
         }
+    {   // Widespread rain (log 2026-11-04, Ohio: 156 root squares for a budget of 150) left nothing to split, so the whole picture stayed in
+        // 24 nm squares that averaged the cores away (40 dBZ where the mosaic had more) and showed as big squares. The nearest squares are
+        // kept up to just over half the budget, so the rest of it refines the picture; the farthest ones are left out.
+        const size_t keepN = (size_t)std::max(8, (int)(cfg.radarNaturalMax * 0.55));
+        if (used.size() > keepN) {
+            std::vector<std::pair<double, std::pair<long, long>>> byD;
+            for (const auto& r : used) byD.push_back({distNm(acLat, acLon, toLat((r.second + 0.5) * root), toLon((r.first + 0.5) * root)), r});
+            std::sort(byD.begin(), byD.end());
+            char b[128];
+            std::snprintf(b, sizeof b, "%zu far radar square(s) beyond %.0f nm left out to keep detail near the aircraft", byD.size() - keepN, byD[keepN].first);
+            res.note += res.note.empty() ? b : std::string("; ") + b;
+            used.clear();
+            for (size_t k = 0; k < keepN; ++k) used.insert(byD[k].second);
+        }
+    }
     // 3) split the squares, the most useful split first: a square whose picture is mixed (more than one intensity class) is split into
     // four; priority is its size, weighted down with distance (an edge close to the aircraft matters most), until the budget is used.
     struct Leaf { double X, Y, s; double z; int c; float frac; bool mixed; };

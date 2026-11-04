@@ -518,6 +518,19 @@ int main() {
         for (int j = 40; j < 60; ++j) for (int i = 40; i < 60; ++i) { refl.v[(size_t)j * 100 + i] = 50.0f; tops.v[(size_t)j * 100 + i] = 12.0f; }
         for (int j = 5; j < 15; ++j) for (int i = 5; i < 15; ++i) refl.v[(size_t)j * 100 + i] = 25.0f;
         for (int j = 80; j < 90; ++j) for (int i = 80; i < 90; ++i) refl.v[(size_t)j * 100 + i] = 12.0f;   // below threshold
+        {   // widespread rain over the whole range: the farthest squares are left out so the picture near the aircraft still gets split
+            GribField wide = refl;
+            wide.ni = wide.nj = 600; wide.lat0 = 41.0; wide.lon0 = -101.5; wide.v.assign(360000, 25.0f);
+            for (int j = 290; j < 310; ++j) for (int i = 290; i < 310; ++i) wide.v[(size_t)j * 600 + i] = 50.0f;   // a core under the aircraft
+            Config wc; wc.radarRangeNm = 150; wc.radarMinDbz = 20; wc.radarNaturalMax = 150;
+            RadarResult w = buildRadarCells(wide, nullptr, 38.0, -98.5, wc);
+            float wmx = 0, wmin = 99;
+            for (const auto& c : w.cells) { wmx = std::max(wmx, c.dbzFine); wmin = std::min(wmin, c.sizeNm); }
+            std::printf("  wide rain: ok=%d natural=%d cells=%zu dry=%zu min %.1f nm max %.0f dBZ note: %s\n", (int)w.ok, (int)w.natural, w.cells.size(), w.dryCells.size(), wmin, wmx, w.note.c_str());
+            CHECK(w.ok && w.note.find("left out to keep detail") != std::string::npos);
+            CHECK(wmin < 20.0f && wmx >= 45.0f);   // split near the aircraft, and the core keeps its strength
+            CHECK((int)(w.cells.size() + w.dryCells.size()) <= wc.radarNaturalMax);
+        }
         {   // natural picture (the default): fine records along the edges, dry ones around, stable between runs
             Config nc; nc.radarRangeNm = 100; nc.radarMinDbz = 20;
             RadarResult n1 = buildRadarCells(refl, &tops, 38.0, -98.0, nc), n2 = buildRadarCells(refl, &tops, 38.0, -98.0, nc);
