@@ -397,10 +397,13 @@ std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::ti
     const std::vector<int> safe = {925, 850, 700, 500, 400, 300, 250, 200};   // if the endpoint refuses the highest levels
     std::vector<AloftStation> got;
     std::string err, why, sample;
-    for (const auto* lv : {&full, &safe}) {
+    // high cloud first; if the endpoint refuses that variable, the winds still come without it
+    struct Try { const std::vector<int>* lv; bool high; };
+    for (const Try& tr : {Try{&full, true}, Try{&full, false}, Try{&safe, false}}) {
+        const auto* lv = tr.lv;
         std::string body;
         long st = 0;
-        if (!httpGet(openMeteoUrl(pts, *lv), body, st, err, 20)) { if (why.empty()) why = err; continue; }
+        if (!httpGet(openMeteoUrl(pts, *lv, tr.high), body, st, err, 20)) { if (why.empty()) why = err; continue; }
         std::string perr;
         got = parseOpenMeteo(body, pts, *lv, (long long)now, &perr);
         sample = body.substr(0, 200);

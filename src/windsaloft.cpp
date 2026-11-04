@@ -229,7 +229,7 @@ double isaAltFtFromHpa(double hpa) {
     return m / 0.3048;
 }
 
-std::string openMeteoUrl(const std::vector<std::pair<double, double>>& pts, const std::vector<int>& levels) {
+std::string openMeteoUrl(const std::vector<std::pair<double, double>>& pts, const std::vector<int>& levels, bool highCloud) {
     std::string la, lo, vars;
     char b[64];
     for (size_t i = 0; i < pts.size(); ++i) {
@@ -241,6 +241,7 @@ std::string openMeteoUrl(const std::vector<std::pair<double, double>>& pts, cons
         const std::string n = b;
         vars += (vars.empty() ? "" : ",") + std::string("wind_speed_") + n + "hPa,wind_direction_" + n + "hPa,temperature_" + n + "hPa,geopotential_height_" + n + "hPa";
     }
+    if (highCloud) vars += ",cloud_cover_high";   // high cloud (cirrus): METARs from automatic stations cannot see above 12,000 ft
     return "https://api.open-meteo.com/v1/gfs?latitude=" + la + "&longitude=" + lo + "&hourly=" + vars +
            "&wind_speed_unit=kn&forecast_hours=2&timeformat=unixtime";
 }
@@ -287,6 +288,7 @@ std::vector<AloftStation> parseOpenMeteo(const std::string& body, const std::vec
             if (val("temperature_" + n + "hPa", tc)) { L.hasTemp = true; L.tempC = tc; }
             if (L.hasWind || L.hasTemp) st.levels.push_back(L);
         }
+        { double hc = 0; if (val("cloud_cover_high", hc) && hc >= 0) st.highCloud = std::min(1.0, hc / 100.0); }
         std::sort(st.levels.begin(), st.levels.end(), [](const AloftLevel& a, const AloftLevel& c) { return a.altFt < c.altFt; });
         if (!st.levels.empty()) out.push_back(std::move(st));
     }

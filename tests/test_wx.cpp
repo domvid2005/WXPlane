@@ -143,6 +143,29 @@ int main() {
     }
     NEAR(clr.windMs, 10 * kKtToMs, 0.01);
 
+    {   // cloud types: low overcast and overcast aloft look like stratus, a low broken deck like stratocumulus, the rest cumulus
+        Config tc;
+        Station s1; s1.elevM = 100; parseReport("KXXX 301553Z 18005KT 10SM OVC008 10/08 A2990", s1.report);
+        Station s2; s2.elevM = 100; parseReport("KXXX 301553Z 18005KT 10SM BKN010 10/08 A2990", s2.report);
+        Station s3; s3.elevM = 100; parseReport("KXXX 301553Z 18005KT 10SM SCT030 10/08 A2990", s3.report);
+        Station s4; s4.elevM = 100; parseReport("KXXX 301553Z 18005KT 10SM FEW020TCU 10/08 A2990", s4.report);
+        auto lowest = [](const XpWx& w) { for (const auto& c : w.clouds) if (c.coverage > 0) return c.type; return -1.0f; };
+        CHECK(lowest(buildXp(s1, tc, now)) == 1.5f && lowest(buildXp(s2, tc, now)) == 1.75f && lowest(buildXp(s3, tc, now)) == 2.0f && lowest(buildXp(s4, tc, now)) == 2.5f);
+        // cirrus from the model's high cloud: added under CLR (an automatic station sees only 12,000 ft), not under SKC, not when the
+        // report has a high layer of its own
+        std::vector<AloftStation> mdl(1);
+        mdl[0].model = true; mdl[0].located = true; mdl[0].lat = 38.0; mdl[0].lon = -98.0; mdl[0].highCloud = 0.6;
+        Station c1; c1.lat = 38.1; c1.lon = -98.1; c1.elevM = 400; parseReport("KXXX 301553Z 18005KT 10SM CLR 10/08 A2990", c1.report);
+        Station c2 = c1; parseReport("KXXX 301553Z 18005KT 10SM SKC 10/08 A2990", c2.report);
+        Station c3 = c1; parseReport("KXXX 301553Z 18005KT 10SM SCT030 BKN250 10/08 A2990", c3.report);
+        XpWx w1 = buildXp(c1, tc, now, &mdl), w2 = buildXp(c2, tc, now, &mdl), w3 = buildXp(c3, tc, now, &mdl);
+        int ci = -1; for (int k = 0; k < 3; ++k) if (w1.clouds[k].coverage > 0 && w1.clouds[k].type == 0.0f) ci = k;
+        CHECK(ci >= 0 && w1.modelCirrus && std::fabs(w1.clouds[ci].coverage - 0.51f) < 1e-3 && w1.clouds[ci].topM - w1.clouds[ci].baseM <= 549.0f && w1.clouds[ci].baseM >= 6000.0f);
+        CHECK(!w2.modelCirrus && w2.cloudCount == 0);
+        CHECK(!w3.modelCirrus);
+        mdl[0].highCloud = 0.05; CHECK(!buildXp(c1, tc, now, &mdl).modelCirrus);   // hardly any high cloud: none
+        Config off; off.modelCirrus = false; mdl[0].highCloud = 0.9; CHECK(!buildXp(c1, off, now, &mdl).modelCirrus);
+    }
     Station dfw;
     dfw.elevM = 185;
     parseReport("KDFW 301553Z 18015G30KT 3SM +TSRA BKN020CB OVC040 BKN150 BKN250 24/22 A2985", dfw.report);
@@ -614,6 +637,12 @@ int main() {
             CHECK(m.size() == 1 && m[0].model && m[0].located && m[0].levels.size() == 3);
             CHECK(std::fabs(m[0].levels[0].altFt - 5600 / 0.3048) < 1 && std::fabs(m[0].levels[0].speedKt - 50) < 0.01 && m[0].levels[2].tempC == -61);
             std::string e2; CHECK(parseOpenMeteo("{\"error\":true,\"reason\":\"bad\"}", pts, lv, 0, &e2).empty() && e2.find("bad") != std::string::npos);
+            {   // high cloud cover comes along (and the URL can leave it out)
+                CHECK(url.find("cloud_cover_high") != std::string::npos && openMeteoUrl(pts, lv, false).find("cloud_cover_high") == std::string::npos);
+                std::string b2 = body; b2.insert(b2.find("\"wind_speed_500hPa\""), "\"cloud_cover_high\":[10,60],");
+                auto mh = parseOpenMeteo(b2, pts, lv, 4500, &perr);
+                CHECK(mh.size() == 1 && std::fabs(mh[0].highCloud - 0.6) < 1e-9 && m[0].highCloud < 0);
+            }
             CHECK(parseOpenMeteo("garbage", pts, lv, 0, &e2).empty());
             // merged: FD gives the low levels, the model only what is more than 1000 ft above the FD top
             auto lw = [](double alt, double dir, double kt, double tc) { AloftLevel L; L.altFt = alt; L.hasWind = true; L.dirDeg = dir; L.speedKt = kt; L.hasTemp = true; L.tempC = tc; return L; };

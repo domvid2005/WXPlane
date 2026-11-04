@@ -50,6 +50,7 @@ struct XpWx {
     // Winds / temperatures aloft (NOAA FD winds blended at this station)
     bool aloft = false;
     std::vector<XpWind> winds;                         // surface layer first, then aloft levels (ascending)
+    bool modelCirrus = false;   // a cirrus layer was added from the global model's high cloud
     std::vector<std::pair<float, float>> tempProfile; // (altitude MSL m, degC), ascending
     float maxAltFt = 10000;
 };

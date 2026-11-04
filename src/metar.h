@@ -32,6 +32,7 @@ struct Report {
 
     std::vector<CloudGroup> clouds;
     bool clearSky = false;
+    bool skyClearAll = false;   // SKC: an observer saw no cloud at any height (CLR/NCD only cover what an automatic sensor can see, up to 12,000 ft)
 
     // weather phenomena
     bool fog = false, shallowFog = false, patchyFog = false, mist = false, haze = false;

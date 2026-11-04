@@ -17,6 +17,7 @@ struct AloftStation {
     std::string id; // 3-letter FD id, e.g. "ABI"
     double lat = 0, lon = 0;
     bool located = false;
+    double highCloud = -1; // global model only: high cloud cover (0..1) at this point, -1 = not known
     bool model = false; // a point of the global model (Open-Meteo / GFS), not an FD station: used above the FD levels and where FD has no station
     std::vector<AloftLevel> levels; // ascending altitude
 };
@@ -34,7 +35,7 @@ void aloftRegionFor(double lat, double lon, std::string& region, char& icaoPrefi
 // Global model (Open-Meteo GFS endpoint): wind, temperature and geopotential height on pressure levels at a few points.
 // Levels come back as feet MSL (geopotential height when given, else ISA).
 double isaAltFtFromHpa(double hpa);
-std::string openMeteoUrl(const std::vector<std::pair<double, double>>& points, const std::vector<int>& levelsHpa);
+std::string openMeteoUrl(const std::vector<std::pair<double, double>>& points, const std::vector<int>& levelsHpa, bool highCloud = true);
 // One model station per point (id "GFS<n>", model = true, located). Picks the hour closest to `now` (unix time). Empty on a malformed answer; `err` says why.
 std::vector<AloftStation> parseOpenMeteo(const std::string& body, const std::vector<std::pair<double, double>>& points,
                                          const std::vector<int>& levelsHpa, long long now, std::string* err = nullptr);

@@ -79,6 +79,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "fill_cell_nm") c.fillCellNm = (int)(d < 6 ? 6 : (d > 30 ? 30 : d));
         else if (k == "fill_far_range_nm") c.fillFarRangeNm = (int)(d < 20 ? 20 : (d > 250 ? 250 : d));
         else if (k == "fill_far_cell_nm") c.fillFarCellNm = (int)(d < 12 ? 12 : (d > 60 ? 60 : d));
+        else if (k == "stratus_cloud_type") c.stratusCloudType = d < 1.0 ? 1.0 : (d > 2.0 ? 2.0 : d);
+        else if (k == "model_cirrus") c.modelCirrus = toBool(v);
         else if (k == "low_cloud_type") c.lowCloudType = d < 1.0 ? 1.0 : (d > 3.0 ? 3.0 : d);
         else if (k == "storm_top_variation_m") c.stormTopVariationM = d < 0 ? 0 : (d > 4000 ? 4000 : d);
         else if (k == "startup_calm_s") c.startupCalmS = d < 0 ? 0 : (d > 30 ? 30 : d);
@@ -203,6 +205,8 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"
       << "radar_natural = " << (c.radarNatural ? 1 : 0) << "\n"
+      << "stratus_cloud_type = " << c.stratusCloudType << "\n"
+      << "model_cirrus = " << (c.modelCirrus ? 1 : 0) << "\n"
       << "cloud_smooth_nm = " << c.cloudSmoothNm << "\n"
       << "empty_layer_coverage = " << c.emptyLayerCoverage << "\n"
       << "radar_natural_max = " << c.radarNaturalMax << "\n"

@@ -198,7 +198,7 @@ bool parseReport(const std::string& text, Report& r, bool isAtis) {
             }
         }
         if (tok.size() > 2 && (tok[0] == 'R') && std::isdigit((unsigned char)tok[1]) && tok.find('/') != std::string::npos) continue; // RVR
-        if (tok == "SKC" || tok == "CLR" || tok == "NSC" || tok == "NCD") { r.clearSky = true; continue; }
+        if (tok == "SKC" || tok == "CLR" || tok == "NSC" || tok == "NCD") { r.clearSky = true; if (tok == "SKC") r.skyClearAll = true; continue; }
         if (std::regex_match(tok, m, reCloud)) {
             CloudGroup g;
             const std::string c = m[1].str();

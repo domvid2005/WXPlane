@@ -207,12 +207,40 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         else if (g.baseFtAgl >= 20000) { c.type = 0.0f; thick = 1200; }
         else if ((g.baseFtAgl < 2000 && g.cover >= CloudGroup::BKN) || (g.cover == CloudGroup::OVC && g.baseFtAgl < 12000)) {
             // Very thin solid layers render as a black void from below, very thick ones as a dark slab from above: moderate depth.
-            c.type = (float)cfg.lowCloudType;   // 1.0 renders as a smooth sheet with vertical curtain edges; 2.0 gives billowy cloud
+            // Stratus look: an overcast (low stratus, or altostratus higher up) takes stratus_cloud_type; a low broken deck (stratocumulus)
+            // halfway between that and the cumulus of low_cloud_type.
+            c.type = g.cover == CloudGroup::OVC ? (float)cfg.stratusCloudType : (float)(0.5 * (cfg.stratusCloudType + cfg.lowCloudType));
             thick = g.cover == CloudGroup::OVC ? 1400 : (g.cover == CloudGroup::BKN ? 1100 : 800);
         }
         else { c.type = (float)cfg.lowCloudType; thick = g.cover == CloudGroup::OVC ? 1600 : (g.cover == CloudGroup::BKN ? 1300 : 900); }
         c.topM = (float)(c.baseM + thick);
         layers.push_back(c);
+    }
+    // Cirrus from the global model: automatic stations report no cloud above 12,000 ft, so the high cloud of the model (Open-Meteo GFS,
+    // nearest point within 400 nm) is added as a cirrus layer when the report has nothing that high itself, the sky is not reported
+    // clear at every height (SKC) and a slot is free. Base 2 km under the tropopause (7.5-11 km), 500 m deep (X-Plane allows cirrus up to
+    // 549 m), coverage at most 75 %.
+    if (cfg.modelCirrus && aloft && !r.skyClearAll) {
+        const AloftStation* best = nullptr; double bd = 400.0;
+        for (const auto& a : *aloft) {
+            if (!a.model || a.highCloud < 0) continue;
+            const double d = distNm(st.lat, st.lon, a.lat, a.lon);
+            if (d < bd) { bd = d; best = &a; }
+        }
+        bool high = false;
+        for (const auto& L : layers) if (L.baseM > 5500.0f) high = true;
+        const size_t cap = fogSlot ? ((x.fogLayerApplied || ceilingInsteadOfMist) ? 3u : 2u) : 3u;
+        const float cov = best ? (float)std::min(0.75, best->highCloud * 0.85) : 0.0f;
+        if (best && !high && layers.size() < cap && cov >= 0.1f) {
+            XpCloud ci;
+            ci.type = 0.0f;
+            ci.coverage = cov;
+            const float tropo = (float)std::max(9.0, 17.0 - 0.17 * std::fabs(st.lat)) * 1000.0f;
+            ci.baseM = std::min(11000.0f, std::max(7500.0f, tropo - 2000.0f));   // the model counts high cloud from 8 km
+            if (!layers.empty()) ci.baseM = std::max(ci.baseM, layers.back().topM + 300.0f);
+            ci.topM = ci.baseM + 500.0f;
+            if (ci.topM <= kXpMaxTopM) { layers.push_back(ci); x.modelCirrus = true; }
+        }
     }
     // Layers must never overlap vertically: a lower layer whose top reaches into the one above it is shaded by it and renders
     // dark. Keep a clear gap between every top and the next base. The lower layer is trimmed first (never thinner than

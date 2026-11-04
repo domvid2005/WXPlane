@@ -14,6 +14,10 @@ struct Config {
     // 2 since 2026-11-04: X-Plane flies 3 as a thunderstorm cloud, with strong up- and downdrafts, so with every deck at 3 an aircraft
     // in or near ordinary cloud (around mountains especially) lost 2000 ft and could not hold altitude.
     double lowCloudType = 2.0;
+    // Stratus look for overcast decks (low stratus and mid-level altostratus): between stratus (1) and cumulus (2). 1.0 renders as a smooth
+    // sheet with hard vertical edges, so the default is a mix; broken low decks get halfway between this and low_cloud_type.
+    double stratusCloudType = 1.5;
+    bool modelCirrus = true;          // add cirrus from the global model's high cloud cover where the reports cannot see it
     double stormTopVariationM = 1500; // estimated storm tops (no radar echo-top data) vary by up to +/- this, stable per block, so tops are not one flat plateau
     double startupCalmS = 1.5;        // scenery loading must have been finished this long before the first download starts
     double regenWaitS = 1.5;          // pause between X-Plane's weather reset and our first update

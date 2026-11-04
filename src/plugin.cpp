@@ -292,6 +292,8 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 // the records around it: X-Plane flies type 3 with strong up- and downdrafts
                 o.cloud_type = (isReal[i][k] && L[k].cloud_type > 2.0f) ? L[k].cloud_type : (float)std::min(2.0, a[k].cy / a[k].wc);   // (TCU 2.5 and CB 3 keep theirs)
                 if (o.alt_top < o.alt_base + 300.0f) o.alt_top = o.alt_base + 300.0f;   // never a thin sliver (X-Plane dropped an update full of them)
+                o.alt_top = std::min(o.alt_top, o.alt_base + wx::xpMaxThicknessM(o.cloud_type));   // and never thicker than X-Plane allows for the type
+                if (o.cloud_type < 0.5f) o.coverage = std::min(o.coverage, 0.75f);   // cirrus stays thin (and out of reach of solid-layer effects)
                 outReal[i][k] = true;
             }
         }
@@ -333,7 +335,9 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             if (src.alt_base < lo || src.alt_top > hi) continue;   // does not fit whole: leave the slot empty
             L[k] = src;
             L[k].coverage = ph;
-            L[k].cloud_type = 1.0f;   // a filler is (almost) invisible; as stratus it brings none of the up- and downdrafts of a convective cloud
+            // a filler is (almost) invisible; as stratus it brings none of the up- and downdrafts of a convective cloud (cirrus stays cirrus)
+            if (L[k].cloud_type >= 0.5f) L[k].cloud_type = 1.0f;
+            L[k].alt_top = std::min(L[k].alt_top, L[k].alt_base + wx::xpMaxThicknessM(L[k].cloud_type));
         }
     }
     // the empty slots go out as before (0 m, no coverage), so X-Plane drops them
@@ -501,7 +505,7 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
 void applyResult(const wx::FetchResult& res, bool fromFetch) {
     const auto applyT0 = Clock::now();   // this runs on the sim's main thread: logged when it takes long enough to cost a frame
     std::time_t now = std::time(nullptr);
-    int fogCount = 0, aloftCount = 0;
+    int fogCount = 0, aloftCount = 0; int cirrusCount = 0;
     g_haveLevels = false;
     if (g_drLevels && XPLMGetDatavf(g_drLevels, nullptr, 0, 0) == XPLM_NUM_TEMPERATURE_LAYERS)
         g_haveLevels = XPLMGetDatavf(g_drLevels, g_levelsM, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
@@ -620,6 +624,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         }
         stationRadius[s.icao] = info.radius_nm;
         if (x.fogLayerApplied) ++fogCount;
+        if (x.modelCirrus) ++cirrusCount;
         if (x.aloft) ++aloftCount;
         Rec r;
         r.airport = airportKnown(s);
@@ -947,8 +952,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
     logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer",
          (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash);
-    logf("applied %d stations (%d ATIS, %d fog, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
-         res.metarCount, res.atisCount, fogCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
+    logf("applied %d stations (%d ATIS, %d fog, %d with cirrus from the global model, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
+         res.metarCount, res.atisCount, fogCount, cirrusCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
          reallyImmediate ? " [immediate: sim pauses while X-Plane rebuilds]" : " [fade-in]");
     if (g_cfg.useAloft && !res.aloftNote.empty()) logf("%s", res.aloftNote.c_str());
     for (const auto& s : res.stations) {
