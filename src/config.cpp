@@ -101,6 +101,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_natural") c.radarNatural = toBool(v);
         else if (k == "smooth_pressure") c.smoothPressure = toBool(v);
         else if (k == "region_winds") c.regionWinds = toBool(v);
+        else if (k == "qnh_as_sea_level") c.qnhAsSeaLevel = toBool(v);
         else if (k == "fill_qnh_at_sea_level") c.fillQnhAtSeaLevel = toBool(v);
         else if (k == "cloud_smooth_nm") c.cloudSmoothNm = d < 0 ? 0 : (d > 30 ? 30 : d);
         else if (k == "empty_layer_coverage") c.emptyLayerCoverage = d < 0 ? 0 : (d > 0.1 ? 0.1 : d);
@@ -211,6 +212,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_natural = " << (c.radarNatural ? 1 : 0) << "\n"
       << "smooth_pressure = " << (c.smoothPressure ? 1 : 0) << "\n"
       << "region_winds = " << (c.regionWinds ? 1 : 0) << "\n"
+      << "qnh_as_sea_level = " << (c.qnhAsSeaLevel ? 1 : 0) << "\n"
       << "fill_qnh_at_sea_level = " << (c.fillQnhAtSeaLevel ? 1 : 0) << "\n"
       << "stratus_cloud_type = " << c.stratusCloudType << "\n"
       << "model_cirrus = " << (c.modelCirrus ? 1 : 0) << "\n"

@@ -395,11 +395,17 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
 }
 
 void sendRec(Todo& t) {
-    if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &t.rec.info);
+    // The altimeter read below sea level at KSLC with the ATIS setting dialled in: X-Plane took our QNH in pressure_alt as the pressure at
+    // the station's elevation (1016 hPa at 4227 ft instead of at sea level), about 4,000 ft of error in the mountains and a different error
+    // in every record whose elevation differs. A QNH is the sea-level pressure of the standard atmosphere, so it now goes in pressure_sl,
+    // which X-Plane uses whenever pressure_alt is 0; the record we keep (and compare against) is unchanged. qnh_as_sea_level = 0 undoes it.
+    XPLMWeatherInfo_t sendInfo = t.rec.info;
+    if (g_cfg.qnhAsSeaLevel && sendInfo.pressure_alt > 0) { sendInfo.pressure_sl = sendInfo.pressure_alt; sendInfo.pressure_alt = 0.0f; }
+    if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &sendInfo);
     // X-Plane calibrates a location record's QNH at the ground altitude passed here. Gap-fill and radar records used to pass the nearest
     // station's elevation, which jumps by thousands of feet between neighbouring tiles in the mountains; with one smooth QNH field that
     // still gave each record a slightly different pressure at the same height. They now all calibrate at sea level (QNH = sea-level pressure).
-    else XPLMSetWeatherAtLocation(t.rec.lat, t.rec.lon, (t.rec.icao.empty() && g_cfg.fillQnhAtSeaLevel) ? 0.0 : t.rec.elev, &t.rec.info);
+    else XPLMSetWeatherAtLocation(t.rec.lat, t.rec.lon, (t.rec.icao.empty() && g_cfg.fillQnhAtSeaLevel) ? 0.0 : t.rec.elev, &sendInfo);
     t.rec.info.age = 0.0f;
     g_recs[t.key] = t.rec;
 }
@@ -1168,6 +1174,8 @@ void weatherWatch() {
     logf("weather watch (nearest %s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
          nearSt ? nearSt->icao.c_str() : "?", nearSt ? nearD : 0.0, info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
          cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
+    logf("  pressure: report QNH %.1f hPa | X-Plane at the aircraft: pressure %.1f hPa, sea level %.1f hPa (aircraft at %.0f ft)",
+         x.qnhPa / 100.0f, info.pressure_alt / 100.0f, info.pressure_sl / 100.0f, el / 0.3048);
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,

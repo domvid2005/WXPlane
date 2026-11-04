@@ -77,6 +77,7 @@ struct Config {
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
     bool smoothPressure = true;
+    bool qnhAsSeaLevel = true;        // send the QNH as sea-level pressure (pressure_sl): X-Plane read it in pressure_alt as station pressure
     bool fillQnhAtSeaLevel = true;    // gap-fill and radar records give X-Plane their QNH calibrated at sea level, not at the nearest station's elevation (which jumps by
                                       // thousands of feet from tile to tile in the mountains, so the same QNH made a different pressure in each record)
     bool regionWinds = true;          // write the winds aloft into X-Plane's region wind arrays: X-Plane ignores the upper wind layers of records (see pushRegionWinds)       // one smooth QNH field over all records (no pressure steps where records meet), airports keep their own within 2 hPa of it

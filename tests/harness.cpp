@@ -457,8 +457,8 @@ int main() {
         CHECK(i.cloud_layers[0].cloud_type == 1.0f && i.cloud_layers[0].coverage == 1.0f);
         CHECK(i.cloud_layers[0].alt_base < 410 && i.cloud_layers[0].alt_top > 520 && i.cloud_layers[0].alt_top < 535); // VV001: fog layer 120 m deep (minimum), from the 407 m field
         CHECK(i.cloud_layers[1].coverage < 0.05f && i.cloud_layers[2].coverage < 0.05f);   // (an empty slot may carry a neighbour's height at 1 %)
-        std::printf("  KICT QNH sent: %.1f hPa\n", i.pressure_alt / 100.0);
-        CHECK(i.pressure_alt > 101900 && i.pressure_alt < 102000);        // ATIS altimeter 30.11 overrides METAR 30.10
+        std::printf("  KICT QNH sent: %.1f hPa\n", i.pressure_sl / 100.0);
+        CHECK(i.pressure_alt == 0 && i.pressure_sl > 101900 && i.pressure_sl < 102000);   // QNH goes in as sea-level pressure        // ATIS altimeter 30.11 overrides METAR 30.10
         CHECK(i.max_altitude_msl_ft == 60000 && i.radius_nm >= 0.5 && i.radius_nm <= 30); // carries aloft data, so it reaches cruise levels
         CHECK(i.wind_layers[0].speed == 0 && i.wind_layers[1].speed > 0);
         CHECK(i.temp_layers[0] == 8);
@@ -480,7 +480,7 @@ int main() {
         CHECK(i.temperature_alt < -273.5f);                      // surface offset not used alongside layers
     }
     CHECK(g_fdRequests == 2);                                    // low + high product, once
-    if (fake) CHECK(fake->elev == 300 && fake->info.pressure_alt > 101400 && fake->info.pressure_alt < 101600); // unknown airport -> location record, Q1015
+    if (fake) CHECK(fake->elev == 300 && fake->info.pressure_alt == 0 && fake->info.pressure_sl > 101400 && fake->info.pressure_sl < 101600); // unknown airport -> location record, Q1015
 
     std::printf("[2] manual refresh via menu\n");
     size_t before = g_calls.size();
