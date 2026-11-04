@@ -862,7 +862,9 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
         }
         c.distNm = distNm(acLat, acLon, c.lat, c.lon);
         char key[64];
-        std::snprintf(key, sizeof key, "%c%ld:%ld:%d", L.c > 0 ? 'N' : 'D', (long)std::floor(L.X / L.s), (long)std::floor(L.Y / L.s), (int)std::lround(L.s * 4));
+        // one key per square, rain or dry: when a square dries up (or starts raining) between updates its record is changed in place, not
+        // erased and sent again at the same spot (two operations on one location in one update)
+        std::snprintf(key, sizeof key, "N%ld:%ld:%d", (long)std::floor(L.X / L.s), (long)std::floor(L.Y / L.s), (int)std::lround(L.s * 4));
         c.key = key;
         if (L.c == 0) { res.dryCells.push_back(c); continue; }
         c.dbzFine = (float)std::round(std::max((double)minDbz, std::min(70.0, L.z)));

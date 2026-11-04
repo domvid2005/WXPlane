@@ -187,22 +187,23 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
     const float ph = (float)g_cfg.emptyLayerCoverage;
     if (ph <= 0.0f || todo.empty()) return;
     auto real = [](const XPLMWeatherInfoClouds_t& c) { return c.coverage > 0.05f && c.alt_top > c.alt_base; };
-    // 1) height bands: 1-D k-means of the layer bases, at most 3
+    // 1) height bands: the layer bases, sorted, split at the largest jumps in height (at most 3 bands, a jump of 300 m or more), so layers
+    // at nearly the same height always share a band (k-means once put a 761 m deck in a different band than the 695 m one next to it)
     std::vector<double> bases;
     for (const auto& t : todo) for (int k = 0; k < K; ++k) if (real(t.rec.info.cloud_layers[k])) bases.push_back(t.rec.info.cloud_layers[k].alt_base);
     if (bases.empty()) return;
     std::sort(bases.begin(), bases.end());
-    int nb = 1;
-    for (size_t i = 1; i < bases.size(); ++i) if (bases[i] - bases[i - 1] > 300.0) ++nb;
-    nb = std::min(K, nb);
-    std::vector<double> cen(nb);
-    for (int b = 0; b < nb; ++b) cen[b] = bases[(size_t)((b + 0.5) / nb * bases.size())];
-    for (int it = 0; it < 20; ++it) {
-        std::vector<double> sum(nb, 0.0); std::vector<int> cnt(nb, 0);
-        for (double v : bases) { int bb = 0; for (int b = 1; b < nb; ++b) if (std::fabs(v - cen[b]) < std::fabs(v - cen[bb])) bb = b; sum[bb] += v; ++cnt[bb]; }
-        for (int b = 0; b < nb; ++b) if (cnt[b]) cen[b] = sum[b] / cnt[b];
-        std::sort(cen.begin(), cen.end());
-    }
+    std::vector<std::pair<double, size_t>> jumps;   // (size, index after the jump)
+    for (size_t i = 1; i < bases.size(); ++i) if (bases[i] - bases[i - 1] >= 300.0) jumps.push_back({bases[i] - bases[i - 1], i});
+    std::sort(jumps.begin(), jumps.end(), [](const std::pair<double, size_t>& a, const std::pair<double, size_t>& b) { return a.first > b.first; });
+    if ((int)jumps.size() > K - 1) jumps.resize((size_t)(K - 1));
+    std::vector<size_t> cuts;
+    for (const auto& jp : jumps) cuts.push_back(jp.second);
+    std::sort(cuts.begin(), cuts.end());
+    std::vector<double> limits;   // a base at or above limits[b] belongs to band b+1
+    for (size_t c : cuts) limits.push_back(0.5 * (bases[c - 1] + bases[c]));
+
+    auto bandOf = [&](double base) { int b = 0; while (b < (int)limits.size() && base >= limits[b]) ++b; return b; };
     // 2) each record's layers into band slots, in height order (two layers in one band: the upper one moves up a slot, if there is one)
     const size_t n = todo.size();
     std::vector<std::array<bool, 3>> isReal(n);
@@ -215,8 +216,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         std::array<bool, 3> used = {false, false, false};
         int next = 0;
         for (size_t m = 0; m < mine.size(); ++m) {
-            int bb = 0;
-            for (int b = 1; b < nb; ++b) if (std::fabs(mine[m].alt_base - cen[b]) < std::fabs(mine[m].alt_base - cen[bb])) bb = b;
+            const int bb = bandOf(mine[m].alt_base);
             int slot = std::max(next, bb);
             slot = std::min(slot, K - (int)(mine.size() - m));   // leave room for the layers still to come
             out[slot] = mine[m]; used[slot] = true; next = slot + 1;
