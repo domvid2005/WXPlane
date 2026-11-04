@@ -433,14 +433,25 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const double rangeDeg = rMax / 60.0;
             const long j0 = (long)std::floor((res.centerLat - rangeDeg) / stepLat), j1 = (long)std::floor((res.centerLat + rangeDeg) / stepLat);
             for (long j = j0; j <= j1; ++j) {
-                const double latc = (j + 0.5) * stepLat;
-                if (latc < -85 || latc > 85) continue;
-                const double cosL = std::max(0.2, std::cos(latc * 3.14159265358979 / 180.0));
+                const double latRow = (j + 0.5) * stepLat;
+                if (latRow < -85 || latRow > 85) continue;
+                const double cosL = std::max(0.2, std::cos(latRow * 3.14159265358979 / 180.0));
                 const double stepLon = stepLat / cosL;
                 const double rangeLon = rangeDeg / cosL;
                 const long i0 = (long)std::floor((res.centerLon - rangeLon) / stepLon), i1 = (long)std::floor((res.centerLon + rangeLon) / stepLon);
-                for (long i = i0; i <= i1; ++i) {
-                    const double lonc = (i + 0.5) * stepLon;
+                for (long i = i0; i <= i1 + 1; ++i) {
+                    // Staggered, wobbled grid: on a square grid the boundaries between tiles of different weather (and the holes left
+                    // under storms) are straight N-S/E-W steps on X-Plane's cloud map. Every other row moves half a tile east and each
+                    // tile moves a fixed (hash-based, so stable between updates) bit off its spot, so edges wander instead.
+                    double lonc = (i + 0.5) * stepLon;
+                    double latc = latRow;
+                    if (g_cfg.fillStagger) {
+                        if (j & 1) lonc += 0.5 * stepLon;
+                        unsigned hsh = (unsigned)(j * 73856093L) ^ (unsigned)(i * 19349663L) ^ (unsigned)(cellNm * 83492791);
+                        hsh ^= hsh >> 13; hsh *= 0x5bd1e995u; hsh ^= hsh >> 15;
+                        latc += ((double)(hsh % 1000u) / 1000.0 - 0.5) * 0.36 * stepLat;
+                        lonc += ((double)((hsh >> 10) % 1000u) / 1000.0 - 0.5) * 0.36 * stepLon;
+                    } else if (i > i1) continue;
                     const double dc = wx::distNm(res.centerLat, res.centerLon, latc, lonc);
                     if (dc > rMax || dc <= rMin) continue;
                     const wx::Station* nearest = &res.stations[0];

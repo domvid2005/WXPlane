@@ -59,6 +59,7 @@ struct Config {
     bool stormFillPits = true;       // a block much lower than the ring of blocks around it is lifted toward them (no sheer rectangular craters inside a storm)
     double stormTopMaxDropM = 0;     // largest top difference allowed between neighbouring storm cells, per cell width (0 = off)
     bool stormBaseSmooth = true;     // storm cells next to each other share a smoothed cloud base, so the underside has no steps where nearest stations differ
+    bool stormLevelContours = true;  // the same smooth outline for every intensity level inside a storm (30/40/50 dBZ), so cores are curved, not grid squares
     bool stormContour = true;        // draw one smooth, randomised outline around the storm blocks (instead of random rim rings) and keep the records inside it
     bool stormRim = true;            // ragged, tapered rim cells around the confirmed storm blocks (and in their inner corners), so outlines are not square walls
     bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
@@ -80,6 +81,7 @@ struct Config {
     int fillFarRangeNm = 120;        // coarse fill out to here (never beyond the METAR search radius)
     int fillFarCellNm = 30;          // ...on a grid this size
     int fillCellNm = 12;             // ...using location records on a grid this size
+    bool fillStagger = true;         // offset every other row of the fill grid by half a tile and wobble each tile a little, so cloud edges are not grid steps
     double stationRadiusFactor = 0.49; // station radius = this x distance to nearest neighbour (0.49 = circles just touch; above that they overlap and X-Plane blends the edge)
     double fillRadiusFactor = 1.0;    // gap-fill record radius = this x grid cell size (0.71 would just cover the corners; 1.0 overlaps the neighbouring tiles and the storm cells so no gap is left)
     bool stationRadiusAuto = true;   // shrink each station's radius so close neighbours do not blend into it

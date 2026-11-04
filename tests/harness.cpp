@@ -592,7 +592,7 @@ int main() {
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);
-        CHECK(storms >= 3 && storms <= 120);
+        CHECK(storms >= 3 && storms <= 240);   // 60 blocks + 60 outline skins + up to 120 intensity-level pairs
         CHECK(heavy >= 1);
         CHECK(minVis <= 800 && minVis >= 400);
         CHECK(maxTop > 8500 && maxTop < 13100);   // echo top ~12 km in the mock; the default top smoothing + centroid placement lower its lone peak       // echo top ~12 km from the mock product

@@ -452,12 +452,183 @@ int addStormContour(std::vector<RadarCell>& cells, double cellNm, double baseRad
     return (int)fresh.size();
 }
 
+int addStormLevelContours(std::vector<RadarCell>& cells, double cellNm, double baseRadiusNm, double aircraftLat, double aircraftLon,
+                          double stepM, const std::vector<double>& levels, int maxAdd) {
+    if (cells.empty() || cellNm <= 0 || maxAdd <= 0 || levels.empty()) return 0;
+    struct P { double x, y; };
+    double lat0 = 0, lon0 = 0; int nr = 0;
+    for (const auto& c : cells) if (!c.synthetic) { lat0 += c.lat; lon0 += c.lon; ++nr; }
+    if (nr < 2) return 0;
+    lat0 = std::round(lat0 / nr); lon0 = std::round(lon0 / nr);
+    const double cosL = std::max(0.2, std::cos(lat0 * kPi / 180.0));
+    auto toX = [&](double lon) { return (lon - lon0) * 60.0 * cosL; };
+    auto toY = [&](double lat) { return (lat - lat0) * 60.0; };
+    std::vector<size_t> realIdx;
+    std::vector<P> all;
+    for (size_t i = 0; i < cells.size(); ++i) if (!cells[i].synthetic) { realIdx.push_back(i); all.push_back({toX(cells[i].lon), toY(cells[i].lat)}); }
+    // where the storm is (the soft union of rounded squares addStormContour draws its outline from)
+    const double h = cellNm * 0.5, sigma = cellNm * 0.4, reachSq = std::pow(sigma * 2.6, 2.0);
+    auto storm = [&](double x, double y) {
+        double keep = 1.0;
+        for (const auto& p : all) {
+            const double dx = std::max(std::fabs(x - p.x) - h, 0.0), dy = std::max(std::fabs(y - p.y) - h, 0.0);
+            const double dd = dx * dx + dy * dy;
+            if (dd > reachSq) continue;
+            keep *= 1.0 - std::exp(-dd / (sigma * sigma));
+        }
+        return 1.0 - keep;
+    };
+    // The reflectivity surface: an interpolation of the blocks' values that passes through each block's own value (inverse distance
+    // squared, fading out by 1.8 blocks). A level's outline is where this surface crosses it, so a 57 dBZ block next to a 43 dBZ one puts the
+    // 50 dBZ line halfway between them, and a core made of a rectangle of strong blocks comes out as the oval the radar saw, not as the
+    // rectangle (outlining WHICH blocks are above a level still gave the rectangle). It passes through the blocks, so a single 42 dBZ block
+    // still gets its own round 40 dBZ outline (a smoothing average pulled it under 40, and its square stayed).
+    const double eps2 = std::pow(cellNm * 0.1, 2.0), reach2 = std::pow(cellNm * 1.8, 2.0);
+    auto refl = [&](double x, double y) {
+        double sw = 0, sv = 0;
+        for (size_t k = 0; k < all.size(); ++k) {
+            const double dd = (x - all[k].x) * (x - all[k].x) + (y - all[k].y) * (y - all[k].y);
+            if (dd > reach2) continue;
+            const double w = (1.0 - dd / reach2) / (dd + eps2);
+            sw += w; sv += w * cells[realIdx[k]].dbzFine;
+        }
+        return sw > 1e-12 ? sv / sw : 0.0;
+    };
+    double minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    for (const auto& p : all) { minX = std::min(minX, p.x); maxX = std::max(maxX, p.x); minY = std::min(minY, p.y); maxY = std::max(maxY, p.y); }
+    const double g = cellNm / 6.0, pad = cellNm * 0.6;
+    const int x0 = (int)std::floor((minX - pad) / g), x1 = (int)std::ceil((maxX + pad) / g);
+    const int y0 = (int)std::floor((minY - pad) / g), y1 = (int)std::ceil((maxY + pad) / g);
+    const int W = x1 - x0 + 1, H = y1 - y0 + 1;
+    if (W <= 2 || H <= 2 || (long)W * H > 400000) return 0;
+    std::vector<double> R((size_t)W * H, 0.0);
+    std::vector<unsigned char> inStorm((size_t)W * H, 0);
+    for (int j = 0; j < H; ++j)
+        for (int i = 0; i < W; ++i) {
+            const double x = (x0 + i) * g, y = (y0 + j) * g;
+            inStorm[(size_t)j * W + i] = storm(x, y) >= 0.55 ? 1 : 0;   // inside the storm (a line only counts between two parts of it: the outer edge is addStormContour's)
+            R[(size_t)j * W + i] = inStorm[(size_t)j * W + i] ? refl(x, y) : 0.0;
+        }
+    std::vector<double> sorted(levels);
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<RadarCell> fresh;
+    std::vector<P> allLines;   // every level's line, for step 3
+    std::vector<unsigned char> unlined(realIdx.size(), 0);   // a block at or above a level that has no area of that level around it
+    for (size_t li = 0; li < sorted.size(); ++li) {
+        const double L = sorted[li];
+        const double nextL = li + 1 < sorted.size() ? sorted[li + 1] : 999.0;
+        const double prevL = li > 0 ? sorted[li - 1] : L - 10.0;
+        // the line, with a gentle wobble of its own per level (+-1.5 dBZ), so it is not a perfectly smooth curve either
+        auto above = [&](int i, int j) {
+            const double x = (x0 + i) * g, y = (y0 + j) * g;
+            const double lat = lat0 + y / 60.0, lon = lon0 + x / (60.0 * cosL);
+            return R[(size_t)j * W + i] >= L + 1.5 * latticeNoise(lat + L * 0.37, lon - L * 0.21, cellNm);
+        };
+        std::vector<unsigned char> in((size_t)W * H, 0);
+        for (int j = 0; j < H; ++j) for (int i = 0; i < W; ++i) in[(size_t)j * W + i] = inStorm[(size_t)j * W + i] && above(i, j);
+        // a block only just at this level (e.g. a lone 40 dBZ block) may get no area of it on the surface, so no line and no pairs:
+        // it would still paint its whole square in that colour, so it gets the smaller circle (step 3) and shows as a round blob
+        for (size_t k = 0; k < realIdx.size(); ++k) {
+            if (cells[realIdx[k]].dbzFine < L) continue;
+            const int i = (int)std::lround(all[k].x / g) - x0, j = (int)std::lround(all[k].y / g) - y0;
+            if (i >= 0 && i < W && j >= 0 && j < H && !in[(size_t)j * W + i]) unlined[k] = 1;
+        }
+        std::vector<P> boundary;
+        for (int j = 1; j < H - 1; ++j)
+            for (int i = 1; i < W - 1; ++i) {
+                if (!in[(size_t)j * W + i]) continue;
+                bool edge = false;
+                const int nb[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+                for (const auto& d : nb) {
+                    const size_t q = (size_t)(j + d[1]) * W + (i + d[0]);
+                    if (!in[q] && inStorm[q]) edge = true;   // next to a weaker part of the storm (not to the storm's own edge)
+                }
+                if (edge) boundary.push_back({(x0 + i) * g, (y0 + j) * g});
+            }
+        if (boundary.empty()) continue;
+        allLines.insert(allLines.end(), boundary.begin(), boundary.end());
+        // Pairs of skin cells straddle the line at evenly spread, stable spots: one just inside at this level, one just outside at the level
+        // below. X-Plane splits the area between two neighbouring records along a straight line, so between the big 12 nm block records a
+        // level change follows the block grid. The pairs are smaller but close to the line, so near it they win, and the split between the
+        // inner and the outer one of each pair lies ON the curve.
+        std::vector<unsigned> hv(boundary.size());
+        std::vector<size_t> order(boundary.size());
+        for (size_t i = 0; i < boundary.size(); ++i) {
+            order[i] = i;
+            hv[i] = hashStr(std::to_string((long)std::lround(boundary[i].x / g)) + "," + std::to_string((long)std::lround(boundary[i].y / g)) + "@" +
+                            std::to_string((long)lat0) + "," + std::to_string((long)lon0) + "L" + std::to_string((int)L), 9);
+        }
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return hv[a] < hv[b]; });
+        std::vector<size_t> chosen;
+        const double minSep = cellNm * 0.36;
+        for (size_t oi : order) {
+            bool ok = true;
+            for (size_t ci : chosen) if (std::hypot(boundary[oi].x - boundary[ci].x, boundary[oi].y - boundary[ci].y) < minSep) { ok = false; break; }
+            if (ok) chosen.push_back(oi);
+        }
+        for (size_t oi : chosen) {
+            const P b = boundary[oi];
+            const double gx = refl(b.x + g, b.y) - refl(b.x - g, b.y), gy = refl(b.x, b.y + g) - refl(b.x, b.y - g);
+            const double len = std::hypot(gx, gy);
+            const double nx = len > 1e-9 ? -gx / len : 0.0, ny = len > 1e-9 ? -gy / len : 0.0;   // outward = towards weaker echo
+            const unsigned hh = hv[oi];
+            const double depth = cellNm * (0.2 + 0.06 * unit(hh, 1));
+            for (int side = 0; side < 2; ++side) {               // 0 = inside (this level), 1 = outside (the level below)
+                const double sx = side == 0 ? -1.0 : 1.0;
+                const double cx = b.x + sx * nx * depth, cy = b.y + sx * ny * depth;
+                if (storm(cx, cy) < 0.55) continue;                // would sit outside the storm
+                // the nearest block on this side of the line supplies coverage and top
+                size_t src = realIdx[0]; double bd = 1e18;
+                for (size_t k = 0; k < realIdx.size(); ++k) {
+                    const RadarCell& c = cells[realIdx[k]];
+                    if ((side == 0) != (c.dbzFine >= L)) continue;
+                    const double d = std::hypot(all[k].x - cx, all[k].y - cy);
+                    if (d < bd) { bd = d; src = realIdx[k]; }
+                }
+                const RadarCell& s = cells[src];
+                RadarCell r;
+                r.lat = lat0 + cy / 60.0; r.lon = lon0 + cx / (60.0 * cosL);
+                r.synthetic = true;
+                // inside: just above this level (below the next); outside: just below it (above the one before)
+                r.dbzFine = side == 0 ? (float)std::min(nextL - 1.0, L + 2.0) : (float)std::max(prevL + 1.0, L - 2.0);
+                r.frac = s.frac;
+                r.topM = s.topM > 0 ? s.topM : 0.0f;
+                r.topKnown = r.topM > 0;
+                if (r.topM > 0 && stepM > 0) r.topM = std::round(r.topM / (float)stepM) * (float)stepM;
+                r.dbz = std::max(5.0f, std::round(r.dbzFine / 5.0f) * 5.0f);
+                r.rateMmH = rateFromDbz(r.dbzFine);
+                r.coverScale = 1.0f;   // inside the storm: no thinning
+                r.radiusScale = (float)clampf((float)(cellNm * 0.55 / std::max(1.0, baseRadiusNm)), 0.25f, 1.0f);
+                r.distNm = distNm(aircraftLat, aircraftLon, r.lat, r.lon);
+                r.key = std::string(side == 0 ? "L" : "M") + std::to_string((int)L) + ":" + std::to_string((long)std::lround(b.y / g)) + ":" +
+                        std::to_string((long)std::lround(b.x / g)) + "@" + std::to_string((long)lat0) + "," + std::to_string((long)lon0);
+                fresh.push_back(r);
+            }
+        }
+    }
+    // 3) A block whose centre lies close to a line would still win the area around it with its big circle, and the line would follow the
+    // block grid there after all. Such blocks get a smaller circle (never below 55%, which still closes the gap to the neighbouring blocks),
+    // so near the line the pairs decide. With pairs on both sides this hands no area to the wrong level.
+    if (!allLines.empty() || std::count(unlined.begin(), unlined.end(), 1) > 0)
+        for (size_t k = 0; k < realIdx.size(); ++k) {
+            double best = unlined[k] ? 0.0 : 1e9;
+            for (const auto& b : allLines) best = std::min(best, std::hypot(b.x - all[k].x, b.y - all[k].y));
+            RadarCell& c = cells[realIdx[k]];
+            c.contourScale = std::min(c.contourScale, (float)clampf((float)((best + 0.5 * cellNm) / std::max(1.0, baseRadiusNm)), 0.55f, 1.0f));
+        }
+    std::sort(fresh.begin(), fresh.end(), [](const RadarCell& a, const RadarCell& b) { return a.distNm < b.distNm; });
+    if ((int)fresh.size() > maxAdd) fresh.resize((size_t)maxAdd);
+    for (auto& f : fresh) cells.push_back(f);
+    return (int)fresh.size();
+}
+
 void markStormEdges(std::vector<RadarCell>& cells, double cellNm) {
     const double reach = cellNm * 1.7;
     for (size_t i = 0; i < cells.size(); ++i) {
         int n = 0;
         for (size_t j = 0; j < cells.size(); ++j)
-            if (j != i && distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon) <= reach) ++n;
+            if (j != i && !(cells[j].synthetic && !cells[j].key.empty() && (cells[j].key[0] == 'L' || cells[j].key[0] == 'M')) &&
+                distNm(cells[i].lat, cells[i].lon, cells[j].lat, cells[j].lon) <= reach) ++n;
         cells[i].edge = clampf((5.0f - (float)n) / 5.0f, 0.0f, 1.0f);
     }
     // Corner cut: a confirmed block that has open ground on some of its 8 sides (a convex corner of the storm, or a side) is pulled in:
@@ -565,6 +736,10 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     if (cfg.stormSmoothTops) smoothStormTops(all, cfg.radarCellNm, cfg.stormTopBlend, cfg.stormTopStepM, cfg.stormFillPits);
     if (cfg.stormSmoothTops) limitStormTopSlope(all, cfg.radarCellNm, cfg.stormTopMaxDropM, std::max(50.0, cfg.stormTopStepM));
     smoothStormRain(all, cfg.radarCellNm, cfg.stormRainBlend, cfg.stormFillPits);
+    // after the rain smoothing, so the outlines follow the reflectivity the records will actually carry
+    if (cfg.stormContour && cfg.stormLevelContours)
+        res.levelCells = addStormLevelContours(all, cfg.radarCellNm, std::max(6.0, cfg.radarCellNm * cfg.stormRadiusFactor), lat, lon,
+                                               std::max(50.0, cfg.stormTopStepM), {30.0, 40.0, 50.0}, std::max(4, cfg.radarMaxCells * 2));
     markStormEdges(all, cfg.radarCellNm);
     if (cfg.stormContour) for (auto& c : all) if (!c.synthetic) c.radiusScale = std::min(1.0f, c.contourScale);   // the outline decides how far a measured block reaches
     res.cells = std::move(all);

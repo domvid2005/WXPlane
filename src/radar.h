@@ -64,6 +64,14 @@ void markStormEdges(std::vector<RadarCell>& cells, double cellNm);
 int addStormContour(std::vector<RadarCell>& cells, double cellNm, double baseRadiusNm, double aircraftLat, double aircraftLon,
                     double stepM, double minDbz, int maxAdd);
 
+// Intensity levels inside a storm (2026-11): the same treatment as addStormContour, once per reflectivity level (e.g. 30, 40, 50 dBZ).
+// For each level a smooth, slightly randomised outline is drawn around the blocks at or above it; those blocks' circles are kept
+// inside it (contourScale), and small skin cells of that level are placed just inside it, so the boundary between e.g. orange and red
+// follows a curve instead of the 12 nm block grid. Only boundaries inside the storm get skin cells (the outer edge is addStormContour's).
+// Returns how many cells were added (nearest to the aircraft first, at most maxAdd).
+int addStormLevelContours(std::vector<RadarCell>& cells, double cellNm, double baseRadiusNm, double aircraftLat, double aircraftLon,
+                          double stepM, const std::vector<double>& levels, int maxAdd);
+
 struct RadarResult {
     bool attempted = false;
     bool ok = false;
@@ -74,6 +82,7 @@ struct RadarResult {
     bool topsFromRadar = false;
     int rimCells = 0;          // ragged rim cells added around the confirmed blocks
     int holesFilled = 0;       // cells interpolated into enclosed holes
+    int levelCells = 0;        // skin cells added along the inner intensity-level outlines
     std::vector<RadarCell> cells;
 };
 
