@@ -1087,9 +1087,8 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
 
 // The sim kept ignoring the upper wind layers of our records (FL100 and up read 180 deg / 1 kt), so as well as the records
 // the profile for the aircraft's position is written into the sim's own region wind arrays. Throttled, and only if writable.
-// Off by default since 2026-11-04: X-Plane now takes the winds aloft from our records (the read-back at the flight levels matches what
-// we send), and overwriting its region arrays every so often snapped the wind at the aircraft to another value each time, one more
-// thing for the autopilot to chase (altitude hunting log). region_winds = 1 turns it back on.
+// Still needed (log 2026-11-04 13:26): with this off, X-Plane read 180 deg / 1 kt at every flight level from FL100 up, whatever the
+// records said; the winds aloft only reach the sim through its region arrays. region_winds = 0 turns it off.
 void pushRegionWinds(const wx::XpWx& x) {
     if (!g_cfg.regionWinds) return;
     static std::time_t last = 0;

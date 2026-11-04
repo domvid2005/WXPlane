@@ -125,6 +125,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "update_transition_s") c.updateTransitionS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
+    if (version < 26) { Config d; c.regionWinds = d.regionWinds; }   // v26: one build saved region_winds = 0, which left the winds aloft out of the sim
     if (version < 25) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; c.stormCoreCoverage = d.stormCoreCoverage; c.stormTopMaxDropM = d.stormTopMaxDropM; }   // v25: back to the look of the earlier build (ragged walls)
     if (version < 24) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; }   // v24: wider overlap
     if (version < 23) { Config d; c.stormCoverageMax = d.stormCoverageMax; }   // v23: back to 95 % (the 100 % trial removed the natural breakup)

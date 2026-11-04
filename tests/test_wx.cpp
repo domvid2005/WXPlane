@@ -186,6 +186,8 @@ int main() {
         CHECK(cur.updateMinutes == 10 && cur.startupStaged && cur.lowCloudType == 2.0 && cur.stationRadiusFactor == 0.65);   // current files keep their values
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
         Config v6; loadConfig(fn, v6);
+        { Config r25; FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 25\nregion_winds = 0\n", f); std::fclose(f); loadConfig(fn, r25); CHECK(r25.regionWinds); }
+        { Config r26; FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 26\nregion_winds = 0\n", f); std::fclose(f); loadConfig(fn, r26); CHECK(!r26.regionWinds); }
         CHECK(v6.lowCloudType == 2.0 && v6.stationRadiusFactor == 0.49 && v6.fillRadiusFactor == 1.0 && v6.radarMinutes == 5 && v6.searchNm == 80);   // stale cloud settings from earlier builds reset once
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 18\ntop_bumps = 1\nbump_count = 30\nupdate_minutes = 10\nsearch_nm = 77\n", f); std::fclose(f); }
         Config v18; loadConfig(fn, v18);

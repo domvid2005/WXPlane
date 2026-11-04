@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 25;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 26;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -77,7 +77,7 @@ struct Config {
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
     bool smoothPressure = true;
-    bool regionWinds = false;         // also write the winds aloft into X-Plane's region wind arrays (an old workaround; see pushRegionWinds)       // one smooth QNH field over all records (no pressure steps where records meet), airports keep their own within 2 hPa of it
+    bool regionWinds = true;          // write the winds aloft into X-Plane's region wind arrays: X-Plane ignores the upper wind layers of records (see pushRegionWinds)       // one smooth QNH field over all records (no pressure steps where records meet), airports keep their own within 2 hPa of it
     double cloudSmoothNm = 8.0;         // cloud edges: every layer is averaged over the records within ~3x this (Gaussian sigma, nm); 0 = off
     double emptyLayerCoverage = 0.01;   // coverage given to an empty cloud slot that takes a neighbour's height (no ribbons; 1% shows nothing, but keeps the height)
     int radarNaturalMax = 150;          // records the natural picture may use (rain and the dry records around it)
