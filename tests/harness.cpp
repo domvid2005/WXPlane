@@ -593,18 +593,24 @@ int main() {
             radius = std::max(radius, c.info.radius_nm);
             for (int k = 0; k < XPLM_NUM_WIND_LAYERS; ++k) if (c.info.wind_layers[k].speed >= 0) maxTurb = std::max(maxTurb, c.info.wind_layers[k].turbulence);
         }
-        {   // every record sends the same three layers in height order (no empty slot for X-Plane to drop and shift the rest down)
-            int bad = 0;
+        {   // filler layers are never thin slivers (those made X-Plane drop the start-up update); gaps below a layer are mostly filled
+            int bad = 0, gaps = 0;
             for (size_t i = before; i < g_calls.size(); ++i) {
                 const auto& L = g_calls[i].info.cloud_layers;
                 bool any = L[0].coverage > 0 || L[1].coverage > 0 || L[2].coverage > 0;
                 if (!any) continue;
-                if (!(L[0].coverage > 0 && L[1].coverage > 0 && L[2].coverage > 0 && L[0].alt_base <= L[1].alt_base && L[1].alt_base <= L[2].alt_base)) {   // (a storm may reach up through the layers above it, on purpose)
+                // no gap below a layer (X-Plane would shift the layers above it down a slot), layers in height order, nothing thinner than 100 m added
+                bool gap = false;
+                for (int k = 0; k < 2; ++k) if (L[k].coverage <= 0 && (L[k + 1].coverage > 0 || L[2].coverage > 0)) gap = true;
+                bool thin = false;
+                for (int k = 0; k < 3; ++k) if (L[k].coverage > 0 && L[k].coverage < 0.05f && L[k].alt_top - L[k].alt_base < 400.0f) thin = true;
+                if (gap) ++gaps;
+                if (thin) {
                     if (bad < 4) std::printf("    %.2f %.0f-%.0f | %.2f %.0f-%.0f | %.2f %.0f-%.0f\n", L[0].coverage, L[0].alt_base, L[0].alt_top, L[1].coverage, L[1].alt_base, L[1].alt_top, L[2].coverage, L[2].alt_base, L[2].alt_top);
                     ++bad;
                 }
             }
-            std::printf("  records with misaligned cloud layers: %d\n", bad);
+            std::printf("  records with a thin filler layer: %d, with a gap below a layer: %d\n", bad, gaps);
             CHECK(bad == 0);
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",

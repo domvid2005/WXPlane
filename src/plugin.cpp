@@ -224,31 +224,43 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         for (int k = 0; k < K; ++k) L[k] = out[k];
         isReal[i] = used;
     }
-    // 3) a nearly empty layer in every slot without cloud: the height of the nearest record with a real layer in that slot
-    for (int k = 0; k < K; ++k) {
+    // 3) a nearly empty layer only in a slot BELOW a record's own layers (that is where X-Plane's compaction would shift its layers down
+    // a slot): at the height of the nearest record with a real layer in that slot, and only where it fits whole (at least 400 m deep,
+    // clear of the record's own layers). Slots above a record's layers stay empty, and nothing is ever squeezed into a thin sliver:
+    // the build that filled every slot (thin 50-120 m layers stacked on top of each other) made X-Plane throw the whole start-up update
+    // away (log 2026-11-03 22:23, "XPLMBeginWeatherUpdate() called without matching XPLMEndWeatherUpdate()", no clouds at all).
+    for (int k = 0; k < K - 1; ++k) {
         std::vector<size_t> has;
         for (size_t i = 0; i < n; ++i) if (isReal[i][k]) has.push_back(i);
+        if (has.empty()) continue;
         for (size_t i = 0; i < n; ++i) {
             if (isReal[i][k]) continue;
+            bool above = false;
+            for (int m = k + 1; m < K; ++m) if (isReal[i][m]) above = true;
+            if (!above) continue;
             XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
-            double bd = 1e18; size_t bj = n;
+            double bd = 60.0; size_t bj = n;
             for (size_t j : has) {
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
                 if (d < bd) { bd = d; bj = j; }
             }
-            float base, top, type;
-            if (bj < n) { base = todo[bj].rec.info.cloud_layers[k].alt_base; top = todo[bj].rec.info.cloud_layers[k].alt_top; type = todo[bj].rec.info.cloud_layers[k].cloud_type; }
-            else { base = (float)(k < nb ? cen[k] : cen[nb - 1] + 1500.0 * (k - nb + 1)); top = base + 600.0f; type = 1.0f; }
-            // keep the slots in height order and clear of this record's own layers
-            const float lo = k > 0 ? L[k - 1].alt_top + 20.0f : -1e9f;
+            if (bj == n) continue;
+            const XPLMWeatherInfoClouds_t& src = todo[bj].rec.info.cloud_layers[k];
+            if (src.alt_top - src.alt_base < 400.0f) continue;
+            const float lo = k > 0 && L[k - 1].coverage > 0 ? L[k - 1].alt_top : -1e9f;
             float hi = 1e9f;
-            for (int m = k + 1; m < K; ++m) if (isReal[i][m]) { hi = L[m].alt_base - 20.0f; break; }
-            if (base < lo) { top += lo - base; base = lo; }
-            if (top > hi) { top = hi; if (base > top - 50.0f) base = top - 50.0f; }
-            if (base < lo || top <= base) { base = lo; top = lo + 50.0f; }   // squeezed: a thin sliver right above the layer below
-            L[k].cloud_type = type; L[k].alt_base = base; L[k].alt_top = top; L[k].coverage = ph;
+            for (int m = k + 1; m < K; ++m) if (isReal[i][m]) { hi = L[m].alt_base; break; }
+            if (src.alt_base < lo || src.alt_top > hi) continue;   // does not fit whole: leave the slot empty
+            L[k] = src;
+            L[k].coverage = ph;
         }
     }
+    // the empty slots go out as before (0 m, no coverage), so X-Plane drops them
+    for (size_t i = 0; i < n; ++i)
+        for (int k = 0; k < K; ++k) {
+            XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
+            if (c.coverage <= 0.0f) { c.cloud_type = 0; c.coverage = 0; c.alt_base = 0; c.alt_top = 0; }
+        }
 }
 
 void sendRec(Todo& t) {
