@@ -496,6 +496,7 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
 }
 
 void applyResult(const wx::FetchResult& res, bool fromFetch) {
+    const auto applyT0 = Clock::now();   // this runs on the sim's main thread: logged when it takes long enough to cost a frame
     std::time_t now = std::time(nullptr);
     int fogCount = 0, aloftCount = 0;
     g_haveLevels = false;
@@ -936,6 +937,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         std::snprintf(l2, sizeof l2, "No stations in range");
     g_lastGoodStatus = l1;
     setStatus(l1, l2);
+    {
+        const double ms = std::chrono::duration<double, std::milli>(Clock::now() - applyT0).count();
+        if (ms > 15.0) logf("building this update took %.0f ms on the sim's main thread", ms);
+    }
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
     logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer",
          (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash);
@@ -996,6 +1001,22 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
         lv += b;
     }
     logf("  X-Plane's wind at flight levels there:%s", lv.c_str());
+    // Temperatures aloft the same way: ours (the profile that went into the record, ISA deviation in brackets) next to X-Plane's at that spot.
+    if (x.tempProfile.size() >= 2) {
+        std::string tl;
+        for (double ft : {5000.0, 10000.0, 18000.0, 24000.0, 30000.0, 36000.0, 45000.0}) {
+            const float m = (float)(ft * 0.3048);
+            XPLMWeatherInfo_t q;
+            std::memset(&q, 0, sizeof q);
+            q.structSize = sizeof q;
+            XPLMGetWeatherAtLocation(lat, lon, m, &q);
+            const float ours = wx::profileTemp(x.tempProfile, m);
+            const float isa = m < 11000.0f ? 15.0f - 0.0065f * m : -56.5f;
+            std::snprintf(b, sizeof b, " FL%03.0f %+.0f/%+.0fC(ISA%+.0f)", ft / 100.0, ours, q.temperature_alt, ours - isa);
+            tl += b;
+        }
+        logf("  temperatures aloft, ours/X-Plane's:%s", tl.c_str());
+    }
     // And the sim's own region arrays, which are what the map and the instruments read.
     static XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"), drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
     if (drA && drS && drD) {
