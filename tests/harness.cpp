@@ -518,15 +518,16 @@ int main() {
         CHECK(lastSent * 2.5f < 402 * 1.4f && lastSent * 2.5f > 402 * 0.7f); // sim now lands near the report
     }
 
-    std::printf("[2c] a station drops out of the NOAA data -> only that station is erased\n");
+    std::printf("[2c] a station drops out of the NOAA data -> one replacing update, no record removed one by one\n");
     {
         g_dropSln = true;
         int er = g_erases; size_t callsBefore = g_calls.size();
         g_menuHandler(nullptr, (void*)(intptr_t)2);
         for (int i = 0; i < 300; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-        CHECK(g_erases == er + 1);
-        CHECK(g_lastIncr == 1);                                  // incremental, no full wipe
-        CHECK(g_calls.size() - callsBefore < 3);
+        CHECK(g_erases == er);                                   // airport records are never erased one by one (X-Plane crashed doing that after a move)
+        CHECK(g_lastIncr == 0);                                  // a non-incremental update replaces all of our records
+        CHECK(g_calls.size() - callsBefore == 3);                // the 3 stations still reported, all in that one update
+        CHECK(g_logAll.find("one replacing update") != std::string::npos);
     }
 
     std::printf("[5] disable from menu -> records erased, no further downloads\n");

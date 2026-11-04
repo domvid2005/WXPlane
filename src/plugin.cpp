@@ -142,6 +142,7 @@ bool g_pendingStartup = false;
 XPLMCommandRef g_regenCmd = nullptr;
 bool g_regenDone = false;
 Clock::time_point g_regenAt{};
+bool g_pendingReplace = false;      // the pending update replaces all of WXPlane's records (one non-incremental update, see applyResult)
 bool g_pendingManual = false;       // the pending update was asked for with "Refresh Weather Data Now"
 Clock::time_point g_nextRelease{};   // when the next queued record may be handed to X-Plane
 double g_releaseStepS = 0.0;         // seconds between records, so a whole update spreads over transition_s
@@ -291,8 +292,8 @@ void flushPending() {
     auto t0 = Clock::now();
     // The start-up load always goes to X-Plane as ONE update, whatever apply_per_tick / transition_s say: every extra update is
     // another rebuild, and spreading it out was what made the load-in a couple of minutes of changing clouds and light.
-    size_t budget = g_pendingStartup ? g_pendingTodo.size() + g_pendingGone.size() : (size_t)g_cfg.applyPerTick, sent = 0, erased = 0;
-    if (g_releaseStepS > 0.0 && !g_pendingStartup) {
+    size_t budget = (g_pendingStartup || g_pendingReplace) ? g_pendingTodo.size() + g_pendingGone.size() : (size_t)g_cfg.applyPerTick, sent = 0, erased = 0;
+    if (g_releaseStepS > 0.0 && !g_pendingStartup && !g_pendingReplace) {
         if (t0 < g_nextRelease) return;
         double behind = std::chrono::duration<double>(t0 - g_nextRelease).count();
         budget = std::min(budget, (size_t)(behind / g_releaseStepS) + 1);
@@ -304,7 +305,8 @@ void flushPending() {
     for (size_t i = 0; i < n; ++i) sendRec(g_pendingTodo[i]);
     sent = n;
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
-    XPLMEndWeatherUpdate(1 /*incremental*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
+    XPLMEndWeatherUpdate(g_pendingReplace ? 0 : 1 /*0: replaces all our previous records*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
+    if (g_pendingTodo.empty()) g_pendingReplace = false;
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued)", ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size());
     if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
@@ -749,7 +751,16 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // An empty slot now carries the base, top and type of the same slot in the nearest record that has a cloud there, with (almost) no
     // coverage, so towards the clear side the deck only thins out, at its own height.
     matchEmptyLayers(todo);
-    if (!full) {   // only what changed goes to X-Plane
+    // An airport record that is no longer wanted (the aircraft moved and the station list changed): X-Plane crashed twice right as
+    // WXPlane began removing records after a move (logs 2026-11-03 22:41 and 23:03, both with airport records to remove, both gone with
+    // no crash report before the first batch was through; an update that only removed location records went through). Such an update
+    // now replaces all of WXPlane's weather in one go instead (a non-incremental update, the way the plugin's records are cleared when it
+    // is switched off), so nothing is removed one record at a time.
+    bool replaceAll = false;
+    if (!full)
+        for (const auto& kv : g_recs)
+            if (kv.second.airport && !seen.count(kv.first)) { replaceAll = true; break; }
+    if (!full && !replaceAll) {   // only what changed goes to X-Plane
         std::vector<Todo> changed;
         for (auto& t : todo) {
             auto it = g_recs.find(t.key);
@@ -763,12 +774,14 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         todo.swap(changed);
     }
     std::vector<std::string> gone;
-    if (!full)
+    if (!full && !replaceAll)
         for (const auto& kv : g_recs)
             if (!seen.count(kv.first)) gone.push_back(kv.first);
 
     // Everything is queued; flushPending() (every 0.25 s) hands it to X-Plane a few records at a time.
-    if (full) g_recs.clear();
+    if (full || replaceAll) g_recs.clear();
+    g_pendingReplace = replaceAll;
+    if (replaceAll) logf("the station list changed (moved): all %zu records go to X-Plane as one replacing update, nothing removed one by one", todo.size());
     g_heldLevel.clear();
     {   // every update: the outline records follow in their own update once the rest is in (30 s after this one, at the earliest)
         std::vector<Todo> main;
