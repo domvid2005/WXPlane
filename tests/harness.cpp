@@ -580,15 +580,32 @@ int main() {
         float minVis = 1e9f, maxTop = 0, maxTurb = 0, maxPrecip = 0, radius = 0;
         for (size_t i = before; i < g_calls.size(); ++i) {
             const Call& c = g_calls[i];
-            if (c.airport || c.info.cloud_layers[2].cloud_type < 1.0f || c.info.cloud_layers[2].coverage <= 0.05f) continue;
+            int sl = -1;   // the storm layer: a real layer 3 km deep or more (its slot depends on the height bands, see matchEmptyLayers)
+            for (int k = 0; k < 3; ++k) if (c.info.cloud_layers[k].coverage > 0.05f && c.info.cloud_layers[k].cloud_type >= 1.0f && c.info.cloud_layers[k].alt_top - c.info.cloud_layers[k].alt_base >= 3000.0f) sl = k;
+            if (c.airport || sl < 0) continue;
             ++storms;
-            CHECK(c.info.cloud_layers[0].coverage < 0.05f);                 // station fog is not copied onto storms (an empty slot may carry a neighbour's height at 1 %)
-            if (c.info.cloud_layers[2].cloud_type >= 2.9f) ++heavy;
+            for (int k = 0; k < 3; ++k)                                     // station fog (a thin layer at the ground) is not copied onto storms
+                CHECK(!(c.info.cloud_layers[k].coverage > 0.05f && c.info.cloud_layers[k].alt_base < 600.0f && c.info.cloud_layers[k].alt_top - c.info.cloud_layers[k].alt_base < 300.0f));
+            if (c.info.cloud_layers[sl].cloud_type >= 2.9f) ++heavy;
             minVis = std::min(minVis, c.info.visibility);
-            maxTop = std::max(maxTop, c.info.cloud_layers[2].alt_top);
+            maxTop = std::max(maxTop, c.info.cloud_layers[sl].alt_top);
             maxPrecip = std::max(maxPrecip, c.info.precip_rate);
             radius = std::max(radius, c.info.radius_nm);
             for (int k = 0; k < XPLM_NUM_WIND_LAYERS; ++k) if (c.info.wind_layers[k].speed >= 0) maxTurb = std::max(maxTurb, c.info.wind_layers[k].turbulence);
+        }
+        {   // every record sends the same three layers in height order (no empty slot for X-Plane to drop and shift the rest down)
+            int bad = 0;
+            for (size_t i = before; i < g_calls.size(); ++i) {
+                const auto& L = g_calls[i].info.cloud_layers;
+                bool any = L[0].coverage > 0 || L[1].coverage > 0 || L[2].coverage > 0;
+                if (!any) continue;
+                if (!(L[0].coverage > 0 && L[1].coverage > 0 && L[2].coverage > 0 && L[0].alt_base <= L[1].alt_base && L[1].alt_base <= L[2].alt_base)) {   // (a storm may reach up through the layers above it, on purpose)
+                    if (bad < 4) std::printf("    %.2f %.0f-%.0f | %.2f %.0f-%.0f | %.2f %.0f-%.0f\n", L[0].coverage, L[0].alt_base, L[0].alt_top, L[1].coverage, L[1].alt_base, L[1].alt_top, L[2].coverage, L[2].alt_base, L[2].alt_top);
+                    ++bad;
+                }
+            }
+            std::printf("  records with misaligned cloud layers: %d\n", bad);
+            CHECK(bad == 0);
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);

@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
@@ -173,38 +174,79 @@ bool underStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon,
     return false;
 }
 
-// See the call in applyResult: empty cloud slots take the height of the nearest record's cloud in that slot (within 60 nm), with coverage
-// g_cfg.emptyLayerCoverage, so X-Plane's blend between a cloudy and a clear record does not slope the layer down to 0 m.
+// Cloud layers line up across all records (see the call in applyResult). X-Plane drops empty slots and moves the rest down (the read-back
+// showed our slot 1 deck as its layer 0), then blends layer 0 with layer 0 of the neighbouring record, layer 1 with layer 1 and so on.
+// So a record with fog + deck next to one with only the deck blended the fog into the deck, and a record whose deck sat in another slot
+// than its neighbour's blended two different layers: thin sloping sheets, seen from above as ribbons and snakes in clear air.
+// Here all real layers of all records are sorted into up to three height bands (the same for every record), each record's layers go into
+// its band's slot in height order, and a band a record has no cloud in gets a nearly empty layer (g_cfg.emptyLayerCoverage) at the height
+// of the nearest record that has one there. Every record then sends the same three layers in the same order, and between a cloudy and
+// a clear record a layer only thins out, at its own height.
 void matchEmptyLayers(std::vector<Todo>& todo) {
+    const int K = XPLM_NUM_CLOUD_LAYERS;
+    const float ph = (float)g_cfg.emptyLayerCoverage;
+    if (ph <= 0.0f || todo.empty()) return;
+    auto real = [](const XPLMWeatherInfoClouds_t& c) { return c.coverage > 0.05f && c.alt_top > c.alt_base; };
+    // 1) height bands: 1-D k-means of the layer bases, at most 3
+    std::vector<double> bases;
+    for (const auto& t : todo) for (int k = 0; k < K; ++k) if (real(t.rec.info.cloud_layers[k])) bases.push_back(t.rec.info.cloud_layers[k].alt_base);
+    if (bases.empty()) return;
+    std::sort(bases.begin(), bases.end());
+    int nb = 1;
+    for (size_t i = 1; i < bases.size(); ++i) if (bases[i] - bases[i - 1] > 300.0) ++nb;
+    nb = std::min(K, nb);
+    std::vector<double> cen(nb);
+    for (int b = 0; b < nb; ++b) cen[b] = bases[(size_t)((b + 0.5) / nb * bases.size())];
+    for (int it = 0; it < 20; ++it) {
+        std::vector<double> sum(nb, 0.0); std::vector<int> cnt(nb, 0);
+        for (double v : bases) { int bb = 0; for (int b = 1; b < nb; ++b) if (std::fabs(v - cen[b]) < std::fabs(v - cen[bb])) bb = b; sum[bb] += v; ++cnt[bb]; }
+        for (int b = 0; b < nb; ++b) if (cnt[b]) cen[b] = sum[b] / cnt[b];
+        std::sort(cen.begin(), cen.end());
+    }
+    // 2) each record's layers into band slots, in height order (two layers in one band: the upper one moves up a slot, if there is one)
     const size_t n = todo.size();
-    for (int k = 0; k < XPLM_NUM_CLOUD_LAYERS; ++k) {
-        std::vector<size_t> has;
-        for (size_t i = 0; i < n; ++i) {   // ground fog (a layer starting within 250 m of the ground) is local: not a height to copy
-            const XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
-            if (c.coverage > 0.05f && c.alt_base > todo[i].rec.elev + 250.0) has.push_back(i);
+    std::vector<std::array<bool, 3>> isReal(n);
+    for (size_t i = 0; i < n; ++i) {
+        XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
+        std::vector<XPLMWeatherInfoClouds_t> mine;
+        for (int k = 0; k < K; ++k) if (real(L[k])) mine.push_back(L[k]);
+        std::sort(mine.begin(), mine.end(), [](const XPLMWeatherInfoClouds_t& a, const XPLMWeatherInfoClouds_t& b) { return a.alt_base < b.alt_base; });
+        XPLMWeatherInfoClouds_t out[3] = {};
+        std::array<bool, 3> used = {false, false, false};
+        int next = 0;
+        for (size_t m = 0; m < mine.size(); ++m) {
+            int bb = 0;
+            for (int b = 1; b < nb; ++b) if (std::fabs(mine[m].alt_base - cen[b]) < std::fabs(mine[m].alt_base - cen[bb])) bb = b;
+            int slot = std::max(next, bb);
+            slot = std::min(slot, K - (int)(mine.size() - m));   // leave room for the layers still to come
+            out[slot] = mine[m]; used[slot] = true; next = slot + 1;
         }
-        if (has.empty()) continue;
+        for (int k = 0; k < K; ++k) L[k] = out[k];
+        isReal[i] = used;
+    }
+    // 3) a nearly empty layer in every slot without cloud: the height of the nearest record with a real layer in that slot
+    for (int k = 0; k < K; ++k) {
+        std::vector<size_t> has;
+        for (size_t i = 0; i < n; ++i) if (isReal[i][k]) has.push_back(i);
         for (size_t i = 0; i < n; ++i) {
-            XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
-            if (c.coverage > 0.0f) continue;
-            double bd = 60.0; size_t bj = n;
+            if (isReal[i][k]) continue;
+            XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
+            double bd = 1e18; size_t bj = n;
             for (size_t j : has) {
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
                 if (d < bd) { bd = d; bj = j; }
             }
-            if (bj == n) continue;
-            const XPLMWeatherInfoClouds_t& src = todo[bj].rec.info.cloud_layers[k];
-            // the empty slot must not cut through another layer of this record
-            bool clash = false;
-            for (int m = 0; m < XPLM_NUM_CLOUD_LAYERS; ++m) {
-                const XPLMWeatherInfoClouds_t& o = todo[i].rec.info.cloud_layers[m];
-                if (m != k && o.coverage > 0.0f && src.alt_base < o.alt_top && o.alt_base < src.alt_top) clash = true;
-            }
-            if (clash) continue;
-            c.cloud_type = src.cloud_type;
-            c.alt_base = src.alt_base;
-            c.alt_top = src.alt_top;
-            c.coverage = (float)g_cfg.emptyLayerCoverage;
+            float base, top, type;
+            if (bj < n) { base = todo[bj].rec.info.cloud_layers[k].alt_base; top = todo[bj].rec.info.cloud_layers[k].alt_top; type = todo[bj].rec.info.cloud_layers[k].cloud_type; }
+            else { base = (float)(k < nb ? cen[k] : cen[nb - 1] + 1500.0 * (k - nb + 1)); top = base + 600.0f; type = 1.0f; }
+            // keep the slots in height order and clear of this record's own layers
+            const float lo = k > 0 ? L[k - 1].alt_top + 20.0f : -1e9f;
+            float hi = 1e9f;
+            for (int m = k + 1; m < K; ++m) if (isReal[i][m]) { hi = L[m].alt_base - 20.0f; break; }
+            if (base < lo) { top += lo - base; base = lo; }
+            if (top > hi) { top = hi; if (base > top - 50.0f) base = top - 50.0f; }
+            if (base < lo || top <= base) { base = lo; top = lo + 50.0f; }   // squeezed: a thin sliver right above the layer below
+            L[k].cloud_type = type; L[k].alt_base = base; L[k].alt_top = top; L[k].coverage = ph;
         }
     }
 }
@@ -556,7 +598,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
                     if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
                     valFixes += wx::validateXp(x, false, &valNote);
-                    if (g_cfg.radar && res.radar.ok && insideStorm(res.radar.cells, latc, lonc, g_cfg.radarCellNm))
+                    if (g_cfg.radar && res.radar.ok && res.radar.natural)
+                        x.precip = 0.0f;   // natural picture: a tile only stands outside the radar's echoes, so no rain (a "-RA" blended in from a
+                                           // station drew pale-blue areas with 12 nm tile edges on the radar map, 2026-11-03)
+                    else if (g_cfg.radar && res.radar.ok && insideStorm(res.radar.cells, latc, lonc, g_cfg.radarCellNm))
                         x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, latc, lonc, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
                     if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
                     XPLMWeatherInfo_t info;
