@@ -203,7 +203,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         c.baseM = (float)(st.elevM + g.baseFtAgl * kFtToM);
         double thick;
         if (g.kind == 1) { c.type = 3.0f; thick = 6000; }
-        else if (g.kind == 2) { c.type = 3.0f; thick = 4000; }
+        else if (g.kind == 2) { c.type = 2.5f; thick = 4000; }   // TCU: towering cumulus, between cumulus and a thunderstorm (3 gave it full thunderstorm drafts)
         else if (g.baseFtAgl >= 20000) { c.type = 0.0f; thick = 1200; }
         else if ((g.baseFtAgl < 2000 && g.cover >= CloudGroup::BKN) || (g.cover == CloudGroup::OVC && g.baseFtAgl < 12000)) {
             // Very thin solid layers render as a black void from below, very thick ones as a dark slab from above: moderate depth.
