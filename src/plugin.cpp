@@ -586,6 +586,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     for (const auto& s : res.stations) fogNow = fogNow || wx::stationHasFog(s, g_cfg);
     if (fogNow) g_fogUntil = now + 1800;
     const bool anyFog = now < g_fogUntil;
+    int stationStorms = 0;                    // stations inside a storm that took its cloud
     std::map<std::string, wx::XpWx> baseWx;   // weather built per station, reused for storm cells
     std::map<std::string, float> stationRadius;
     int bumpCount = 0;
@@ -662,6 +663,22 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 x.precip = std::max(x.precip, std::min(1.0f, std::max(0.05f, nc->rateMmH / std::max(1.0f, (float)g_cfg.radarRainFullMmH))));
         } else if (stormHere)
             x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, s.lat, s.lon, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
+        if (stormHere && g_cfg.stormCloudsAtStations) {
+            // ...and its cloud too. The station kept only its METAR layers, so inside a storm deck its circle showed as a round hole in the
+            // tops (2026-11-04 screenshot, Ohio) and a hole in the map. The storm of the record it stands in is added to its own layers,
+            // the same way a storm record grows out of a station's deck; its visibility and surface wind stay the report's.
+            const wx::RadarCell* sc = res.radar.natural ? wx::naturalCellAt(res.radar, s.lat, s.lon) : nullptr;
+            if (!res.radar.natural) {
+                double best = std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * 0.8;
+                for (const auto& c : res.radar.cells) { const double d = wx::distNm(s.lat, s.lon, c.lat, c.lon); if (d < best) { best = d; sc = &c; } }
+            }
+            if (sc && sc->dbz >= g_cfg.radarMinDbz) {
+                const float vis = x.visM, wd = x.windDir, wm = x.windMs;
+                wx::applyStorm(x, *sc, g_cfg, s.elevM, s.lat);
+                x.visM = vis; x.windDir = wd; x.windMs = wm;
+                ++stationStorms;
+            }
+        }
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
         fillInfo(info, x);
@@ -1006,8 +1023,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         if (ms > 15.0) logf("building this update took %.0f ms on the sim's main thread", ms);
     }
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
-    logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer",
-         (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash);
+    logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer; %d station(s) inside a storm took its cloud",
+         (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash, stationStorms);
     logf("applied %d stations (%d ATIS, %d fog, %d with cirrus from the global model, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, cirrusCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
          reallyImmediate ? " [immediate: sim pauses while X-Plane rebuilds]" : " [fade-in]");

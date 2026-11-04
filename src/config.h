@@ -77,6 +77,7 @@ struct Config {
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
     bool smoothPressure = true;
+    bool stormCloudsAtStations = true; // a station inside a storm gets the storm cloud too (its circle was a hole in the storm deck)
     bool qnhAsSeaLevel = true;        // send the QNH as sea-level pressure (pressure_sl): X-Plane read it in pressure_alt as station pressure
     bool fillQnhAtSeaLevel = true;    // gap-fill and radar records give X-Plane their QNH calibrated at sea level, not at the nearest station's elevation (which jumps by
                                       // thousands of feet from tile to tile in the mountains, so the same QNH made a different pressure in each record)

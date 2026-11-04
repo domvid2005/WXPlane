@@ -313,10 +313,21 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
         out.dataTime = refl.refTime;
         if (oldTops) out.note = "echo-top download failed (" + topErr + "), reusing the last good tops" + " from " + std::to_string((now - lastTopsAt_) / 60) + " min ago";
         else if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
+        if (out.ok) { lastMrms_ = out; lastMrmsAt_ = now; lastMrmsLat_ = rq.lat; lastMrmsLon_ = rq.lon; }
         return out;
+    }
+    // Inside NOAA coverage a failed download used to fall straight through to RainViewer (log 2026-11-04, Ohio): its colour-decoded tiles read
+    // the same storms as 153 cumulonimbus cells at 40+ dBZ where MRMS had 7 a few minutes earlier, in blocky colour bands. The last MRMS
+    // picture is kept instead while it is under 20 minutes old and the aircraft is within 30 nm of where it was built.
+    const bool mrmsArea = !mrmsRegionsFor(rq.lat, rq.lon).empty();
+    if (mrmsArea && lastMrms_.ok && now - lastMrmsAt_ < 20 * 60 && distNm(rq.lat, rq.lon, lastMrmsLat_, lastMrmsLon_) < 30.0) {
+        RadarResult r = lastMrms_;
+        r.note = "MRMS download failed (" + lastErr + "), reusing the radar picture from " + std::to_string((now - lastMrmsAt_) / 60) + " min ago";
+        return r;
     }
     if (cfg.radarGlobal) {
         RadarResult g = fetchRainViewer(rq, now);
+        if (mrmsArea && !lastErr.empty()) g.note = "MRMS failed (" + lastErr + "), using RainViewer instead" + (g.note.empty() ? "" : "; " + g.note);
         if (g.ok || g.note.size()) return g;
     }
     out.ok = false;

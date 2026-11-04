@@ -75,6 +75,9 @@ private:
     std::time_t upTime_ = 0;
     double upLat_ = 0, upLon_ = 0;
     std::vector<AloftStation> fetchUpperAir(const FetchRequest& r, std::time_t now, std::string& note, const std::vector<Station>& known);
+    RadarResult lastMrms_;            // last MRMS result that worked, reused for a while when a download fails (worker thread only)
+    std::time_t lastMrmsAt_ = 0;
+    double lastMrmsLat_ = 0, lastMrmsLon_ = 0;
     GribField lastTops_;              // last echo-top grid that downloaded fine, reused when a later download fails (worker thread only)
     std::string lastTopsRegion_;
     std::time_t lastTopsAt_ = 0;      // when it was downloaded
