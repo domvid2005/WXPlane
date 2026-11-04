@@ -190,10 +190,10 @@ void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& sta
     if (qs.size() < 2) return;
     std::vector<unsigned char> keep(qs.size(), 1);
     for (size_t i = 0; i < qs.size(); ++i) {   // outliers against the median of the stations within 100 nm
-        std::vector<double> near;
-        for (const auto& o : qs) if (wx::distNm(qs[i].lat, qs[i].lon, o.lat, o.lon) <= 100.0) near.push_back(o.hpa);
-        std::sort(near.begin(), near.end());
-        if (near.size() >= 3 && std::fabs(qs[i].hpa - near[near.size() / 2]) > 4.0) keep[i] = 0;
+        std::vector<double> around;
+        for (const auto& o : qs) if (wx::distNm(qs[i].lat, qs[i].lon, o.lat, o.lon) <= 100.0) around.push_back(o.hpa);
+        std::sort(around.begin(), around.end());
+        if (around.size() >= 3 && std::fabs(qs[i].hpa - around[around.size() / 2]) > 4.0) keep[i] = 0;
     }
     const double sig = 50.0;
     auto field = [&](double lat, double lon, double& out) {
