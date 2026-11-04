@@ -1113,6 +1113,32 @@ void pushRegionWinds(const wx::XpWx& x) {
     XPLMSetDatavf(drS, sp, 0, XPLM_NUM_WIND_LAYERS);
     XPLMSetDatavf(drD, di, 0, XPLM_NUM_WIND_LAYERS);
     if (!reported) { reported = true; logf("writing winds aloft into the sim's region wind datarefs (every 20 s)"); }
+    // Temperatures aloft the same way (log 2026-11-04 13:29): X-Plane used our temperatures right at the airport, but a few miles away
+    // it drifted back to its own (-17..-21 C at FL180 where we send -14), and those patches of different temperature are patches of
+    // different pressure at the same height: the barometric altitude moved by hundreds of feet as the aircraft flew across them.
+    static XPLMDataRef drT = XPLMFindDataRef("sim/weather/region/temperatures_aloft_deg_c");
+    static bool tReported = false;
+    if (drT && XPLMCanWriteDataRef(drT) && x.tempProfile.size() >= 2 && g_drLevels) {
+        float lv[XPLM_NUM_TEMPERATURE_LAYERS], tc[XPLM_NUM_TEMPERATURE_LAYERS];
+        if (XPLMGetDatavf(g_drLevels, lv, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS) {
+            for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k) tc[k] = wx::profileTemp(x.tempProfile, lv[k]);
+            XPLMSetDatavf(drT, tc, 0, XPLM_NUM_TEMPERATURE_LAYERS);
+            if (!tReported) { tReported = true; logf("writing temperatures aloft into the sim's region temperature datarefs (every 20 s)"); }
+        }
+    } else if (!tReported && x.tempProfile.size() >= 2) {
+        tReported = true;
+        logf("region temperature datarefs are missing or read-only: not writing temperatures aloft there");
+    }
+}
+
+// Every 20 s, independent of the (much slower) weather watch: the profile for where the aircraft is now, so what the sim's region arrays
+// hold follows the aircraft in small steps instead of jumping every few minutes.
+void regionTick() {
+    if (!g_cfg.regionWinds || !g_haveLast || g_lastRes.stations.empty()) return;
+    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
+    wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
+    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, std::time(nullptr) < g_fogUntil);
+    pushRegionWinds(x);
 }
 
 void weatherWatch() {
@@ -1310,6 +1336,10 @@ float flightLoop(float, float, int, void*) {
                 g_watchOn = true; g_watchN = 0; g_watchAt = g_checkAt;
             }
         }
+    }
+    {
+        static Clock::time_point nextRegion{};
+        if (Clock::now() >= nextRegion) { nextRegion = Clock::now() + std::chrono::seconds(20); regionTick(); }
     }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();
