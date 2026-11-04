@@ -592,15 +592,17 @@ int main() {
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);
-        CHECK(storms >= 3 && storms <= 120);   // the intensity-outline records are not in this update (they follow in their own one)
+        const bool natural = g_logAll.find("radar: natural picture") != std::string::npos;
+        CHECK(natural);                           // the default since 2026-11
+        CHECK(storms >= 3 && storms <= 160);      // natural picture: radar_natural_max (150) rain and dry records
         CHECK(heavy >= 1);
         CHECK(minVis <= 800 && minVis >= 400);
         CHECK(maxTop > 8500 && maxTop < 13100);   // echo top ~12 km in the mock; the default top smoothing + centroid placement lower its lone peak       // echo top ~12 km from the mock product
         CHECK(maxPrecip >= 0.99f);
         CHECK(maxTurb > 0.8f);
-        CHECK(radius > 14.5 && radius < 17.0);   // 12 nm cells x 1.3 (inner-corner rim cells up to x1.05)
+        CHECK(radius > 4.0 && radius < 22.0);    // natural records: 0.9 x their square (at most 24 nm)
         // the intensity-outline records were held out of that update and follow in their own one (storm_level_delay_s = 1 here)
-        {
+        if (!natural) {
             const int endsBefore = g_end;
             const size_t callsBefore = g_calls.size();
             for (int i = 0; i < 300 && g_logAll.find("storm intensity outlines") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }

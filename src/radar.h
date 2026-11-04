@@ -26,6 +26,8 @@ struct RadarCell {
     float radiusScale = 1.0f;  // record radius multiplier (rim cells are smaller and vary, so the outline is lumpy, not a circle chain)
     float contourScale = 1.0f; // radius multiplier that keeps the record inside the storm outline (see addStormContour)
     float edge = 0;            // 0 = inside a cluster of storm blocks .. 1 = isolated / on the rim of one (see markStormEdges)
+    bool natural = false;      // a record of the natural picture (buildNaturalCells): its size is sizeNm, not the block size
+    float sizeNm = 0;          // side of the square the record stands for (natural records)
 };
 
 // Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
@@ -84,7 +86,18 @@ struct RadarResult {
     int holesFilled = 0;       // cells interpolated into enclosed holes
     int levelCells = 0;        // skin cells added along the inner intensity-level outlines
     std::vector<RadarCell> cells;
+    // natural picture: dry records (no rain, the station weather) between and around the rain, and the squares it covers. Gap-fill
+    // tiles are left out inside those squares, so the dry and rainy records alone decide where the rain ends.
+    bool natural = false;
+    std::vector<RadarCell> dryCells;
+    double rootNm = 24, cosRef = 1;
+    std::set<std::pair<long, long>> roots;
 };
+
+// Is this spot inside the area the natural picture covers (rain and dry records)? Always false without it.
+bool radarCovers(const RadarResult& r, double lat, double lon);
+// The rain record (natural picture) whose square holds this spot, or null.
+const RadarCell* naturalCellAt(const RadarResult& r, double lat, double lon);
 
 // Rain rate in mm/h for a reflectivity (Marshall-Palmer stratiform, convective relation above 40 dBZ).
 float rateFromDbz(float dbz);

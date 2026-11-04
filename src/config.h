@@ -66,6 +66,11 @@ struct Config {
     bool stormFillHoles = true;      // a block enclosed by storm cells but missing from the kept set (cap, weak echo, no echo) gets a cell interpolated from its neighbours
     double radarCellNm = 12;      // block size one storm record represents
     int radarMaxCells = 60;       // cap on storm records handed to X-Plane
+    // Natural radar picture (2026-11): instead of 12 nm blocks, the radar mosaic is smoothed, given a gentle random warp (stable between
+    // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
+    bool radarNatural = true;
+    int radarNaturalMax = 150;          // records the natural picture may use (rain and the dry records around it)
+    double radarNaturalFineNm = 3.0;    // smallest record near the aircraft (grows with distance, and when the budget runs short)
     double radarMinDbz = 20;      // ignore weaker echoes
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity

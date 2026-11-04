@@ -166,6 +166,13 @@ bool insideStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon
     return false;
 }
 
+// Is a measured (or hole-filled) storm block within reachNm? Rim, outline and intensity-level cells do not count.
+bool underStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon, double reachNm) {
+    for (const auto& c : cells)
+        if ((!c.synthetic || (!c.key.empty() && c.key[0] == 'H')) && wx::distNm(lat, lon, c.lat, c.lon) < reachNm) return true;
+    return false;
+}
+
 void sendRec(Todo& t) {
     if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &t.rec.info);
     else XPLMSetWeatherAtLocation(t.rec.lat, t.rec.lon, t.rec.elev, &t.rec.info);
@@ -411,7 +418,17 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
         valFixes += wx::validateXp(x, false, &valNote);
         baseWx[s.icao] = x;
-        if (g_cfg.radar && res.radar.ok && insideStorm(res.radar.cells, s.lat, s.lon, g_cfg.radarCellNm))   // a station inside a storm must not leave a round dry spot in the radar picture
+        // A station inside the storm area takes the radar's rain (if that is more than it reports). The station circle (about 11 nm) is
+        // drawn on top of the storm records, so a dry or "-RA" station inside a storm showed as a round beige or pale-blue hole in the radar
+        // picture (2026-11-03 screenshot at KOMA). Same reach as the gap-fill tiles the storm replaces, so where those go, stations follow.
+        const bool stormHere = g_cfg.radar && res.radar.ok &&
+            (res.radar.natural ? wx::radarCovers(res.radar, s.lat, s.lon)
+                               : underStorm(res.radar.cells, s.lat, s.lon, std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * 0.8));
+        if (stormHere && res.radar.natural) {
+            // natural picture: the rain of the record the station stands in (none if it stands in a dry one: then its own report)
+            if (const wx::RadarCell* nc = wx::naturalCellAt(res.radar, s.lat, s.lon))
+                x.precip = std::max(x.precip, std::min(1.0f, std::max(0.05f, nc->rateMmH / std::max(1.0f, (float)g_cfg.radarRainFullMmH))));
+        } else if (stormHere)
             x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, s.lat, s.lon, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
         XPLMWeatherInfo_t info;
@@ -424,6 +441,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             for (const auto& o : res.stations)
                 if (&o != &s) nn = std::min(nn, wx::distNm(s.lat, s.lon, o.lat, o.lon));
             info.radius_nm = (float)std::min(g_cfg.radiusNm, std::max(0.5, nn * g_cfg.stationRadiusFactor));
+            // Under a storm the station keeps a small circle (the airport still gets its own METAR), and the storm records around it
+            // decide the radar picture: a full-size station circle showed as one flat round blob of a single rain level in the storm.
+            if (stormHere) info.radius_nm = std::min(info.radius_nm, 5.0f);
         }
         stationRadius[s.icao] = info.radius_nm;
         if (x.fogLayerApplied) ++fogCount;
@@ -481,7 +501,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     }
                     auto rit = stationRadius.find(nearest->icao);
                     if (rit != stationRadius.end() && nd <= rit->second * 0.9) continue;   // inside the station's own circle
-                    if (g_cfg.radar && g_cfg.stormReplacesFill && res.radar.ok) {
+                    if (g_cfg.radar && res.radar.ok && res.radar.natural) {
+                        // the natural picture has its own rain and dry records here
+                        if (wx::radarCovers(res.radar, latc, lonc)) { ++fillUnderStorm; continue; }
+                    } else if (g_cfg.radar && g_cfg.stormReplacesFill && res.radar.ok) {
                         // A background tile inside a confirmed storm would blend its low deck (tops of 2-3 km) into the storm's 13 km tops, and X-Plane
                         // renders that as a sheer canyon through the storm. The storm cells cover this spot, so the tile is not needed. Rim cells (the faint
                         // outskirts) do not count: below them the deck stays.
@@ -579,7 +602,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             valFixes += wx::validateXp(x, true, &valNote);   // storms may overlap the station's layers on purpose; only sanity-checked
             XPLMWeatherInfo_t info;
             fillInfo(info, x);
-            info.radius_nm = (float)std::max(4.0, std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * c.radiusScale);
+            info.radius_nm = c.natural ? (float)std::max(1.2, c.sizeNm * 0.9)   // in proportion to its square, so neighbours split along the square edges
+                                       : (float)std::max(4.0, std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * c.radiusScale);
             Rec r;
             r.airport = false;
             r.lat = c.lat; r.lon = c.lon; r.elev = nearest->elevM;
@@ -588,6 +612,39 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const std::string key = "radar:" + c.key;
             seen[key] = true;
             ++stormCount;
+            auto it = g_recs.find(key);
+            if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
+            r.info.age = info.age;
+            todo.push_back({key, r});
+        }
+    }
+    // Natural picture: the dry records around and between the rain (the stations' blended weather, like a gap-fill tile, in the size of
+    // their square). They take the place of the gap-fill tiles there, so the rain ends where the radar's does, not on the 12 nm tile grid.
+    int dryCount = 0;
+    if (g_cfg.radar && res.radar.ok && res.radar.natural && !res.stations.empty()) {
+        for (const auto& c : res.radar.dryCells) {
+            const wx::Station* nearest = &res.stations[0];
+            double nd = 1e9;
+            for (const auto& st : res.stations) { const double d = wx::distNm(c.lat, c.lon, st.lat, st.lon); if (d < nd) { nd = d; nearest = &st; } }
+            auto rit = stationRadius.find(nearest->icao);
+            if (rit != stationRadius.end() && nd <= rit->second * 0.5 && c.sizeNm <= 6.0f) continue;   // a small square right at a station: the station record covers it
+            wx::Station syn = wx::blendAt(res.stations, c.lat, c.lon);
+            wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
+            if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
+            x.precip = 0.0f;   // the radar shows no rain here
+            valFixes += wx::validateXp(x, false, &valNote);
+            if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
+            XPLMWeatherInfo_t info;
+            fillInfo(info, x);
+            info.radius_nm = (float)std::max(1.2, c.sizeNm * 0.9);
+            Rec r;
+            r.airport = false;
+            r.lat = c.lat; r.lon = c.lon; r.elev = nearest->elevM;
+            r.info = info;
+            r.info.age = 0.0f;
+            const std::string key = "radar:" + c.key;
+            seen[key] = true;
+            ++dryCount;
             auto it = g_recs.find(key);
             if (!full && it != g_recs.end() && std::memcmp(&it->second.info, &r.info, sizeof r.info) == 0) continue;
             r.info.age = info.age;
@@ -629,6 +686,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         if (res.radar.ok) {
             float maxDbz = 0, maxTop = 0; int cb = 0;
             for (const auto& c : res.radar.cells) { maxDbz = std::max(maxDbz, c.dbz); maxTop = std::max(maxTop, c.topM); if (c.dbz >= 40) ++cb; }
+            if (res.radar.natural)
+                logf("radar: natural picture: %d rain records, %d dry records around them (radar_natural = 0 goes back to 12 nm blocks)%s", stormCount, dryCount,
+                     res.radar.note.empty() ? "" : (" - " + res.radar.note).c_str());
             logf("radar: %s, %d echo blocks, %d cells applied (%d at 40+ dBZ = cumulonimbus), strongest %.0f dBZ, highest echo top %.0f m%s%s; %d hole(s) interpolated, %d rim cell(s)",
                  res.radar.source.c_str(), res.radar.echoBlocks, stormCount, cb, maxDbz, maxTop,
                  res.radar.topsFromRadar ? ", echo tops from radar" : ", tops estimated", res.radar.note.empty() ? "" : (" (" + res.radar.note + ")").c_str(), res.radar.holesFilled, res.radar.rimCells);

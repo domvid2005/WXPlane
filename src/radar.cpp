@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <functional>
+#include <queue>
 #include <map>
 #include <sstream>
 
@@ -651,6 +653,261 @@ void markStormEdges(std::vector<RadarCell>& cells, double cellNm) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Natural radar picture.
+//
+// X-Plane gives every spot to (roughly) the nearest weather record, measured against each record's radius, so a picture made of equal
+// 12 nm blocks shows 12 nm stair-steps wherever the rain changes. Here the mosaic itself is used instead of the blocks:
+//  1. it is put on a 1 nm raster (the strongest of a few samples per cell), and lightly smoothed (Gaussian, about 1.5 nm), which keeps
+//     the real shapes of the echoes but takes out single-pixel speckle;
+//  2. it is warped a little with smooth random noise fixed to the ground (each spot reads the radar from up to ~2.5 nm away, and the
+//     value moves by up to ~2 dBZ), so edges wander like real echoes instead of running along record rows, and stay put between updates;
+//  3. squares on a fixed grid (24 nm) are split into four, again and again, wherever the picture inside changes intensity class (dry,
+//     20, 30, 40, 50 dBZ): small records along every edge and every step inside a storm, big ones where it is all the same. Near the
+//     aircraft down to radar_natural_fine_nm, further out coarser, and coarser still if the budget (radar_natural_max) runs short;
+//  4. every square becomes one record whose radius is in proportion to its size, so between neighbours the split runs along the square
+//     edges (which follow the warped picture at that resolution). Squares without rain become dry records: around the rain they take the
+//     place of the gap-fill tiles, so the rain's edge is drawn by the fine records, not by the 12 nm tile grid.
+namespace {
+double fbm(double X, double Y, double scaleNm, int salt) {   // smooth noise -1..1 on absolute nm coordinates, two octaves
+    auto lat = [&](double x, double y, double sc, int s) {
+        const double u = x / sc + s * 17.31, v = y / sc - s * 9.73;
+        const long iu = (long)std::floor(u), iv = (long)std::floor(v);
+        const double fu = u - iu, fv = v - iv;
+        auto val = [&](long a, long b) {   // integer hash (this runs a few hundred thousand times per update)
+            uint32_t h = (uint32_t)a * 0x8da6b343u ^ (uint32_t)b * 0xd8163841u ^ (uint32_t)(s + 101) * 0xcb1ab31fu;
+            h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+            return (double)(h % 20001u) / 10000.0 - 1.0;
+        };
+        const double su = fu * fu * (3 - 2 * fu), sv = fv * fv * (3 - 2 * fv);
+        const double t = val(iu, iv) * (1 - su) + val(iu + 1, iv) * su, b = val(iu, iv + 1) * (1 - su) + val(iu + 1, iv + 1) * su;
+        return t * (1 - sv) + b * sv;
+    };
+    return (lat(X, Y, scaleNm, salt) * 0.67 + lat(X, Y, scaleNm * 0.45, salt + 5) * 0.33);
+}
+}   // namespace
+
+static void buildNaturalCells(const GribField& refl, const GribField* tops, double acLat, double acLon, const Config& cfg, RadarResult& res) {
+    res.natural = true;
+    const double R = std::max(30.0, cfg.radarRangeNm);
+    const double cosRef = std::max(0.2, std::cos(std::round(acLat) * kPi / 180.0));   // fixed per whole degree, so the grid stays put
+    res.cosRef = cosRef;
+    const double root = 24.0;
+    res.rootNm = root;
+    const float minDbz = (float)cfg.radarMinDbz;
+    auto toX = [&](double lon) { return lon * 60.0 * cosRef; };
+    auto toY = [&](double lat) { return lat * 60.0; };
+    auto toLat = [&](double Y) { return Y / 60.0; };
+    auto toLon = [&](double X) { return X / (60.0 * cosRef); };
+    // 1) raster, 1 nm, covering every root square that touches the radar range (plus one root of margin for the warp and the dry ring)
+    const double g = 1.0;
+    const double ax = toX(acLon), ay = toY(acLat);
+    const long rx0 = (long)std::floor((ax - R) / root) - 1, rx1 = (long)std::floor((ax + R) / root) + 1;
+    const long ry0 = (long)std::floor((ay - R) / root) - 1, ry1 = (long)std::floor((ay + R) / root) + 1;
+    const double X0 = rx0 * root, Y0 = ry0 * root;
+    const int W = (int)std::lround((rx1 - rx0 + 1) * root / g), H = (int)std::lround((ry1 - ry0 + 1) * root / g);
+    std::vector<float> Z((size_t)W * H, 0.0f), T((size_t)W * H, 0.0f);
+    for (int j = 0; j < H; ++j)
+        for (int i = 0; i < W; ++i) {
+            const double X = X0 + (i + 0.5) * g, Y = Y0 + (j + 0.5) * g;
+            const double lat = toLat(Y), lon = toLon(X);
+            if (distNm(acLat, acLon, lat, lon) > R) continue;
+            float best = 0, tb = 0;
+            for (int q = 0; q < 4; ++q) {
+                const double la = toLat(Y + ((q & 1) ? 0.25 : -0.25) * g), lo = toLon(X + ((q & 2) ? 0.25 : -0.25) * g);
+                const float v = refl.at(la, lo);
+                if (v >= minDbz - 10.0f && v < 90.0f) best = std::max(best, std::min(v, 70.0f));
+                if (tops) { const float t = tops->at(la, lo); if (t > 0.5f && t < 30.0f) tb = std::max(tb, t); }
+            }
+            Z[(size_t)j * W + i] = best;
+            T[(size_t)j * W + i] = tb;
+        }
+    // Gaussian smoothing (separable, sigma 1.5 nm). Tops: the largest top within 2 nm (a top is a maximum, smoothing would only lower it).
+    // Cores keep their strength: the result is never more than 3 dBZ under the strongest raw value next to it (a 60 dBZ core of 2 nm
+    // would otherwise come out at 50), while speckle and ragged pixel edges at the weak end are smoothed away.
+    std::vector<float> Zraw = Z;
+    {
+        const int rad = 4;
+        double k[2 * rad + 1], ks = 0;
+        for (int d = -rad; d <= rad; ++d) { k[d + rad] = std::exp(-(d * d) / (2.0 * 1.5 * 1.5)); ks += k[d + rad]; }
+        std::vector<float> tmp((size_t)W * H, 0.0f);
+        for (int j = 0; j < H; ++j) for (int i = 0; i < W; ++i) {
+            double s = 0;
+            for (int d = -rad; d <= rad; ++d) { const int ii = std::min(W - 1, std::max(0, i + d)); s += k[d + rad] * Z[(size_t)j * W + ii]; }
+            tmp[(size_t)j * W + i] = (float)(s / ks);
+        }
+        for (int j = 0; j < H; ++j) for (int i = 0; i < W; ++i) {
+            double s = 0;
+            for (int d = -rad; d <= rad; ++d) { const int jj = std::min(H - 1, std::max(0, j + d)); s += k[d + rad] * tmp[(size_t)jj * W + i]; }
+            Z[(size_t)j * W + i] = (float)(s / ks);
+        }
+        for (int j = 0; j < H; ++j) for (int i = 0; i < W; ++i) {
+            float m = 0;
+            for (int dj = -1; dj <= 1; ++dj) for (int di = -1; di <= 1; ++di) {
+                const int ii = i + di, jj = j + dj;
+                if (ii >= 0 && jj >= 0 && ii < W && jj < H) m = std::max(m, Zraw[(size_t)jj * W + ii]);
+            }
+            float& z = Z[(size_t)j * W + i];
+            if (m - 2.0f >= 35.0f) z = std::max(z, m - 2.0f);
+        }
+        std::vector<float> t2((size_t)W * H, 0.0f);
+        for (int j = 0; j < H; ++j) for (int i = 0; i < W; ++i) {
+            float m = 0;
+            for (int dj = -2; dj <= 2; ++dj) for (int di = -2; di <= 2; ++di) {
+                const int ii = i + di, jj = j + dj;
+                if (ii >= 0 && jj >= 0 && ii < W && jj < H) m = std::max(m, T[(size_t)jj * W + ii]);
+            }
+            t2[(size_t)j * W + i] = m;
+        }
+        T.swap(t2);
+    }
+    auto bil = [&](const std::vector<float>& A, double X, double Y) {
+        const double u = (X - X0) / g - 0.5, v = (Y - Y0) / g - 0.5;
+        const int i = (int)std::floor(u), j = (int)std::floor(v);
+        if (i < 0 || j < 0 || i + 1 >= W || j + 1 >= H) return 0.0;
+        const double fu = u - i, fv = v - j;
+        return (A[(size_t)j * W + i] * (1 - fu) + A[(size_t)j * W + i + 1] * fu) * (1 - fv) +
+               (A[(size_t)(j + 1) * W + i] * (1 - fu) + A[(size_t)(j + 1) * W + i + 1] * fu) * fv;
+    };
+    // 2) the warped picture
+    auto Zn = [&](double X, double Y) {
+        const double wx = 2.5 * fbm(X, Y, 9.0, 1), wy = 2.5 * fbm(X, Y, 9.0, 2);
+        const double z = bil(Z, X + wx, Y + wy);
+        if (z < 5.0) return 0.0;
+        return z + 2.0 * fbm(X, Y, 6.0, 3);
+    };
+    const double levels[4] = {minDbz, 30.0, 40.0, 50.0};
+    auto cls = [&](double z) { int c = 0; for (double L : levels) if (z >= L) ++c; return c; };
+    // which root squares are used: those with rain, and the ring around them (dry records there replace the gap-fill tiles)
+    std::set<std::pair<long, long>> wet;
+    for (long ry = ry0; ry <= ry1; ++ry)
+        for (long rx = rx0; rx <= rx1; ++rx) {
+            bool any = false;
+            for (double y = 0.5; y < root && !any; y += 1.0)
+                for (double x = 0.5; x < root && !any; x += 1.0)
+                    if (Zn(rx * root + x, ry * root + y) >= minDbz) any = true;
+            if (any) wet.insert({rx, ry});
+        }
+    std::set<std::pair<long, long>> used;
+    for (const auto& w : wet)
+        for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+            const long rx = w.first + dx, ry = w.second + dy;
+            const double cx = (rx + 0.5) * root, cy = (ry + 0.5) * root;
+            if (distNm(acLat, acLon, toLat(cy), toLon(cx)) > R + root) continue;
+            used.insert({rx, ry});
+        }
+    // 3) split the squares, the most useful split first: a square whose picture is mixed (more than one intensity class) is split into
+    // four; priority is its size, weighted down with distance (an edge close to the aircraft matters most), until the budget is used.
+    struct Leaf { double X, Y, s; double z; int c; float frac; bool mixed; };
+    auto measure = [&](double X, double Y, double s) {
+        const double cx = X + s / 2, cy = Y + s / 2;
+        const int n = std::max(4, std::min(16, (int)std::lround(s / 1.0)));
+        const double st = s / n;
+        int c0 = -1; bool mixed = false; double sum = 0, mx = 0; int wetN = 0, cnt = 0;
+        int cc[5] = {0, 0, 0, 0, 0}; double cs[5] = {0, 0, 0, 0, 0};
+        for (int j = 0; j < n; ++j) for (int i = 0; i < n; ++i) {
+            const double z = Zn(X + (i + 0.5) * st, Y + (j + 0.5) * st);
+            const int c = cls(z);
+            if (c0 < 0) c0 = c; else if (c != c0) mixed = true;
+            sum += z; mx = std::max(mx, z); ++cnt; if (c > 0) ++wetN;
+            ++cc[c]; cs[c] += z;
+        }
+        // a uniform square lies between its mean and its strongest spot (it stays in its class). A mixed one takes the value at its
+        // centre, unless its strongest part fills a third of it: then that part's mean, so a small core is not lost in a bigger square
+        double zc = 0.5 * (sum / cnt + mx);
+        if (mixed) {
+            zc = Zn(cx, cy);
+            for (int c = 4; c > 0; --c) if (cc[c] > 0) { if (cc[c] * 3 >= cnt) zc = std::max(zc, cs[c] / cc[c]); break; }
+        }
+        return Leaf{cx, cy, s, zc, cls(zc), (float)wetN / (float)cnt, mixed};
+    };
+    const double fine = std::max(1.5, cfg.radarNaturalFineNm);
+    auto prio = [&](const Leaf& L) {
+        if (!L.mixed || L.s / 2 < fine - 1e-6) return -1.0;
+        const double d = distNm(acLat, acLon, toLat(L.Y), toLon(L.X));
+        return L.s / (1.0 + std::pow(d / 30.0, 1.5));
+    };
+    std::vector<Leaf> leaves;
+    for (const auto& r : used) leaves.push_back(measure(r.first * root, r.second * root, root));
+    using QE = std::pair<double, size_t>;
+    std::priority_queue<QE> pq;
+    for (size_t k = 0; k < leaves.size(); ++k) { const double p = prio(leaves[k]); if (p > 0) pq.push({p, k}); }
+    std::vector<unsigned char> gone(leaves.size(), 0);
+    int count = (int)leaves.size();
+    while (!pq.empty() && count + 3 <= cfg.radarNaturalMax) {
+        const size_t k = pq.top().second; pq.pop();
+        const Leaf L = leaves[k];
+        gone[k] = 1;
+        const double h = L.s / 2, X = L.X - h, Y = L.Y - h;
+        for (int q = 0; q < 4; ++q) {
+            leaves.push_back(measure(X + (q & 1) * h, Y + (q >> 1) * h, h));
+            gone.push_back(0);
+            const double p = prio(leaves.back());
+            if (p > 0) pq.push({p, leaves.size() - 1});
+        }
+        count += 3;
+    }
+    { std::vector<Leaf> keep; for (size_t k = 0; k < leaves.size(); ++k) if (!gone[k]) keep.push_back(leaves[k]); leaves.swap(keep); }
+    if ((int)leaves.size() > cfg.radarNaturalMax) res.note += res.note.empty() ? "natural picture over budget" : "; natural picture over budget";
+    // 4) records
+    const float step = (float)std::max(50.0, cfg.stormTopStepM);
+    for (const auto& L : leaves) {
+        RadarCell c;
+        c.natural = true;
+        c.sizeNm = (float)L.s;
+        {   // a fixed small offset per record (up to 18% of its size), so the splits between records do not run along straight rows
+            const unsigned hh = hashStr(std::to_string((long)std::floor(L.X / L.s)) + "," + std::to_string((long)std::floor(L.Y / L.s)) + "s" + std::to_string((int)std::lround(L.s * 4)), 29);
+            c.lat = toLat(L.Y + (unit(hh, 1) - 0.5) * 0.36 * L.s); c.lon = toLon(L.X + (unit(hh, 2) - 0.5) * 0.36 * L.s);
+        }
+        c.distNm = distNm(acLat, acLon, c.lat, c.lon);
+        char key[64];
+        std::snprintf(key, sizeof key, "%c%ld:%ld:%d", L.c > 0 ? 'N' : 'D', (long)std::floor(L.X / L.s), (long)std::floor(L.Y / L.s), (int)std::lround(L.s * 4));
+        c.key = key;
+        if (L.c == 0) { res.dryCells.push_back(c); continue; }
+        c.dbzFine = (float)std::round(std::max((double)minDbz, std::min(70.0, L.z)));
+        c.dbz = std::max(5.0f, std::round(c.dbzFine / 5.0f) * 5.0f);
+        c.rateMmH = rateFromDbz(c.dbzFine);
+        c.frac = std::max(0.25f, std::round(clampf(L.frac, 0.0f, 1.0f) * 4.0f) / 4.0f);
+        // top: the highest measured top in the square, else the estimate for the reflectivity (varied a little per record)
+        float t = 0;
+        for (double dy = -0.4; dy <= 0.41; dy += 0.2) for (double dx = -0.4; dx <= 0.41; dx += 0.2) t = std::max(t, (float)bil(T, L.X + dx * L.s, L.Y + dy * L.s));
+        c.topKnown = t > 0.5f;
+        if (c.topKnown) c.topM = std::round(t * 1000.0f / step) * step;
+        else {
+            const double v = unit(hashStr(c.key, 13), 1) * 2.0 - 1.0;
+            c.topM = std::max(3000.0f, std::round((estimateTopM(c.dbz, c.lat) + (float)(v * cfg.stormTopVariationM)) / step) * step);
+        }
+        // rim: how much dry ground there is around it (at a square's width, at least 3 nm)
+        int dry = 0;
+        const double rr = std::max(3.0, L.s);
+        for (int k = 0; k < 8; ++k) {
+            const double a = k * kPi / 4.0;
+            if (cls(Zn(L.X + rr * std::cos(a), L.Y + rr * std::sin(a))) == 0) ++dry;
+        }
+        c.edge = clampf(dry / 5.0f, 0.0f, 1.0f);
+        res.cells.push_back(c);
+    }
+    res.roots = used;
+    if (cfg.stormSmoothTops) limitStormTopSlope(res.cells, cfg.radarCellNm, cfg.stormTopMaxDropM, step);
+}
+
+bool radarCovers(const RadarResult& r, double lat, double lon) {
+    if (!r.natural || r.roots.empty()) return false;
+    const long rx = (long)std::floor(lon * 60.0 * r.cosRef / r.rootNm), ry = (long)std::floor(lat * 60.0 / r.rootNm);
+    return r.roots.count({rx, ry}) > 0;
+}
+
+const RadarCell* naturalCellAt(const RadarResult& r, double lat, double lon) {
+    if (!r.natural) return nullptr;
+    const double X = lon * 60.0 * r.cosRef, Y = lat * 60.0;
+    for (const auto& c : r.cells) {
+        if (!c.natural) continue;
+        const double cx = c.lon * 60.0 * r.cosRef, cy = c.lat * 60.0, h = c.sizeNm * 0.5;
+        if (std::fabs(X - cx) <= h && std::fabs(Y - cy) <= h) return &c;
+    }
+    return nullptr;
+}
+
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
                             const std::set<std::string>* prev) {
     RadarResult res;
@@ -724,6 +981,12 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
         all.push_back(c);
     }
     res.echoBlocks = (int)all.size();
+    if (cfg.radarNatural) {
+        buildNaturalCells(refl, tops, lat, lon, cfg, res);
+        res.ok = true;
+        res.topsFromRadar = tops != nullptr;
+        return res;
+    }
     // Keep the most relevant: close and intense first.
     std::set<std::string> prevKeys = prev ? *prev : std::set<std::string>();
     auto score = [&](const RadarCell& c) { return c.distNm - 2.0 * (c.dbz - 20.0) - (prevKeys.count(c.key) ? 25.0 : 0.0); };

@@ -493,7 +493,27 @@ int main() {
         for (int j = 40; j < 60; ++j) for (int i = 40; i < 60; ++i) { refl.v[(size_t)j * 100 + i] = 50.0f; tops.v[(size_t)j * 100 + i] = 12.0f; }
         for (int j = 5; j < 15; ++j) for (int i = 5; i < 15; ++i) refl.v[(size_t)j * 100 + i] = 25.0f;
         for (int j = 80; j < 90; ++j) for (int i = 80; i < 90; ++i) refl.v[(size_t)j * 100 + i] = 12.0f;   // below threshold
-        Config rc; rc.stormRim = false; rc.stormContour = false;
+        {   // natural picture (the default): fine records along the edges, dry ones around, stable between runs
+            Config nc; nc.radarRangeNm = 100; nc.radarMinDbz = 20;
+            RadarResult n1 = buildRadarCells(refl, &tops, 38.0, -98.0, nc), n2 = buildRadarCells(refl, &tops, 38.0, -98.0, nc);
+            CHECK(n1.ok && n1.natural && !n1.cells.empty() && !n1.dryCells.empty());
+            CHECK((int)(n1.cells.size() + n1.dryCells.size()) <= nc.radarNaturalMax);
+            bool allNat = true, same = n1.cells.size() == n2.cells.size(); float mx = 0, minSize = 99;
+            for (size_t i = 0; i < n1.cells.size(); ++i) {
+                allNat = allNat && n1.cells[i].natural && n1.cells[i].dbzFine >= 20;
+                mx = std::max(mx, n1.cells[i].dbzFine); minSize = std::min(minSize, n1.cells[i].sizeNm);
+                if (same) same = n1.cells[i].key == n2.cells[i].key && n1.cells[i].dbzFine == n2.cells[i].dbzFine;
+            }
+            CHECK(allNat && same);
+            CHECK(mx >= 46 && mx <= 52);                     // the 50 dBZ core keeps its strength
+            CHECK(minSize <= 3.01f);                         // fine records near the aircraft
+            const RadarCell* core = naturalCellAt(n1, 38.05, -98.05);
+            CHECK(core && core->dbzFine >= 45 && core->topKnown && core->topM >= 11000);
+            CHECK(radarCovers(n1, 38.05, -98.05) && !radarCovers(n1, 36.0, -98.0));
+            CHECK(naturalCellAt(n1, 37.65, -97.65) == nullptr);   // the 12 dBZ patch is no rain
+            std::printf("  natural picture: %zu rain + %zu dry records, strongest %.0f dBZ, smallest %.1f nm\n", n1.cells.size(), n1.dryCells.size(), mx, minSize);
+        }
+        Config rc; rc.stormRim = false; rc.stormContour = false; rc.radarNatural = false;
         rc.radarCellNm = 10; rc.radarRangeNm = 100; rc.radarMaxCells = 100; rc.radarMinDbz = 20;
         RadarResult rr = buildRadarCells(refl, &tops, 38.0, -98.0, rc);
         CHECK(rr.ok && rr.topsFromRadar && rr.cells.size() >= 3 && rr.cells.size() <= 12);
@@ -559,7 +579,7 @@ int main() {
         {
             GribField r2 = refl;
             for (int j = 5; j < 15; ++j) for (int i = 5; i < 15; ++i) r2.v[(size_t)j * 100 + i] = 18.0f;
-            Config hc; hc.stormRim = false; hc.stormContour = false; hc.radarCellNm = 10; hc.radarRangeNm = 100; hc.radarMaxCells = 100; hc.radarMinDbz = 20;
+            Config hc; hc.radarNatural = false; hc.stormRim = false; hc.stormContour = false; hc.radarCellNm = 10; hc.radarRangeNm = 100; hc.radarMaxCells = 100; hc.radarMinDbz = 20;
             RadarResult fresh = buildRadarCells(r2, nullptr, 38.0, -98.0, hc, nullptr);
             std::set<std::string> prevKeys; for (auto& c : rr.cells) prevKeys.insert(c.key);
             RadarResult kept = buildRadarCells(r2, nullptr, 38.0, -98.0, hc, &prevKeys);

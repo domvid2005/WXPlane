@@ -96,6 +96,9 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_rim") c.stormRim = toBool(v);
         else if (k == "storm_contour") c.stormContour = toBool(v);
         else if (k == "storm_level_contours") c.stormLevelContours = toBool(v);
+        else if (k == "radar_natural") c.radarNatural = toBool(v);
+        else if (k == "radar_natural_max") c.radarNaturalMax = (int)(d < 30 ? 30 : (d > 400 ? 400 : d));
+        else if (k == "radar_natural_fine_nm") c.radarNaturalFineNm = d < 1.5 ? 1.5 : (d > 12 ? 12 : d);
         else if (k == "storm_level_delay_s") c.stormLevelDelayS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "fill_stagger") c.fillStagger = toBool(v);
         else if (k == "storm_top_max_drop_m") c.stormTopMaxDropM = d < 0 ? 0 : (d > 20000 ? 20000 : d);
@@ -197,6 +200,9 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"
+      << "radar_natural = " << (c.radarNatural ? 1 : 0) << "\n"
+      << "radar_natural_max = " << c.radarNaturalMax << "\n"
+      << "radar_natural_fine_nm = " << c.radarNaturalFineNm << "\n"
       << "fill_gaps = " << (c.fillGaps ? 1 : 0) << "\n"
       << "fill_stagger = " << (c.fillStagger ? 1 : 0) << "\n"
       << "fill_range_nm = " << c.fillRangeNm << "\n"
