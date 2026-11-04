@@ -486,10 +486,12 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                         // renders that as a sheer canyon through the storm. The storm cells cover this spot, so the tile is not needed. Rim cells (the faint
                         // outskirts) do not count: below them the deck stays.
                         bool under = false;
-                        // Only tall storms (top 6 km or more): under light, low echoes the background deck is the better cloud.
+                        // Every storm, light or tall (2026-11-03): a tile left inside an area of light rain either carries the rain or not, and both
+                        // ways the rain's edge on X-Plane's radar map then runs along the 12 nm tile grid (the stair-steps in the screenshots). The
+                        // storm records carry the station's deck as well, so the cloud stays; only intensity-outline and rim cells do not count.
                         const double reach = std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * 0.8;
                         for (const auto& rc : res.radar.cells)
-                            if ((!rc.synthetic || (!rc.key.empty() && rc.key[0] != 'Q' && rc.key[0] != 'C')) && rc.topM >= 6000.0f) { if (wx::distNm(latc, lonc, rc.lat, rc.lon) < reach) { under = true; break; } }
+                            if (!rc.synthetic || (!rc.key.empty() && rc.key[0] == 'H')) { if (wx::distNm(latc, lonc, rc.lat, rc.lon) < reach) { under = true; break; } }
                         if (under) { ++fillUnderStorm; continue; }
                     }
                     wx::Station syn = wx::blendAt(res.stations, latc, lonc);
