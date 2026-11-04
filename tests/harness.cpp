@@ -457,6 +457,7 @@ int main() {
         CHECK(i.cloud_layers[0].cloud_type == 1.0f && i.cloud_layers[0].coverage == 1.0f);
         CHECK(i.cloud_layers[0].alt_base < 410 && i.cloud_layers[0].alt_top > 520 && i.cloud_layers[0].alt_top < 535); // VV001: fog layer 120 m deep (minimum), from the 407 m field
         CHECK(i.cloud_layers[1].coverage < 0.05f && i.cloud_layers[2].coverage < 0.05f);   // (an empty slot may carry a neighbour's height at 1 %)
+        std::printf("  KICT QNH sent: %.1f hPa\n", i.pressure_alt / 100.0);
         CHECK(i.pressure_alt > 101900 && i.pressure_alt < 102000);        // ATIS altimeter 30.11 overrides METAR 30.10
         CHECK(i.max_altitude_msl_ft == 60000 && i.radius_nm >= 0.5 && i.radius_nm <= 30); // carries aloft data, so it reaches cruise levels
         CHECK(i.wind_layers[0].speed == 0 && i.wind_layers[1].speed > 0);
@@ -622,6 +623,27 @@ int main() {
                 std::fprintf(f, "%.5f %.5f %.3f %.2f %.3f\n", c.lat, c.lon, c.info.radius_nm, cov, c.info.precip_rate);
             }
             std::fclose(f);
+        }
+        {   // every record carries the temperature profile (a record without one falls back to X-Plane's own temperatures there)
+            int with = 0, without = 0;
+            for (size_t i = before; i < g_calls.size(); ++i) (g_calls[i].info.temp_layers[6] > -273.0f ? with : without)++;
+            std::printf("  records with temperatures aloft: %d, without: %d\n", with, without);
+            CHECK(without == 0);
+            double worst = 0;   // the pressure field is smooth: no QNH step between nearby records (altitude hunting)
+            for (size_t i = before; i < g_calls.size(); ++i)
+                for (size_t j = i + 1; j < g_calls.size(); ++j) {
+                    const Call& a = g_calls[i]; const Call& b = g_calls[j];
+                    auto isOld = [](const Call& c) {   // KOLD's and KFAKE's own (location) records keep their QNH within 2 hPa of the field
+                        return (std::fabs(c.lat - 37.9) < 0.01 && std::fabs(c.lon + 97.9) < 0.01) || (std::fabs(c.lat - 37.2) < 0.01 && std::fabs(c.lon + 97.1) < 0.01); };
+                    if (a.airport || b.airport || a.lat == 0 || b.lat == 0 || isOld(a) || isOld(b)) continue;
+                    const double dn = std::hypot((a.lat - b.lat) * 60.0, (a.lon - b.lon) * 60.0 * std::cos(a.lat * 3.14159265 / 180.0));
+                    if (dn < 15.0 && std::fabs(a.info.pressure_alt - b.info.pressure_alt) / 100.0 > worst) {
+                        worst = std::fabs(a.info.pressure_alt - b.info.pressure_alt) / 100.0;
+                        if (worst > 1.0) std::printf("    %.3f,%.3f %.1f  vs  %.3f,%.3f %.1f\n", a.lat, a.lon, a.info.pressure_alt / 100, b.lat, b.lon, b.info.pressure_alt / 100);
+                    }
+                }
+            std::printf("  largest QNH difference between records within 15 nm: %.2f hPa\n", worst);
+            CHECK(worst < 1.0);
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);

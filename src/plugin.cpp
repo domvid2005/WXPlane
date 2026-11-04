@@ -175,6 +175,52 @@ bool underStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon,
     return false;
 }
 
+// Altitude hunting (2026-11-04, Salt Lake City): every gap-fill, dry and storm record carried the QNH of its NEAREST station, so the
+// pressure field was a patchwork of the station values, with steps of several hPa where two records met. Around mountains the stations'
+// altimeter settings differ a lot (they are reduced to sea level from very different heights), and each hPa is about 27 ft, so crossing
+// record edges moved the barometric altitude up and down by hundreds of feet within a few miles, and the autopilot chased it.
+// Now every record takes a smooth pressure field: a Gaussian-weighted mean (sigma 50 nm) of the station QNHs, with stations more than
+// 4 hPa off the local median left out of it. A station's own record keeps its QNH within 2 hPa of that field (so the altimeter setting at
+// the field stays close to the ATIS), never more.
+void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& stations) {
+    if (!g_cfg.smoothPressure) return;
+    struct Q { double lat, lon, hpa; };
+    std::vector<Q> qs;
+    for (const auto& s : stations) if (s.report.hasAltim && s.report.altimHpa > 850 && s.report.altimHpa < 1090) qs.push_back({s.lat, s.lon, s.report.altimHpa});
+    if (qs.size() < 2) return;
+    std::vector<unsigned char> keep(qs.size(), 1);
+    for (size_t i = 0; i < qs.size(); ++i) {   // outliers against the median of the stations within 100 nm
+        std::vector<double> near;
+        for (const auto& o : qs) if (wx::distNm(qs[i].lat, qs[i].lon, o.lat, o.lon) <= 100.0) near.push_back(o.hpa);
+        std::sort(near.begin(), near.end());
+        if (near.size() >= 3 && std::fabs(qs[i].hpa - near[near.size() / 2]) > 4.0) keep[i] = 0;
+    }
+    const double sig = 50.0;
+    auto field = [&](double lat, double lon, double& out) {
+        double sw = 0, sv = 0;
+        for (size_t i = 0; i < qs.size(); ++i) {
+            if (!keep[i]) continue;
+            const double d = wx::distNm(lat, lon, qs[i].lat, qs[i].lon);
+            const double w = std::exp(-d * d / (2.0 * sig * sig)) + 1e-9 / (1.0 + d);   // far from all stations: the nearest still counts a little
+            sw += w; sv += w * qs[i].hpa;
+        }
+        if (sw <= 0) return false;
+        out = sv / sw; return true;
+    };
+    for (auto& t : todo) {
+        XPLMWeatherInfo_t& in = t.rec.info;
+        if (!(in.pressure_alt > 0)) continue;
+        double lat = t.rec.lat, lon = t.rec.lon;
+        bool station = false;   // a station's own record (an airport record, or a location record for an airport X-Plane does not know)
+        for (const auto& st : stations) if (st.icao == t.key) { lat = st.lat; lon = st.lon; station = true; break; }
+        double f;
+        if (!field(lat, lon, f)) continue;
+        double hpa = f;
+        if (station) hpa = f + std::max(-2.0, std::min(2.0, in.pressure_alt / 100.0 - f));
+        in.pressure_alt = (float)(std::round(hpa * 10.0) * 10.0);   // 0.1 hPa steps, in Pa
+    }
+}
+
 // Smooth value noise -1..1 on absolute nm coordinates (two octaves), the same from one update to the next.
 double noise2(double X, double Y, double scale, int salt) {
     auto one = [&](double sc, int s2) {
@@ -837,6 +883,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // An empty slot now carries the base, top and type of the same slot in the nearest record that has a cloud there, with (almost) no
     // coverage, so towards the clear side the deck only thins out, at its own height.
     matchEmptyLayers(todo);
+    smoothPressure(todo, res.stations);
     // An airport record that is no longer wanted (the aircraft moved and the station list changed): X-Plane crashed twice right as
     // WXPlane began removing records after a move (logs 2026-11-03 22:41 and 23:03, both with airport records to remove, both gone with
     // no crash report before the first batch was through; an update that only removed location records went through). Such an update
@@ -1040,7 +1087,11 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
 
 // The sim kept ignoring the upper wind layers of our records (FL100 and up read 180 deg / 1 kt), so as well as the records
 // the profile for the aircraft's position is written into the sim's own region wind arrays. Throttled, and only if writable.
+// Off by default since 2026-11-04: X-Plane now takes the winds aloft from our records (the read-back at the flight levels matches what
+// we send), and overwriting its region arrays every so often snapped the wind at the aircraft to another value each time, one more
+// thing for the autopilot to chase (altitude hunting log). region_winds = 1 turns it back on.
 void pushRegionWinds(const wx::XpWx& x) {
+    if (!g_cfg.regionWinds) return;
     static std::time_t last = 0;
     static bool reported = false;
     const std::time_t now = std::time(nullptr);

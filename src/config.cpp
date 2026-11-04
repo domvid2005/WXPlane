@@ -99,6 +99,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_contour") c.stormContour = toBool(v);
         else if (k == "storm_level_contours") c.stormLevelContours = toBool(v);
         else if (k == "radar_natural") c.radarNatural = toBool(v);
+        else if (k == "smooth_pressure") c.smoothPressure = toBool(v);
+        else if (k == "region_winds") c.regionWinds = toBool(v);
         else if (k == "cloud_smooth_nm") c.cloudSmoothNm = d < 0 ? 0 : (d > 30 ? 30 : d);
         else if (k == "empty_layer_coverage") c.emptyLayerCoverage = d < 0 ? 0 : (d > 0.1 ? 0.1 : d);
         else if (k == "radar_natural_max") c.radarNaturalMax = (int)(d < 30 ? 30 : (d > 400 ? 400 : d));
@@ -205,6 +207,8 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"
       << "radar_natural = " << (c.radarNatural ? 1 : 0) << "\n"
+      << "smooth_pressure = " << (c.smoothPressure ? 1 : 0) << "\n"
+      << "region_winds = " << (c.regionWinds ? 1 : 0) << "\n"
       << "stratus_cloud_type = " << c.stratusCloudType << "\n"
       << "model_cirrus = " << (c.modelCirrus ? 1 : 0) << "\n"
       << "cloud_smooth_nm = " << c.cloudSmoothNm << "\n"

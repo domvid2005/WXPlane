@@ -110,7 +110,14 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         // without the model's top levels) left slots undefined, which fall back to the sim's own winds - calm after our reset. A level under
         // the terrain gets the wind of the lowest level above it, at an altitude just over the previous layer.
         std::vector<AloftSample> ws;
-        for (const auto& a : smp) if (a.hasWind) ws.push_back(a);
+        // The surface wind is the bottom of the profile: levels between the ground and the lowest forecast level blend from it, and a
+        // level under the terrain gets it (before, such a level took the lowest forecast level's wind, e.g. calm 3 ft above a 9 kt
+        // surface wind at Salt Lake City: a wall of shear right at the runway).
+        if (x.hasWind) {
+            AloftSample sfc; sfc.altFt = st.elevM / kFtToM; sfc.hasWind = true; sfc.speedKt = x.windMs / kKtToMs; sfc.dirDeg = x.windDir;
+            ws.push_back(sfc);
+        }
+        for (const auto& a : smp) if (a.hasWind && a.altFt * kFtToM > st.elevM + 300.0) ws.push_back(a);   // forecast levels within 300 m of the ground are left to the surface wind
         if (!ws.empty()) {
             static const double kGridFt[] = {3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000};
             double prevM = x.winds.empty() ? st.elevM : x.winds.back().altMsl;

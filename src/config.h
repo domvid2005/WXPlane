@@ -76,6 +76,8 @@ struct Config {
     // Natural radar picture (2026-11): instead of 12 nm blocks, the radar mosaic is smoothed, given a gentle random warp (stable between
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
+    bool smoothPressure = true;
+    bool regionWinds = false;         // also write the winds aloft into X-Plane's region wind arrays (an old workaround; see pushRegionWinds)       // one smooth QNH field over all records (no pressure steps where records meet), airports keep their own within 2 hPa of it
     double cloudSmoothNm = 8.0;         // cloud edges: every layer is averaged over the records within ~3x this (Gaussian sigma, nm); 0 = off
     double emptyLayerCoverage = 0.01;   // coverage given to an empty cloud slot that takes a neighbour's height (no ribbons; 1% shows nothing, but keeps the height)
     int radarNaturalMax = 150;          // records the natural picture may use (rain and the dry records around it)
