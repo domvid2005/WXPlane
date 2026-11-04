@@ -96,6 +96,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "storm_rim") c.stormRim = toBool(v);
         else if (k == "storm_contour") c.stormContour = toBool(v);
         else if (k == "storm_level_contours") c.stormLevelContours = toBool(v);
+        else if (k == "storm_level_delay_s") c.stormLevelDelayS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "fill_stagger") c.fillStagger = toBool(v);
         else if (k == "storm_top_max_drop_m") c.stormTopMaxDropM = d < 0 ? 0 : (d > 20000 ? 20000 : d);
         else if (k == "storm_core_coverage") c.stormCoreCoverage = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
@@ -195,7 +196,9 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_turbulence = " << c.radarTurbulence << "\n"
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
+      << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"
       << "fill_gaps = " << (c.fillGaps ? 1 : 0) << "\n"
+      << "fill_stagger = " << (c.fillStagger ? 1 : 0) << "\n"
       << "fill_range_nm = " << c.fillRangeNm << "\n"
       << "fill_cell_nm = " << c.fillCellNm << "\n"
       << "fill_far_range_nm = " << c.fillFarRangeNm << "\n"

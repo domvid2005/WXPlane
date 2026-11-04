@@ -147,6 +147,12 @@ double g_releaseStepS = 0.0;         // seconds between records, so a whole upda
 struct Todo { std::string key; Rec rec; };
 std::vector<Todo> g_pendingTodo;
 std::vector<std::string> g_pendingGone;
+// Storm intensity-level outline records (keys "radar:L..." / "radar:M...") are held out of the big start-up update and handed over on their
+// own a little later: the one time they went out with it, X-Plane threw the whole start-up update away (log 2026-11-03, "XPLMBeginWeatherUpdate()
+// called without matching XPLMEndWeatherUpdate()", no clouds at all). This way the station, fill and storm weather is in first whatever happens.
+std::vector<Todo> g_heldLevel;
+Clock::time_point g_heldLevelAt{};
+bool isLevelKey(const std::string& k) { return k.rfind("radar:L", 0) == 0 || k.rfind("radar:M", 0) == 0; }
 
 void sendRec(Todo& t) {
     if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &t.rec.info);
@@ -198,6 +204,7 @@ void flushPending() {
 void eraseAll() {
     g_pendingTodo.clear();
     g_pendingGone.clear();
+    g_heldLevel.clear();
     XPLMBeginWeatherUpdate();
     XPLMEndWeatherUpdate(0 /*not incremental: wipes our previous records*/, 1 /*immediately*/);
     g_recs.clear();
@@ -580,6 +587,13 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
 
     // Everything is queued; flushPending() (every 0.25 s) hands it to X-Plane a few records at a time.
     if (full) g_recs.clear();
+    g_heldLevel.clear();
+    {   // every update: the outline records follow in their own update once the rest is in (30 s after this one, at the earliest)
+        std::vector<Todo> main;
+        for (auto& t : todo) (isLevelKey(t.key) ? g_heldLevel : main).push_back(t);
+        todo.swap(main);
+        g_heldLevelAt = Clock::now() + std::chrono::seconds(g_cfg.stormLevelDelayS);
+    }
     g_pendingTodo = todo;
     g_pendingGone = gone;
     g_pendingImmediate = res.immediate || !g_firstApplyDone || g_startupPhase;
@@ -983,6 +997,16 @@ float flightLoop(float, float, int, void*) {
         }
     }
 
+    // the held storm-level outline records go out on their own once the main update is in and 30 s have passed
+    if (!g_heldLevel.empty() && g_pendingTodo.empty() && g_pendingGone.empty() && Clock::now() >= g_heldLevelAt) {
+        logf("storm intensity outlines: handing %zu records to X-Plane in a separate update (storm_level_contours = 0 turns them off)", g_heldLevel.size());
+        g_pendingTodo.swap(g_heldLevel);
+        g_heldLevel.clear();
+        g_pendingStartup = false;
+        g_pendingImmediate = false;
+        g_pendingManual = false;
+        g_releaseStepS = 0.0;
+    }
     flushPending();
 
     // 2) switched off from the menu -> hand weather back to X-Plane

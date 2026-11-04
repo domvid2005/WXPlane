@@ -424,7 +424,7 @@ int main() {
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
@@ -592,13 +592,23 @@ int main() {
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);
-        CHECK(storms >= 3 && storms <= 240);   // 60 blocks + 60 outline skins + up to 120 intensity-level pairs
+        CHECK(storms >= 3 && storms <= 120);   // the intensity-outline records are not in this update (they follow in their own one)
         CHECK(heavy >= 1);
         CHECK(minVis <= 800 && minVis >= 400);
         CHECK(maxTop > 8500 && maxTop < 13100);   // echo top ~12 km in the mock; the default top smoothing + centroid placement lower its lone peak       // echo top ~12 km from the mock product
         CHECK(maxPrecip >= 0.99f);
         CHECK(maxTurb > 0.8f);
         CHECK(radius > 14.5 && radius < 17.0);   // 12 nm cells x 1.3 (inner-corner rim cells up to x1.05)
+        // the intensity-outline records were held out of that update and follow in their own one (storm_level_delay_s = 1 here)
+        {
+            const int endsBefore = g_end;
+            const size_t callsBefore = g_calls.size();
+            for (int i = 0; i < 300 && g_logAll.find("storm intensity outlines") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+            for (int i = 0; i < 20; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+            CHECK(g_logAll.find("storm intensity outlines: handing") != std::string::npos);
+            CHECK(g_end > endsBefore && g_calls.size() > callsBefore);
+            std::printf("  outline records in their own update: %zu\n", g_calls.size() - callsBefore);
+        }
         // the viewer window lists the radar section
         g_menuHandler(nullptr, (void*)(intptr_t)5);
         g_drawn.clear();

@@ -560,7 +560,7 @@ int addStormLevelContours(std::vector<RadarCell>& cells, double cellNm, double b
         }
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return hv[a] < hv[b]; });
         std::vector<size_t> chosen;
-        const double minSep = cellNm * 0.36;
+        const double minSep = cellNm * 0.45;
         for (size_t oi : order) {
             bool ok = true;
             for (size_t ci : chosen) if (std::hypot(boundary[oi].x - boundary[ci].x, boundary[oi].y - boundary[ci].y) < minSep) { ok = false; break; }
@@ -739,7 +739,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     // after the rain smoothing, so the outlines follow the reflectivity the records will actually carry
     if (cfg.stormContour && cfg.stormLevelContours)
         res.levelCells = addStormLevelContours(all, cfg.radarCellNm, std::max(6.0, cfg.radarCellNm * cfg.stormRadiusFactor), lat, lon,
-                                               std::max(50.0, cfg.stormTopStepM), {30.0, 40.0, 50.0}, std::max(4, cfg.radarMaxCells * 2));
+                                               std::max(50.0, cfg.stormTopStepM), {30.0, 40.0, 50.0}, std::max(4, cfg.radarMaxCells));
     markStormEdges(all, cfg.radarCellNm);
     if (cfg.stormContour) for (auto& c : all) if (!c.synthetic) c.radiusScale = std::min(1.0f, c.contourScale);   // the outline decides how far a measured block reaches
     res.cells = std::move(all);
