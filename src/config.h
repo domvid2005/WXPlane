@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 28;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 29;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -79,7 +79,7 @@ struct Config {
     bool smoothPressure = true;
     bool dryRunways = true;           // runway dry near an airport with no precipitation for dry_runway_min (menu: Dry Runways When No Recent Rain)
     double dryRunwayMin = 45;         // minutes without precipitation before the runway is dried
-    bool windshear = false;           // realistic windshear (menu: Enable Realistic Windshear), off for existing installations
+    bool windshear = true;            // realistic windshear (menu: Enable Realistic Windshear), on by default since config v29
     int windshearSeed = 1;            // fixed seed: the same weather gives the same windshear fields
     double windshearGain = 2.5;       // X-Plane delivered ~40 % of the cells' outflow in the first microburst test (2026-11-06): sent this much stronger
     double windshearLeadS = 120;      // records are sent for the state this far ahead: X-Plane takes ~2 min to fade one in

@@ -137,6 +137,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
     if (version < 26) { Config d; c.regionWinds = d.regionWinds; }
+    if (version < 29) c.windshear = true;   // v29: windshear on by default (turned on once; turning it off afterwards sticks)
     if (version < 28 && std::fabs(c.windshearGain - 1.4) < 1e-6) { Config d; c.windshearGain = d.windshearGain; }   // v28: 1.4 left ~40 % of the outflow
     if (version < 27 && c.radarNaturalMax == 150) { Config d; c.radarNaturalMax = d.radarNaturalMax; }   // v27: 150 left widespread rain in 24 nm squares   // v26: one build saved region_winds = 0, which left the winds aloft out of the sim
     if (version < 25) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; c.stormCoreCoverage = d.stormCoreCoverage; c.stormTopMaxDropM = d.stormTopMaxDropM; }   // v25: back to the look of the earlier build (ragged walls)

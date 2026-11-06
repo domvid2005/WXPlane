@@ -1,6 +1,6 @@
 # Realistic windshear (2026-11-06)
 
-Menu: **Enable Realistic Windshear** (off by default; saved as `windshear = 1` in `WXPlane.cfg`) and **Windshear Test: event ahead now**.
+Menu: **Enable Realistic Windshear** (on by default since config v29; `windshear` in `WXPlane.cfg`).
 Code: `src/windshear.h/.cpp` (the model, no X-Plane calls) and `windshearTick` in `src/plugin.cpp` (risk, sending, encounter log).
 Log lines start with `[WXPlane Windshear]`.
 
@@ -63,21 +63,14 @@ Log lines start with `[WXPlane Windshear]`.
 - **Re-sending and removal:** cells are re-sent with any of WXPlane's replacing updates. They are removed when windshear is turned off,
   when the plugin is disabled, or when they drop below 3 kt.
 
-## Test event (menu: Windshear Test: event ahead now)
+## Encounter log
 
-Each choice alternates between a microburst and a gust front. The event is placed ahead on the track, at the distance the aircraft
-covers in ~150 s (3–12 nm), so it is faded in when the aircraft gets there. It is already mature, does not move, and lives its normal
-lifecycle.
-- **Microburst:** 30 kt outflow (up to 60 kt sent), 3,300 fpm downdraft modelled only.
-- **Gust front:** 25 kt headwind outflow.
+- "ENTERS" when the model adds more than 3 kt.
+- "EXITS", with the model's headwind range next to the headwind X-Plane actually added (its wind against the wind at entry), and the
+  strongest downdraft (modelled, not applied).
 
-It works with the windshear toggle on or off. Fly it below 3,000 ft AGL.
-
-Encounter log:
-- "ENTERS" when the model adds more than 3 kt;
-- every 4 s, the model's headwind change next to the headwind X-Plane actually added (its wind against the wind at entry), with GS,
-  IAS and VS;
-- "EXITS", with both totals and the strongest (unapplied) downdraft.
+The menu test event used to verify this in the sim (2026-11-06) has been removed. A microburst crossing at 120 kt, 1,000 ft AGL gave a
+model headwind of +30 to −30 kt, X-Plane +25 to −36 kt, and an airspeed range of 99–141 kt.
 
 ## Categories (spec §19)
 

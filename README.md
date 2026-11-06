@@ -423,7 +423,7 @@ probe's menu item and the humidity-aloft experiment (it did not change X-Plane's
 
 ## Realistic windshear (2026-11-06)
 
-Menu **Enable Realistic Windshear** (off by default) and **Windshear Test: event ahead now**. Gust fronts and microburst outflow form near
+Menu **Enable Realistic Windshear** (on by default). Gust fronts and microburst outflow form near
 real convection (radar echoes, TS reports) with seeded, frame-rate-independent probabilities. They are sent to X-Plane as low-level wind
 records, ahead of time and scaled for X-Plane's fade-in and blending. Downdrafts are modelled and logged only: X-Plane's weather API has
 no vertical wind. Details, limits and calibration: `docs/windshear.md`.

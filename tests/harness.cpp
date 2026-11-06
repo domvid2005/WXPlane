@@ -705,23 +705,15 @@ int main() {
     std::printf("  largest batch handed to X-Plane in one update: %zu records\n", g_maxBatch);
     CHECK(g_maxBatch <= 4);                                   // never a burst
     CHECK(!g_sawImmediate);                                   // never forced an immediate rebuild
-    {   // realistic windshear: the menu toggles it and forces a test event; records go out from the loop, and are removed when it is turned off
-        const int er0 = g_erases;
+    {   // realistic windshear: on by default (it starts with the weather), the menu turns it off and on again
+        for (int i = 0; i < 5; ++i) g_cb(1, 1, 88990 + i, nullptr);
         g_menuHandler(nullptr, (void*)(intptr_t)9 /*kWindshear*/);
-        g_cb(1, 1, 89000, nullptr);
-        CHECK(g_logAll.find("[WXPlane Windshear] realistic windshear enabled (seed 1)") != std::string::npos);
-        CHECK(g_logAll.find("[WXPlane Windshear] risk:") != std::string::npos);
-        for (int i = 0; i < 200; ++i) g_cb(1, 1, 88000 + i, nullptr);   // let WXPlane's own queue drain first
-        g_menuHandler(nullptr, (void*)(intptr_t)10 /*kWsForce*/);
-        g_cb(1, 1, 89001, nullptr);
-        CHECK(g_logAll.find("TEST: microburst") != std::string::npos);
-        CHECK(g_logAll.find("[WXPlane Windshear] records: ") != std::string::npos && g_logAll.find("records: 0 sent") == std::string::npos);
-        g_menuHandler(nullptr, (void*)(intptr_t)10);
-        g_cb(1, 1, 89002, nullptr);
-        CHECK(g_logAll.find("TEST: gust front") != std::string::npos);
-        g_menuHandler(nullptr, (void*)(intptr_t)9);
         g_cb(1, 1, 89003, nullptr);
-        CHECK(g_logAll.find("realistic windshear disabled") != std::string::npos && g_erases >= er0 + 8);
+        CHECK(g_logAll.find("realistic windshear disabled") != std::string::npos);   // it was on without being asked
+        const size_t n0 = g_logAll.size();
+        g_menuHandler(nullptr, (void*)(intptr_t)9);
+        g_cb(1, 1, 89004, nullptr);
+        CHECK(g_logAll.find("realistic windshear enabled", n0) != std::string::npos && g_logAll.find("[WXPlane Windshear] risk:", n0) != std::string::npos);
     }
     XPluginDisable();
     {   // records are removed from the next pre-flight-model callback, once, and the loop then stops itself
