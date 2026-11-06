@@ -445,7 +445,12 @@ int main() {
     CHECK(XPluginEnable() == 1);
     std::printf("[0] start-up: nothing is downloaded while X-Plane is still loading scenery\n");
     for (int i = 0; i < 60; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-    CHECK(g_netRequests == 0 && g_calls.empty());
+    {   // only the dry-runway check's one quick METAR request may go out while loading; no weather is sent
+        int other = 0, metar = 0;
+        for (auto& u : g_urls) { if (u.find("aviationweather.gov/api/data/metar") != std::string::npos) ++metar; else ++other; }
+        std::printf("loading: %d dry-runway METAR request(s), %d other\n", metar, other);
+        CHECK(metar <= 1 && other == 0 && g_calls.empty());
+    }
     g_loadingFlag = 0;                                  // scenery finished; 3 quiet seconds are required, so shorten by faking time below
     std::printf("[1] first load: aircraft at FL370 (%.2f, %.2f)\n", g_lat, g_lon);
     CHECK(pump(4, 9000));

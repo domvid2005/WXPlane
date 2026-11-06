@@ -38,6 +38,7 @@
 #include "fetcher.h"
 #include "geo.h"
 #include "http.h"
+#include "sources.h"
 #include "radar.h"
 #include "viewer.h"
 #include "wxmodel.h"
@@ -648,60 +649,89 @@ void drSetNum(XPLMDataRef r, double v) {
 }
 
 void dryRunwayTick() {
-    static Clock::time_point next{};
-    if (!g_haveLast || g_lastRes.stations.empty() || Clock::now() < next) return;   // always on (2026-11-06)
-    next = Clock::now() + std::chrono::seconds(10);
-    // Once per load (2026-11-06): the check runs when the first weather is in, and again only after a jump of more than 50 nm (a new
-    // flight or a reposition); in between X-Plane wets and dries the ground with the weather itself (it held standing water in rain
-    // at KORF on its own).
-    // It waits 30 s after the weather is in, so X-Plane's own start-up ground state is already set when it looks.
-    static bool done = false;
-    static double doneLat = 0, doneLon = 0;
-    static Clock::time_point readyAt{};
-    static bool waiting = false;
-    {
-        const double la = XPLMGetDatad(g_drLat), lo = XPLMGetDatad(g_drLon);
-        if (done && wx::distNm(la, lo, doneLat, doneLon) > 50.0) { done = false; waiting = false; }
-        if (done) return;
-        if (!waiting) { waiting = true; readyAt = Clock::now() + std::chrono::seconds(30); return; }
-        if (Clock::now() < readyAt) return;
-        done = true; waiting = false; doneLat = la; doneLon = lo;
+    // Once per load (2026-11-06), as early as possible: the decision is made the moment the first reports are in, before the first
+    // weather has faded in, and it is held through the load. X-Plane sets its own start-up ground state while it loads (standing water
+    // at Daytona Beach in dry weather), so for 90 s after the decision any wet or standing-water value X-Plane puts back is set to dry
+    // again (checked every 2 s). After that X-Plane wets and dries the ground with the weather itself (it held standing water in rain at
+    // KORF on its own). A jump of more than 50 nm (a new flight, a reposition) is a new load.
+    enum Phase { kIdle, kHold, kDone };
+    static Phase phase = kIdle;
+    static double atLat = 0, atLon = 0;
+    static Clock::time_point holdUntil{}, next{};
+    static std::string icao, why;
+    static bool dry = false;
+    static double dist = 0;
+    const auto nowC = Clock::now();
+    if (nowC < next) return;
+    next = nowC + std::chrono::seconds(2);
+    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
+    // The reports: WXPlane's own weather once it is in; before that, a quick fetch of just the airports around the aircraft, started on
+    // the first frame, so the ground is decided before the first weather even arrives (that waits for the scenery to settle).
+    static std::mutex earlyMx;
+    static std::vector<wx::Station> early;
+    static bool earlyStarted = false, earlyDone = false;
+    const std::vector<wx::Station>* src = nullptr;
+    if (g_haveLast && !g_lastRes.stations.empty()) src = &g_lastRes.stations;
+    else {
+        if (!earlyStarted && (lat != 0.0 || lon != 0.0)) {
+            earlyStarted = true;
+            const std::string url = wx::awcMetarUrl(lat, lon, 15.0);
+            std::thread([url] {
+                std::string body, err; long st = 0;
+                std::vector<wx::Station> v;
+                if (wx::httpGet(url, body, st, err, 12)) v = wx::parseAwcMetarJson(body);
+                std::lock_guard<std::mutex> l(earlyMx);
+                early = std::move(v);
+                earlyDone = true;
+            }).detach();
+        }
+        std::lock_guard<std::mutex> l(earlyMx);
+        if (!earlyDone) return;
+        if (early.empty()) return;   // nothing came back: the decision waits for WXPlane's own weather
+        src = &early;
     }
-    static XPLMDataRef drFr = XPLMFindDataRef("sim/weather/region/runway_friction"), drPatchy = XPLMFindDataRef("sim/weather/region/runway_is_patchy"),
-                       drRain = XPLMFindDataRef("sim/weather/region/rain_percent"), drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
-    static bool reported = false;
-    if (!reported) {
-        reported = true;
-        logf("dry runway: runway_friction %s%s, runway_is_patchy %s, rain_percent %s", drFr ? "found" : "MISSING", drFr && XPLMCanWriteDataRef(drFr) ? " (writable)" : (drFr ? " (read-only)" : ""),
-             drPatchy ? "found" : "missing", drRain ? "found" : "missing");
+    if (phase != kIdle && wx::distNm(lat, lon, atLat, atLon) > 50.0) phase = kIdle;
+    if (phase == kDone) return;
+    static XPLMDataRef drFr = XPLMFindDataRef("sim/weather/region/runway_friction"), drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+    if (!drFr || !XPLMCanWriteDataRef(drFr)) {
+        if (phase == kIdle) logf("dry runway: sim/weather/region/runway_friction %s, nothing done", drFr ? "is read-only" : "not found");
+        phase = kDone; atLat = lat; atLon = lon;
+        return;
     }
-    if (!drFr || !XPLMCanWriteDataRef(drFr)) return;
-    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), agl = drAgl ? XPLMGetDataf(drAgl) / 0.3048 : 0.0;
-    if (agl > 3000.0) return;
-    const wx::Station* best = nullptr; double bd = 1e9;
-    for (const auto& s : g_lastRes.stations) { const double d = wx::distNm(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = &s; } }
-    if (!best || bd > 8.0) return;
-    std::string why;
-    bool dry = wx::runwayShouldBeDry(*best, std::time(nullptr), g_cfg.dryRunwayMin, &why);
-    auto it = g_recs.find(best->icao);
-    if (dry && it != g_recs.end() && it->second.info.precip_rate > 0.0f) { dry = false; why = "WXPlane sends rain there (radar)"; }
     // X-Plane's ground condition (the weather screen's "runway condition", log 2026-11-06): 0 dry, 1-3 wet, 4-6 standing water,
     // 7-9 snow (snow_cover 0.25 / 0.5 / 1), 10-12 ice, 13-15 snow and ice. It covers all paved surfaces, taxiways and aprons as well.
     const int fr = (int)std::lround(drGetNum(drFr));
-    static std::string lastLine;
-    char b[420];
-    if (dry && fr >= 1 && fr <= 6) {
-        drSetNum(drFr, 0);
-        const int after = (int)std::lround(drGetNum(drFr));
-        std::snprintf(b, sizeof b, "dry runway: %s (%.1f nm): %s - runway state %d -> %d%s", best->icao.c_str(), bd, why.c_str(), fr, after,
-                      after != 0 ? " (X-Plane did not take it)" : "");
-        logf("%s", b);
-        lastLine.clear();
-        return;
+    if (phase == kIdle) {
+        atLat = lat; atLon = lon;
+        const double agl = drAgl ? XPLMGetDataf(drAgl) / 0.3048 : 0.0;
+        const wx::Station* best = nullptr; double bd = 1e9;
+        for (const auto& s : *src) { const double d = wx::distNm(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = &s; } }
+        if (!best || bd > 8.0 || agl > 3000.0) {
+            logf("dry runway: loaded %s - no check this time", agl > 3000.0 ? "in the air above 3,000 ft AGL" : "more than 8 nm from any reporting airport");
+            phase = kDone;
+            return;
+        }
+        icao = best->icao; dist = bd;
+        dry = wx::runwayShouldBeDry(*best, std::time(nullptr), g_cfg.dryRunwayMin, &why);
+        auto it = g_recs.find(best->icao);
+        if (dry && it != g_recs.end() && it->second.info.precip_rate > 0.0f) { dry = false; why = "WXPlane sends rain there (radar)"; }
+        logf("dry runway: %s (%.1f nm, %s): %s - runway state %d now; %s%s", icao.c_str(), dist, src == &g_lastRes.stations ? "WXPlane's weather" : "quick fetch before the first weather", why.c_str(), fr,
+             dry ? "keeping it dry through the load (90 s)" : "left to X-Plane", best->rainWhy.empty() ? "" : (" [" + best->rainWhy + "]").c_str());
+        if (!dry) { phase = kDone; return; }
+        phase = kHold;
+        holdUntil = nowC + std::chrono::seconds(90);
     }
-    std::snprintf(b, sizeof b, "dry runway: %s (%.1f nm): %s - runway state %d, %s%s", best->icao.c_str(), bd, why.c_str(), fr,
-                  !dry ? "left as it is" : (fr == 0 ? "already dry" : "snow/ice, left as it is"), best->rainWhy.empty() ? "" : (" [" + best->rainWhy + "]").c_str());
-    if (lastLine != best->icao + why.substr(0, 20) + std::to_string(fr)) { logf("%s", b); lastLine = best->icao + why.substr(0, 20) + std::to_string(fr); }
+    if (phase == kHold) {
+        if (fr >= 1 && fr <= 6) {
+            drSetNum(drFr, 0);
+            const int after = (int)std::lround(drGetNum(drFr));
+            logf("dry runway: %s - runway state %d -> %d%s", icao.c_str(), fr, after, after != 0 ? " (X-Plane did not take it)" : "");
+        }
+        if (nowC >= holdUntil) {
+            logf("dry runway: %s - load done, runway state %d; X-Plane follows the weather from here", icao.c_str(), (int)std::lround(drGetNum(drFr)));
+            phase = kDone;
+        }
+    }
 }
 
 // ---- Realistic windshear (2026-11-06) ------------------------------------------------------------------------------------------------
