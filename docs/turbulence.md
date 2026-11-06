@@ -84,6 +84,8 @@ Log lines start with `[WXPlane Turbulence]`.
 
 ## Failures and stale data
 
+- **NOMADS throttling:** requests to NOMADS are spaced at least 0.6 s apart. On 2026-11-06 a burst during the header walk got
+  HTTP 302 for one level. A throttled request (302, 429 or 503) is retried once after 20 s.
 - **Network errors:** the worker retries with a growing delay (1 to 15 min for GTGN, 2 to 30 min for ECMWF) and logs each new problem
   once.
 - **Stale data:** a GTGN analysis older than 45 min, or an ECMWF step more than 4 h from now, is not used.
@@ -120,6 +122,10 @@ Log lines start with `[WXPlane Turbulence]`.
   - that no ECMWF download happens inside the US;
   - the switch to the ECMWF estimate over Germany;
   - that X-Plane's values are put back by the menu toggle.
+- **First flight with GTGN (2026-11-06, KDAB climb to FL240):**
+  - the files were found and their 51 EDR levels (98–50,000 ft, 5.40, the HRRR Lambert grid) decoded;
+  - EDR 0.12 at the surface and 0.06–0.08 in the climb became level 0–0.2, so the ride stayed smooth;
+  - the switch between GTGN and ECMWF worked.
 - **Still to confirm in the sim:**
   - the real GTGN file layout (level type, number of levels, idx-free header walk);
   - the real ECMWF fields;

@@ -92,7 +92,27 @@ std::vector<std::string> Fetcher::takeLog() {
 void Fetcher::log(const std::string& s) { std::lock_guard<std::mutex> l(mx_); if (log_.size() < 200) log_.push_back(s); }
 
 bool Fetcher::get(const std::string& url, const std::string& rg, std::string& body, long& st, std::string& err, long timeout, size_t maxBytes) {
-    return httpGetCancellable(url, rg, body, st, err, timeout, maxBytes, &stop_);
+    // NOMADS throttles clients that send many requests in a burst (an HTTP 302 to its "over the limit" page was seen on
+    // 2026-11-06 during the GTGN header walk). Requests to it are spaced at least 0.6 s apart (at most 100 a minute).
+    if (url.find("nomads.ncep.noaa.gov") != std::string::npos) {
+        static std::chrono::steady_clock::time_point last{};
+        const auto due = last + std::chrono::milliseconds(600);
+        std::unique_lock<std::mutex> l(mx_);
+        cv_.wait_until(l, due, [&] { return stop_.load(); });
+        if (stop_) return false;
+        last = std::chrono::steady_clock::now();
+    }
+    bool ok = httpGetCancellable(url, rg, body, st, err, timeout, maxBytes, &stop_);
+    if (!ok && (st == 302 || st == 429 || st == 503) && url.find("nomads.ncep.noaa.gov") != std::string::npos) {
+        // Throttled: wait 20 s and try once more.
+        std::unique_lock<std::mutex> l(mx_);
+        cv_.wait_for(l, std::chrono::seconds(20), [&] { return stop_.load(); });
+        if (stop_) return false;
+        l.unlock();
+        ok = httpGetCancellable(url, rg, body, st, err, timeout, maxBytes, &stop_);
+        if (!ok) err += " (NOMADS throttling, retried once)";
+    }
+    return ok;
 }
 
 void Fetcher::run() {
