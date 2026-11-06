@@ -18,6 +18,7 @@ struct Report {
     int day = 0, hour = -1, minute = 0; // observation time (UTC); day==0 means "today/most recent"
 
     bool hasWind = false, windVariable = false;
+    bool windMagnetic = false;   // windDir is relative to magnetic north (a spoken/D-ATIS wind); converted to true before use
     int windDir = 0;
     double windKt = 0, gustKt = 0;
 

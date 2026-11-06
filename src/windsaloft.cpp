@@ -77,8 +77,11 @@ std::vector<AloftStation> parseWindTemp(const std::string& text) {
             continue;
         }
         if (levels.empty()) continue;
-        const std::string& id = t[0];
-        if (id.size() != 3 || !std::all_of(id.begin(), id.end(), [](char c) { return c >= 'A' && c <= 'Z'; })) continue;
+        std::string id = t[0];
+        // 3-letter FD identifiers; a 4-letter ICAO form (KABQ) is read as its 3-letter id too, in case the product switches to them
+        if (id.size() == 4 && (id[0] == 'K' || id[0] == 'P')) id = id.substr(1);
+        if (id.size() != 3 || !std::all_of(id.begin(), id.end(), [](char c) { return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); })) continue;
+        if (!std::any_of(id.begin(), id.end(), [](char c) { return c >= 'A' && c <= 'Z'; })) continue;
         size_t n = t.size() - 1;
         if (n == 0 || n > levels.size()) continue;
         AloftStation st;

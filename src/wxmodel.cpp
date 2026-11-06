@@ -22,7 +22,9 @@ float coverageFor(int cover) {
 
 void mergeAtis(Station& st, const Report& a, const std::string& text) {
     Report& r = st.report;
-    if (a.hasWind) { r.hasWind = true; r.windDir = a.windDir; r.windKt = a.windKt; r.gustKt = a.gustKt; r.windVariable = a.windVariable; }
+    // ATIS winds are magnetic (METAR winds are true): flagged here, converted on the sim's thread with X-Plane's own variation for the
+    // airport (annotateMagneticVariation in plugin.cpp), so it happens exactly once.
+    if (a.hasWind) { r.hasWind = true; r.windDir = a.windDir; r.windKt = a.windKt; r.gustKt = a.gustKt; r.windVariable = a.windVariable; r.windMagnetic = true; }
     if (a.hasVis) { r.hasVis = true; r.visM = a.visM; r.cavok = a.cavok; }
     if (a.hasTemp) { r.hasTemp = true; r.tempC = a.tempC; r.hasDewp = a.hasDewp; r.dewpC = a.dewpC; }
     if (a.hasAltim) { r.hasAltim = true; r.altimHpa = a.altimHpa; }
@@ -62,6 +64,95 @@ bool stationHasFog(const Station& st, const Config& cfg) {
     return r.fog || r.shallowFog || r.patchyFog || r.mist;
 }
 
+float isaTempC(float altM) { return altM < 11000.0f ? 15.0f - 0.0065f * altM : -56.5f; }
+
+XpWind windAt(const std::vector<XpWind>& p, float altM) {
+    if (p.empty()) return XpWind();
+    if (altM <= p.front().altMsl) { XpWind w = p.front(); w.altMsl = altM; return w; }
+    if (altM >= p.back().altMsl) { XpWind w = p.back(); w.altMsl = altM; return w; }
+    size_t j = 1;
+    while (j + 1 < p.size() && p[j].altMsl < altM) ++j;
+    const XpWind &lo = p[j - 1], &hi = p[j];
+    const float span = hi.altMsl - lo.altMsl, t = span > 0 ? (altM - lo.altMsl) / span : 0.0f;
+    const float rad = 3.14159265f / 180.0f;
+    // as vectors: 350 deg and 010 deg average to 000, not 180
+    const float ux = (1 - t) * lo.ms * std::sin(lo.dir * rad) + t * hi.ms * std::sin(hi.dir * rad);
+    const float uy = (1 - t) * lo.ms * std::cos(lo.dir * rad) + t * hi.ms * std::cos(hi.dir * rad);
+    XpWind w = lo;
+    w.altMsl = altM;
+    w.ms = std::sqrt(ux * ux + uy * uy);
+    w.dir = w.ms > 0.01f ? std::fmod(std::atan2(ux, uy) / rad + 360.0f, 360.0f) : lo.dir;
+    w.gustMs = std::max(w.ms, (1 - t) * lo.gustMs + t * hi.gustMs);
+    w.shearDeg = (1 - t) * lo.shearDeg + t * hi.shearDeg;
+    w.turbulence = (1 - t) * lo.turbulence + t * hi.turbulence;
+    return w;
+}
+
+// Winds and temperatures aloft for one record (2026-11-06 rework). The FL350 excursion near Creede, Colorado came from here: with the
+// station 8,680 ft high (and, worse, its elevation read as 8,680 m) every forecast level under the "terrain" was dropped, so
+//  - the 12 wind altitudes under the terrain were clamped to 1 m above each other (7 calm layers between 28,510 and 28,530 ft), and
+//  - the temperatures from the ground to FL240 were all the surface temperature (+3 C, ISA+36 at FL240).
+// That warm column, written into the sim's region arrays, raised the pressure at FL350 by ~24 hPa: the altimeter read 4,000 ft low and
+// the autopilot climbed 4,000 ft to "hold" FL350. Now:
+//  - winds sit at the same nominal altitudes in every record (strictly ascending, at least 150 m apart); a level under the ground carries
+//    the surface wind, it is never squeezed against its neighbours;
+//  - temperatures keep every valid forecast level, below the terrain too (the free-air temperature, which is what the pressure at
+//    altitude depends on), plus the surface report at the station; only levels just above the ground are left to the surface report;
+//  - values that are not finite or physically impossible are dropped (counted in x.aloftRejected), never replaced by 0.
+void buildAloftProfile(XpWx& x, const std::vector<AloftSample>& smp, double elevM, bool hasSfcT, float sfcT) {
+    x.aloftRejected = 0;
+    // Temperatures
+    std::vector<std::pair<float, float>> tp;
+    const bool sfcOk = hasSfcT && std::isfinite(sfcT) && sfcT > -80.0f && sfcT < 60.0f && (elevM < 1000.0 || std::fabs(sfcT - isaTempC((float)elevM)) <= 40.0f);
+    for (const auto& a : smp) {
+        if (!a.hasTemp) continue;
+        const float altM = (float)(a.altFt * kFtToM), t = (float)a.tempC;
+        if (!std::isfinite(altM) || !std::isfinite(t) || altM < -500.0f || altM > 30000.0f || t < -95.0f || t > 50.0f ||
+            std::fabs(t - isaTempC(altM)) > 40.0f) { ++x.aloftRejected; continue; }
+        if (sfcOk && altM > elevM && altM <= elevM + 300.0) continue;   // just above the ground: the surface report rules there
+        tp.emplace_back(altM, t);
+    }
+    if (sfcOk) tp.emplace_back((float)elevM, sfcT);
+    std::sort(tp.begin(), tp.end(), [](const std::pair<float, float>& a, const std::pair<float, float>& b) { return a.first < b.first; });
+    std::vector<std::pair<float, float>> tq;
+    for (const auto& q : tp) { if (!tq.empty() && q.first - tq.back().first < 30.0f) continue; tq.push_back(q); }
+    x.tempProfile = tq.size() >= 2 ? tq : std::vector<std::pair<float, float>>();
+
+    // Winds: the source points (surface report, then forecast levels more than 300 m above the ground), ascending
+    std::vector<XpWind> src;
+    const XpWind sfc = x.winds.empty() ? XpWind() : x.winds.front();   // the surface layer buildXp put in, if the report had a wind
+    const bool haveSfc = !x.winds.empty();
+    if (haveSfc) src.push_back(sfc);
+    for (const auto& a : smp) {
+        if (!a.hasWind) continue;
+        const float altM = (float)(a.altFt * kFtToM);
+        if (!std::isfinite(altM) || !std::isfinite(a.speedKt) || !std::isfinite(a.dirDeg) || a.speedKt < 0 || a.speedKt > 300 || a.dirDeg < 0 || a.dirDeg > 360 ||
+            altM > 30000.0f) { ++x.aloftRejected; continue; }
+        if (altM <= elevM + 300.0) continue;
+        XpWind w; w.altMsl = altM; w.dir = (float)std::fmod(a.dirDeg, 360.0); w.ms = (float)(a.speedKt * kKtToMs); w.gustMs = w.ms;
+        if (!src.empty() && altM - src.back().altMsl < 30.0f) continue;
+        src.push_back(w);
+    }
+    if (src.size() < 2) { x.aloft = !x.tempProfile.empty(); return; }   // no forecast winds: the record keeps only its surface wind
+    // The same nominal altitudes in every record; under the lowest source point (the ground) a level holds that point's wind.
+    static const double kGridFt[] = {3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000, 66000};
+    const float sfcAlt = haveSfc ? sfc.altMsl : -1e9f;
+    std::vector<XpWind> out;
+    if (haveSfc) out.push_back(sfc);
+    for (double gft : kGridFt) {
+        if ((int)out.size() >= 13) break;
+        const float a = (float)(gft * kFtToM);
+        if (haveSfc && std::fabs(a - sfcAlt) < 150.0f) continue;          // too close to the surface layer: skipped, not squeezed
+        XpWind w = (a <= src.front().altMsl) ? src.front() : windAt(src, a);
+        w.altMsl = a;
+        if (a > sfcAlt) { w.shearDeg = 0; w.turbulence = 0; w.gustMs = w.ms; }  // gusts and variability belong to the surface only
+        out.push_back(w);
+    }
+    std::sort(out.begin(), out.end(), [](const XpWind& a, const XpWind& b) { return a.altMsl < b.altMsl; });
+    x.winds = out;
+    x.aloft = true;
+}
+
 XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft, bool fogSlot) {
     const Report& r = st.report;
     XpWx x;
@@ -98,58 +189,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     // NOAA winds/temps aloft, blended from the nearest FD stations to this report's location.
     if (cfg.useAloft && aloft && !aloft->empty()) {
         std::vector<AloftSample> smp = sampleAloft(*aloft, st.lat, st.lon, cfg.aloftRangeNm, cfg.aloftStations);
-        if (x.hasTemp) x.tempProfile.emplace_back((float)st.elevM, (float)r.tempC);
-        // Temperatures: every NOAA/model level above the terrain.
-        const double floorM = st.elevM + 300.0;
-        for (const auto& a : smp) {
-            const float altM = (float)(a.altFt * kFtToM);
-            if (altM > floorM && a.hasTemp) x.tempProfile.emplace_back(altM, (float)a.tempC);
-        }
-        // Winds: the SAME 12 altitudes in every record, whatever the station's terrain or which sources reached it. X-Plane blends
-        // overlapping records layer by layer, and a record with fewer layers (a high-terrain station that skips 3000 and 6000 ft, or one
-        // without the model's top levels) left slots undefined, which fall back to the sim's own winds - calm after our reset. A level under
-        // the terrain gets the wind of the lowest level above it, at an altitude just over the previous layer.
-        std::vector<AloftSample> ws;
-        // The surface wind is the bottom of the profile: levels between the ground and the lowest forecast level blend from it, and a
-        // level under the terrain gets it (before, such a level took the lowest forecast level's wind, e.g. calm 3 ft above a 9 kt
-        // surface wind at Salt Lake City: a wall of shear right at the runway).
-        if (x.hasWind) {
-            AloftSample sfc; sfc.altFt = st.elevM / kFtToM; sfc.hasWind = true; sfc.speedKt = x.windMs / kKtToMs; sfc.dirDeg = x.windDir;
-            ws.push_back(sfc);
-        }
-        for (const auto& a : smp) if (a.hasWind && a.altFt * kFtToM > st.elevM + 300.0) ws.push_back(a);   // forecast levels within 300 m of the ground are left to the surface wind
-        if (!ws.empty()) {
-            static const double kGridFt[] = {3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000};
-            double prevM = x.winds.empty() ? st.elevM : x.winds.back().altMsl;
-            for (double gft : kGridFt) {
-                auto uv = [](const AloftSample& q, double& u, double& v) { const double rad = q.dirDeg * 3.14159265358979 / 180.0; u = -q.speedKt * std::sin(rad); v = -q.speedKt * std::cos(rad); };
-                double u = 0, v = 0;
-                if (gft <= ws.front().altFt) uv(ws.front(), u, v);
-                else if (gft >= ws.back().altFt) uv(ws.back(), u, v);
-                else {
-                    for (size_t i = 1; i < ws.size(); ++i) {
-                        if (gft <= ws[i].altFt) {
-                            double u0, v0, u1, v1;
-                            uv(ws[i - 1], u0, v0); uv(ws[i], u1, v1);
-                            const double f = (gft - ws[i - 1].altFt) / std::max(1.0, ws[i].altFt - ws[i - 1].altFt);
-                            u = u0 + (u1 - u0) * f; v = v0 + (v1 - v0) * f;
-                            break;
-                        }
-                    }
-                }
-                XpWind w;
-                const double kt = std::sqrt(u * u + v * v);
-                double dir = std::atan2(-u, -v) * 180.0 / 3.14159265358979;
-                if (dir < 0) dir += 360.0;
-                w.altMsl = (float)std::max(gft * kFtToM, prevM + 1.0);
-                w.dir = (float)(kt < 0.5 ? 0 : dir);
-                w.ms = (float)(kt * kKtToMs); w.gustMs = w.ms;
-                prevM = w.altMsl;
-                if (x.winds.size() < 13) x.winds.push_back(w);
-            }
-        }
-        x.aloft = x.winds.size() > (x.hasWind ? 1u : 0u) || x.tempProfile.size() > 1;
-        if (x.tempProfile.size() < 2) x.tempProfile.clear();
+        buildAloftProfile(x, smp, st.elevM, x.hasTemp, x.tempC);
     }
     x.maxAltFt = (float)(x.aloft ? cfg.cruiseCeilingFt : cfg.normalCeilingFt);
 
@@ -285,6 +325,39 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     return x;
 }
 
+int magneticToTrue(int dirMag, double varEastDeg, bool calmOrVariable) {
+    if (calmOrVariable || !std::isfinite(varEastDeg)) return dirMag;
+    int t = (int)std::lround(std::fmod(dirMag + varEastDeg + 720.0, 360.0));
+    if (t >= 360) t -= 360;
+    return t == 0 ? 360 : t;   // a wind from north is 360, as in reports; 0 means calm
+}
+
+int validateProfile(XpWx& x, bool fix, std::string* why) {
+    int bad = 0;
+    auto say = [&](const char* w) { ++bad; if (why && why->empty()) *why = w; };
+    std::vector<XpWind> ok;
+    for (const auto& w : x.winds) {
+        if (!std::isfinite(w.altMsl) || !std::isfinite(w.ms) || !std::isfinite(w.dir) || !std::isfinite(w.gustMs)) { say("wind value not a number"); continue; }
+        if (w.ms < 0 || w.ms > 160.0f) { say("wind speed outside 0..310 kt"); continue; }
+        if (w.dir < 0 || w.dir > 360.0f) { say("wind direction outside 0..360"); continue; }
+        if (w.altMsl < -500.0f || w.altMsl > 30000.0f) { say("wind layer altitude outside -500..30000 m"); continue; }
+        if (!ok.empty() && w.altMsl < ok.back().altMsl + 100.0f) { say("wind layers out of order or under 100 m apart"); continue; }
+        ok.push_back(w);
+    }
+    std::vector<std::pair<float, float>> tk;
+    for (const auto& t : x.tempProfile) {
+        if (!std::isfinite(t.first) || !std::isfinite(t.second)) { say("temperature not a number"); continue; }
+        if (t.second < -95.0f || t.second > 60.0f) { say("temperature outside -95..+60 C"); continue; }
+        if (t.first > 1000.0f && std::fabs(t.second - isaTempC(t.first)) > 40.0f) { say("temperature more than 40 C off standard"); continue; }
+        if (!tk.empty() && t.first <= tk.back().first) { say("temperature levels out of order"); continue; }
+        tk.push_back(t);
+    }
+    if (x.qnhPa != 0 && (!std::isfinite(x.qnhPa) || x.qnhPa < 87000.0f || x.qnhPa > 108500.0f)) { say("QNH outside 870..1085 hPa"); if (fix) x.qnhPa = 0; }
+    if (!std::isfinite(x.precip) || x.precip < 0 || x.precip > 1) { say("precipitation outside 0..1"); if (fix) x.precip = std::isfinite(x.precip) ? std::min(1.0f, std::max(0.0f, x.precip)) : 0.0f; }
+    if (fix) { x.winds = ok; x.tempProfile = tk.size() >= 2 ? tk : std::vector<std::pair<float, float>>(); }
+    return bad;
+}
+
 int validateXp(XpWx& x, bool allowOverlap, std::string* note) {
     int fixes = 0;
     auto say = [&](const char* what, int slot) {
@@ -326,6 +399,11 @@ int validateXp(XpWx& x, bool allowOverlap, std::string* note) {
     if (x.maxAltFt < highestFt) { x.maxAltFt = highestFt; say("record ceiling below its highest cloud", 0); }
     x.cloudCount = 0;
     for (const auto& c : x.clouds) if (c.coverage > 0) ++x.cloudCount;
+    {   // winds, temperatures, pressure and rain of the record (2026-11-06): nothing impossible reaches X-Plane
+        std::string w;
+        const int n = validateProfile(x, true, &w);
+        if (n) { fixes += n; if (note && note->empty()) *note = w; }
+    }
     return fixes;
 }
 

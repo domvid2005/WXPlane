@@ -25,6 +25,7 @@
 #include "XPLMNavigation.h"
 #include "XPLMPlugin.h"
 #include "XPLMProcessing.h"
+#include "XPLMScenery.h"
 #include "XPLMUtilities.h"
 #include "XPLMWeather.h"
 
@@ -416,6 +417,30 @@ void eraseRec(const std::string& k) {
     else XPLMEraseWeatherAtLocation(it->second.lat, it->second.lon);
     g_recs.erase(it);
 }
+// Wet-pavement diagnostics (2026-11-06): for the first three updates after start-up, the nearest airport's report next to the rain we sent
+// for it and the sim's own regional rain and runway state, so "the runway looks wet in dry weather" can be traced to WXPlane's rain, the
+// sim's own state, or scenery. Nothing is written to the runway state.
+void surfaceDiag() {
+    static int done = 0;
+    if (done >= 3 || g_recs.empty()) return;
+    ++done;
+    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
+    const Rec* best = nullptr; double bd = 1e9;
+    for (const auto& kv : g_recs) {
+        if (kv.second.icao.empty()) continue;
+        const double d = wx::distNm(lat, lon, kv.second.lat, kv.second.lon);
+        if (d < bd) { bd = d; best = &kv.second; }
+    }
+    std::string raw = "?";
+    for (const auto& st : g_lastRes.stations) if (best && st.icao == best->icao) { raw = st.rawMetar; break; }
+    static XPLMDataRef drRain = XPLMFindDataRef("sim/weather/region/rain_percent"), drFr = XPLMFindDataRef("sim/weather/region/runway_friction"),
+                       drPr = XPLMFindDataRef("sim/weather/aircraft/precipitation_on_aircraft_ratio");
+    logf("surface state #%d: nearest airport %s (%.1f nm), METAR \"%s\" | rain we sent there %.2f | sim region rain_percent %s, runway_friction %s, rain on the aircraft %s",
+         done, best ? best->icao.c_str() : "none", bd, raw.substr(0, 120).c_str(), best ? best->info.precip_rate : 0.0f,
+         drRain ? std::to_string(XPLMGetDataf(drRain)).c_str() : "n/a", drFr ? std::to_string(XPLMGetDatai(drFr)).c_str() : "n/a",
+         drPr ? std::to_string(XPLMGetDataf(drPr)).c_str() : "n/a");
+}
+
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
     if (g_pendingStartup && g_cfg.regenWeatherOnStart) {
@@ -448,7 +473,7 @@ void flushPending() {
     if (g_pendingTodo.empty()) g_pendingReplace = false;
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued)", ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size());
-    if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
+    if (g_pendingTodo.empty() && g_pendingGone.empty()) { logf("all weather records handed to X-Plane"); surfaceDiag(); }
 }
 
 void eraseAll() {
@@ -555,6 +580,35 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
     info.age = 0.0f;   // X-Plane weights a record by its age; an old METAR would count for less than its own weather
     info.radius_nm = (float)g_cfg.radiusNm;
     info.max_altitude_msl_ft = x.maxAltFt;
+}
+
+// ATIS winds (D-ATIS text, as broadcast) are magnetic; METAR and every other source WXPlane uses (winds aloft, the global model, the
+// X-Plane weather API) are true. Each ATIS wind is turned into true here, once, with X-Plane's own magnetic variation at the airport.
+// The SDK does not document the sign of XPLMGetMagneticVariation, so it is calibrated once against XPLMDegMagneticToDegTrue at the
+// aircraft (whose result is the east variation); with both under 1 deg the declination convention (east positive) is assumed.
+void annotateMagneticVariation(wx::FetchResult& res) {
+    static int sign = 0;
+    if (sign == 0) {
+        const double alat = XPLMGetDatad(g_drLat), alon = XPLMGetDatad(g_drLon);
+        const float v = XPLMGetMagneticVariation(alat, alon);
+        float t = XPLMDegMagneticToDegTrue(0.0f);
+        if (t > 180.0f) t -= 360.0f;
+        if (std::fabs(v) > 1.0f && std::fabs(t) > 1.0f) {
+            sign = (v * t > 0) ? 1 : -1;
+            logf("magnetic variation: X-Plane gives %.1f at the aircraft, true heading of magnetic north %.1f: %s", v, t, sign > 0 ? "east positive" : "west positive, sign flipped");
+        }
+    }
+    for (auto& s : res.stations) {
+        wx::Report& r = s.report;
+        if (!r.hasWind || !r.windMagnetic) continue;
+        const double var = (sign ? sign : 1) * (double)XPLMGetMagneticVariation(s.lat, s.lon);
+        const bool calmOrVrb = r.windVariable || r.windKt < 0.5 || r.windDir == 0;
+        const int mag = r.windDir, tru = wx::magneticToTrue(mag, var, calmOrVrb);
+        r.windDir = tru;
+        r.windMagnetic = false;
+        if (calmOrVrb) logf("wind reference: %s ATIS %s, no conversion", s.icao.c_str(), r.windKt < 0.5 ? "calm" : "variable");
+        else logf("wind reference: %s ATIS %03d MAGNETIC, variation %.1f %s, applied %03d TRUE", s.icao.c_str(), mag, std::fabs(var), var >= 0 ? "EAST" : "WEST", tru);
+    }
 }
 
 void applyResult(const wx::FetchResult& res, bool fromFetch) {
@@ -960,6 +1014,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         g_releaseStepS = (n > 0 && T > 0) ? std::max(0.0625, (double)T / (double)n) : 0.0;
         g_nextRelease = Clock::now();
     }
+    if (!res.elevNote.empty()) logf("station elevations corrected: %s", res.elevNote.c_str());
     if (res.noaaFixes > 0 || res.filledElements > 0)
         logf("NOAA crosscheck: %d of %zu reports corrected or completed from NOAA's decoded fields, %d missing elements filled from neighbouring stations",
              res.noaaFixes, res.stations.size(), res.filledElements);
@@ -1115,12 +1170,19 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
 // the profile for the aircraft's position is written into the sim's own region wind arrays. Throttled, and only if writable.
 // Still needed (log 2026-11-04 13:26): with this off, X-Plane read 180 deg / 1 kt at every flight level from FL100 up, whatever the
 // records said; the winds aloft only reach the sim through its region arrays. region_winds = 0 turns it off.
-void pushRegionWinds(const wx::XpWx& x) {
+void pushRegionWinds(const wx::XpWx& xin) {
     if (!g_cfg.regionWinds) return;
     static std::time_t last = 0;
     static bool reported = false;
     const std::time_t now = std::time(nullptr);
-    if (now - last < 20 || x.winds.size() < 2) return;
+    if (now - last < 20) return;
+    // Validated first (2026-11-06): a profile with impossible values is not written at all, the sim keeps the last good one.
+    wx::XpWx x = xin;
+    std::string why;
+    const int bad = wx::validateProfile(x, true, &why);
+    static std::time_t lastBadLog = 0;
+    if (bad && now - lastBadLog > 120) { lastBadLog = now; logf("region profile: %d value(s) rejected before writing (%s)", bad, why.c_str()); }
+    if (x.winds.size() < 2) return;
     last = now;
     XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
                 drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
@@ -1128,28 +1190,64 @@ void pushRegionWinds(const wx::XpWx& x) {
         if (!reported) { reported = true; logf("region wind datarefs are missing or read-only: not writing winds aloft there"); }
         return;
     }
+    // Fixed altitudes, the same at every write (before, the layout followed the nearest station's terrain and could squeeze 7 layers into
+    // 20 ft), and each write moves at most 3 m/s per level towards the new profile, so crossing from one record's winds to another's is
+    // a change over a minute or two, not a step the autopilot and the ground speed feel at once.
+    static const float kRegionFt[XPLM_NUM_WIND_LAYERS] = {1000, 3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000};
+    static bool haveW = false;
+    static float cu[XPLM_NUM_WIND_LAYERS], cv[XPLM_NUM_WIND_LAYERS];
     float al[XPLM_NUM_WIND_LAYERS], sp[XPLM_NUM_WIND_LAYERS], di[XPLM_NUM_WIND_LAYERS];
+    const float rad = 3.14159265f / 180.0f, kStepMs = 3.0f;
     for (int k = 0; k < XPLM_NUM_WIND_LAYERS; ++k) {
-        const size_t i = std::min((size_t)k, x.winds.size() - 1);
-        al[k] = x.winds[i].altMsl + (float)(k >= (int)x.winds.size() ? (k - (int)x.winds.size() + 1) * 500 : 0);
-        sp[k] = x.winds[i].ms;
-        di[k] = x.winds[i].dir;
+        al[k] = kRegionFt[k] * 0.3048f;
+        const wx::XpWind w = wx::windAt(x.winds, al[k]);
+        const float tu = w.ms * std::sin(w.dir * rad), tv = w.ms * std::cos(w.dir * rad);
+        if (!haveW) { cu[k] = tu; cv[k] = tv; }
+        else {
+            const float du = tu - cu[k], dv = tv - cv[k], d = std::sqrt(du * du + dv * dv);
+            const float f = d > kStepMs ? kStepMs / d : 1.0f;
+            cu[k] += du * f; cv[k] += dv * f;
+        }
+        sp[k] = std::sqrt(cu[k] * cu[k] + cv[k] * cv[k]);
+        di[k] = sp[k] > 0.05f ? std::fmod(std::atan2(cu[k], cv[k]) / rad + 360.0f, 360.0f) : w.dir;
     }
+    haveW = true;
     XPLMSetDatavf(drA, al, 0, XPLM_NUM_WIND_LAYERS);
     XPLMSetDatavf(drS, sp, 0, XPLM_NUM_WIND_LAYERS);
     XPLMSetDatavf(drD, di, 0, XPLM_NUM_WIND_LAYERS);
-    if (!reported) { reported = true; logf("writing winds aloft into the sim's region wind datarefs (every 20 s)"); }
+    if (!reported) { reported = true; logf("writing winds aloft into the sim's region wind datarefs (every 20 s, at most 3 m/s change per level per write)"); }
     // Temperatures aloft the same way (log 2026-11-04 13:29): X-Plane used our temperatures right at the airport, but a few miles away
-    // it drifted back to its own (-17..-21 C at FL180 where we send -14), and those patches of different temperature are patches of
-    // different pressure at the same height: the barometric altitude moved by hundreds of feet as the aircraft flew across them.
+    // it drifted back to its own, and patches of different temperature are patches of different pressure at the same height.
+    // Ramped too (2026-11-06): the pressure at FL350 depends on the temperature of the whole column below, so a column changed all at
+    // once moves the altimeter all at once (by 4,000 ft near Creede). At most 1.5 C per level per write, starting from what the sim has.
     static XPLMDataRef drT = XPLMFindDataRef("sim/weather/region/temperatures_aloft_deg_c");
-    static bool tReported = false;
+    static bool tReported = false, haveT = false;
+    static float ct[XPLM_NUM_TEMPERATURE_LAYERS];
     if (drT && XPLMCanWriteDataRef(drT) && x.tempProfile.size() >= 2 && g_drLevels) {
         float lv[XPLM_NUM_TEMPERATURE_LAYERS], tc[XPLM_NUM_TEMPERATURE_LAYERS];
         if (XPLMGetDatavf(g_drLevels, lv, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS) {
-            for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k) tc[k] = wx::profileTemp(x.tempProfile, lv[k]);
+            if (!haveT) {
+                float cur[XPLM_NUM_TEMPERATURE_LAYERS];
+                const bool got = XPLMGetDatavf(drT, cur, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
+                for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k)
+                    ct[k] = (got && std::isfinite(cur[k]) && cur[k] > -95.0f && cur[k] < 60.0f) ? cur[k] : wx::profileTemp(x.tempProfile, lv[k]);
+                haveT = true;
+            }
+            float maxGap = 0; int gapK = 0;
+            for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k) {
+                const float target = wx::profileTemp(x.tempProfile, lv[k]);
+                const float d = target - ct[k];
+                if (std::fabs(d) > maxGap) { maxGap = std::fabs(d); gapK = k; }
+                ct[k] += std::max(-1.5f, std::min(1.5f, d));
+                tc[k] = ct[k];
+            }
             XPLMSetDatavf(drT, tc, 0, XPLM_NUM_TEMPERATURE_LAYERS);
-            if (!tReported) { tReported = true; logf("writing temperatures aloft into the sim's region temperature datarefs (every 20 s)"); }
+            static std::time_t lastRampLog = 0;
+            if (maxGap > 5.0f && now - lastRampLog > 60) {
+                lastRampLog = now;
+                logf("region temperatures ramping: %.0f ft is %.1f C from the new profile (moving 1.5 C per 20 s)", lv[gapK] / 0.3048f, maxGap);
+            }
+            if (!tReported) { tReported = true; logf("writing temperatures aloft into the sim's region temperature datarefs (every 20 s, at most 1.5 C per level per write)"); }
         }
     } else if (!tReported && x.tempProfile.size() >= 2) {
         tReported = true;
@@ -1191,7 +1289,9 @@ void weatherWatch() {
     logf("weather watch (nearest %s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
          nearSt ? nearSt->icao.c_str() : "?", nearSt ? nearD : 0.0, info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
          cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
-    logf("  pressure: report QNH %.1f hPa | X-Plane at the aircraft: pressure %.1f hPa, sea level %.1f hPa (aircraft at %.0f ft)",
+    // pressure_alt in a weather read-back is the QNH-style value X-Plane holds for the spot (it read 1008-1045 hPa at FL350), not the air
+    // pressure at the aircraft; the real static pressure is in the altitude watch ("outside pressure").
+    logf("  pressure: report QNH %.1f hPa | X-Plane's read-back for this spot: QNH-style value %.1f hPa, sea level %.1f hPa (aircraft at %.0f ft; outside pressure is in the altitude watch)",
          x.qnhPa / 100.0f, info.pressure_alt / 100.0f, info.pressure_sl / 100.0f, el / 0.3048);
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
@@ -1318,12 +1418,16 @@ Clock::time_point g_lastStallLog{};
 // For "the autopilot can't hold altitude": separates the two possible causes. If the indicated altitude moves while the true (geometric)
 // altitude stays put, the pressure field under the aircraft is changing (our records' QNH/temperatures); if the true altitude moves with
 // vertical air (updrafts/downdrafts from clouds, terrain or turbulence), the aircraft is really being pushed up and down.
+bool g_eventDump = false;   // set by the altitude watch on an event: the weather watch prints its full picture at the next loop
 struct AltWatch {
     bool init = false;
     XPLMDataRef geo = nullptr, ind = nullptr, palt = nullptr, baro = nullptr, setting = nullptr, vs = nullptr, vy = nullptr, agl = nullptr, apAlt = nullptr, turb = nullptr;
+    XPLMDataRef ias = nullptr, tas = nullptr, gs = nullptr, mach = nullptr, wdir = nullptr, wspd = nullptr, zulu = nullptr;
     int n = 0;
     double geoMin = 0, geoMax = 0, indMin = 0, indMax = 0, dMin = 0, dMax = 0, pMin = 0, pMax = 0, vsMin = 0, vsMax = 0, vyMin = 0, vyMax = 0, tMax = 0;
+    double iasMin = 0, iasMax = 0, tasMin = 0, tasMax = 0, gsMin = 0, gsMax = 0, mMin = 0, mMax = 0;
     Clock::time_point start;
+    Clock::time_point lastSummary, lastEvent;
 } g_aw;
 
 double awGet(XPLMDataRef r) {
@@ -1349,16 +1453,41 @@ void altitudeWatch() {
         a.agl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
         a.apAlt = XPLMFindDataRef("sim/cockpit/autopilot/altitude");
         a.turb = XPLMFindDataRef("sim/weather/aircraft/turbulence");
+        a.ias = XPLMFindDataRef("sim/flightmodel/position/indicated_airspeed");   // kt
+        a.tas = XPLMFindDataRef("sim/flightmodel/position/true_airspeed");        // m/s
+        a.gs = XPLMFindDataRef("sim/flightmodel/position/groundspeed");           // m/s
+        a.mach = XPLMFindDataRef("sim/flightmodel/misc/machno");
+        a.wdir = XPLMFindDataRef("sim/cockpit2/gauges/indicators/wind_heading_deg_mag");
+        a.wspd = XPLMFindDataRef("sim/cockpit2/gauges/indicators/wind_speed_kts");
+        a.zulu = XPLMFindDataRef("sim/time/zulu_time_sec");
+        a.lastSummary = a.lastEvent = Clock::now() - std::chrono::hours(1);
     }
+    if (g_cfg.diagVerbosity <= 0) return;
     const double agl = awGet(a.agl);
     if (!(agl > 150.0)) { a.n = 0; return; }   // on the ground or about to land: nothing to watch
     const double geoFt = awGet(a.geo) / 0.3048, ind = awGet(a.ind), d = ind - geoFt, p = awGet(a.baro) / 100.0, vs = awGet(a.vs), vy = awGet(a.vy), tb = awGet(a.turb);
     auto mm = [&](double v, double& lo, double& hi) { if (std::isnan(v)) return; if (a.n == 0 || std::isnan(lo)) { lo = hi = v; } else { lo = std::min(lo, v); hi = std::max(hi, v); } };
-    if (a.n == 0) { a.start = Clock::now(); a.geoMin = a.indMin = a.dMin = a.pMin = a.vsMin = a.vyMin = NAN; a.tMax = 0; }
+    if (a.n == 0) { a.start = Clock::now(); a.geoMin = a.indMin = a.dMin = a.pMin = a.vsMin = a.vyMin = a.iasMin = a.tasMin = a.gsMin = a.mMin = NAN; a.tMax = 0; }
     mm(geoFt, a.geoMin, a.geoMax); mm(ind, a.indMin, a.indMax); mm(d, a.dMin, a.dMax); mm(p, a.pMin, a.pMax); mm(vs, a.vsMin, a.vsMax); mm(vy, a.vyMin, a.vyMax);
+    mm(awGet(a.ias), a.iasMin, a.iasMax); mm(awGet(a.tas) / 0.514444, a.tasMin, a.tasMax); mm(awGet(a.gs) / 0.514444, a.gsMin, a.gsMax); mm(awGet(a.mach), a.mMin, a.mMax);
     if (!std::isnan(tb)) a.tMax = std::max(a.tMax, tb);
     ++a.n;
     if (Clock::now() - a.start < std::chrono::seconds(10)) return;
+    // Verbosity (diag_verbosity): 2 = this line every 10 s; 1 (default) = a summary every 5 min, plus every window that looks like an
+    // event - the indicated-minus-true gap moving by 200+ ft, 2,500+ fpm while the autopilot target is within 1,000 ft, or the ground
+    // speed moving by 25+ kt - and then the full weather picture at the aircraft once a minute; 0 = off.
+    const double apT = awGet(a.apAlt);
+    const bool event = (a.dMax - a.dMin) > 200.0 || (std::max(std::fabs(a.vsMin), std::fabs(a.vsMax)) > 2500.0 && std::fabs(apT - a.indMax) < 1000.0) ||
+                       (a.gsMax - a.gsMin) > 25.0;
+    const auto nowC = Clock::now();
+    const bool summary = nowC - a.lastSummary > std::chrono::minutes(5);
+    if (g_cfg.diagVerbosity < 2 && !event && !summary) { a.n = 0; return; }
+    if (summary) a.lastSummary = nowC;
+    const double z = awGet(a.zulu);
+    logf("%s (UTC %02d:%02d:%02d, %.4f,%.4f): IAS %.0f..%.0f kt, TAS %.0f..%.0f kt, Mach %.3f..%.3f, GS %.0f..%.0f kt, wind at the aircraft %03.0f MAG/%.0f kt",
+         event ? "ALTITUDE/SPEED EVENT" : "flight state", std::isnan(z) ? 0 : (int)(z / 3600) % 24, std::isnan(z) ? 0 : (int)(z / 60) % 60, std::isnan(z) ? 0 : (int)z % 60,
+         XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), a.iasMin, a.iasMax, a.tasMin, a.tasMax, a.mMin, a.mMax, a.gsMin, a.gsMax, awGet(a.wdir), awGet(a.wspd));
+    if (event && nowC - a.lastEvent > std::chrono::minutes(1)) { a.lastEvent = nowC; g_eventDump = true; }
     logf("altitude watch (%d samples over 10 s, %.0f ft AGL): true %.0f..%.0f ft, indicated %.0f..%.0f ft (indicated minus true %+.0f..%+.0f), outside pressure %.1f..%.1f hPa, "
          "baro set %.2f inHg, VS %+.0f..%+.0f fpm, vertical air %+.1f..%+.1f m/s, turbulence %.2f, AP target %.0f ft",
          a.n, agl / 0.3048, a.geoMin, a.geoMax, a.indMin, a.indMax, a.dMin, a.dMax, a.pMin, a.pMax, awGet(a.setting), a.vsMin, a.vsMax, a.vyMin, a.vyMax, a.tMax, awGet(a.apAlt));
@@ -1421,6 +1550,7 @@ float flightLoop(float, float, int, void*) {
         static Clock::time_point nextRegion{};
         if (Clock::now() >= nextRegion) { nextRegion = Clock::now() + std::chrono::seconds(20); regionTick(); }
     }
+    if (g_eventDump && g_haveLast) { g_eventDump = false; logf("full weather picture at the aircraft for the event above:"); weatherWatch(); }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();
         ++g_watchN;
@@ -1457,6 +1587,7 @@ float flightLoop(float, float, int, void*) {
             if (g_cfg.updateMinutes * 60.0 > 30.0) g_lastRequest = Clock::now() - std::chrono::seconds((long)(g_cfg.updateMinutes * 60.0 - 30.0));
         } else if (g_cfg.enabled) {
             if (!res.error.empty()) logf("%s", res.error.c_str());
+            annotateMagneticVariation(res);
             applyResult(res, true);
         }
     }

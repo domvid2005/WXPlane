@@ -137,6 +137,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     std::sort(keep.begin(), keep.end(), [](const Station& a, const Station& b) { return a.distNm < b.distNm; });
     if ((int)keep.size() > cfg.maxStations) keep.resize((size_t)cfg.maxStations);
     res.metarCount = (int)keep.size();
+    res.elevNote = checkStationElevations(keep);
 
     // 2) ATIS for the closest airports (D-ATIS covers major US airports; others simply return nothing).
     if (cfg.useAtis) {
@@ -201,7 +202,17 @@ std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_
                 if (firstErr.empty()) firstErr = err;
                 continue;
             }
-            mergeAloft(all, parseWindTemp(body));
+            std::vector<AloftStation> got = parseWindTemp(body);
+            if (got.empty() && firstErr.empty()) {
+                // Every update of the 2026-11-05 flight said "no data parsed": the download worked but nothing in it read as FD lines. The
+                // answer's status, size and start now go in the log so the cause (an error page, a format change) can be seen.
+                std::string head = body.substr(0, 160);
+                for (char& c : head) if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+                char b[96];
+                std::snprintf(b, sizeof b, "%s: HTTP %ld, %zu bytes, nothing read as FD lines, start: ", level, st, body.size());
+                firstErr = std::string(b) + "\"" + head + "\"";
+            }
+            mergeAloft(all, got);
         }
         if (all.empty()) {
             note = firstErr.empty() ? "NOAA winds aloft: no data parsed" : "NOAA winds aloft: " + firstErr;

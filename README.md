@@ -400,3 +400,18 @@ The "weather watch" and "visibility check" blocks now also print `winds aloft we
 ### Same wind layers in every record
 
 Every record that carries winds aloft now has exactly 13 wind layers: the surface wind plus the same 12 altitudes (3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000 ft), interpolated as vectors from the NOAA/model levels. Before, a station on high terrain skipped the levels under its ground and a record without the model's top levels stopped lower; the unused slots were left undefined, and X-Plane fills those from its own winds, which are calm after WXPlane resets the weather. Blending such records with full ones gave about 1 kt at FL360 where the real wind was close to 100 kt. A level under the terrain carries the wind of the lowest level above it, at an altitude 1 m over the previous layer so the list stays ascending.
+
+
+## FL350 excursion fix, station elevations, magnetic ATIS winds (2026-11-06)
+
+Full investigation: `docs/2026-11-06-fl350-investigation.md`.
+
+- Station elevations are checked on every download. KC24 came in as 8,680 m (its feet read as metres), and that pushed the whole wind and
+  temperature profile above 28,510 ft. The warm column it produced made the altimeter read 4,000 ft low at FL350.
+- Winds aloft use the same nominal altitudes in every record, strictly ascending and at least 150 m apart; nothing is squeezed against
+  the terrain. Forecast temperatures are kept below the terrain too.
+- `validateProfile` drops impossible wind, temperature, QNH and rain values before anything reaches X-Plane.
+- The sim's region wind and temperature arrays change gradually: at most 3 m/s and 1.5 °C per level every 20 s, on fixed altitudes.
+- ATIS winds (magnetic) are converted to true with X-Plane's variation at the airport; METAR and winds-aloft winds are already true.
+- `diag_verbosity` (0/1/2): event-triggered flight-state logging (UTC, position, IAS/TAS/Mach/GS, wind, then the full weather picture);
+  surface-state lines at start-up for wet-runway reports.

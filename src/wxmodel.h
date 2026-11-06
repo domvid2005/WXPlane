@@ -52,11 +52,23 @@ struct XpWx {
     std::vector<XpWind> winds;                         // surface layer first, then aloft levels (ascending)
     bool modelCirrus = false;   // a cirrus layer was added from the global model's high cloud
     std::vector<std::pair<float, float>> tempProfile; // (altitude MSL m, degC), ascending
+    int aloftRejected = 0;                            // forecast values dropped as impossible (NaN, out of range)
     float maxAltFt = 10000;
 };
 
 // Temperature from a profile at an altitude (linear between points, constant outside).
 float profileTemp(const std::vector<std::pair<float, float>>& p, float altM);
+float isaTempC(float altM);
+// Wind at an altitude from an ascending profile, interpolated as vectors (350 and 010 deg give 000); ends are held.
+XpWind windAt(const std::vector<XpWind>& p, float altM);
+// Winds/temperatures aloft of a record from the sampled forecast levels; x.winds holds the surface layer (if any) on entry.
+void buildAloftProfile(XpWx& x, const std::vector<AloftSample>& smp, double elevM, bool hasSfcT, float sfcT);
+// Magnetic to true: TRUE = MAGNETIC + east variation (west variation negative), normalised to 0..359. Calm and variable winds keep their
+// direction as reported (0 for calm/VRB).
+int magneticToTrue(int dirMag, double varEastDeg, bool calmOrVariable);
+// Checks a finished profile before it goes to X-Plane: ascending, at least 100 m apart, finite and physically possible. Returns the
+// number of problems; with fix = true, bad entries are dropped.
+int validateProfile(XpWx& x, bool fix, std::string* why = nullptr);
 
 // fogSlot: reserve cloud slot 0 for ground fog at EVERY station (empty where there is none). X-Plane blends cloud
 // layers between neighbouring reports by slot number, so fog must always sit in the same slot or it gets mixed

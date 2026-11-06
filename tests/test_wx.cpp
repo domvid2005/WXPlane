@@ -892,6 +892,10 @@ int main() {
     CHECK(al[2].levels.size() == 8 && al[2].levels.back().altFt == 39000);
     CHECK(al[2].levels.back().dirDeg == 260 && al[2].levels.back().speedKt == 112 && al[2].levels.back().tempC == -53); // >=100 kt coding
     CHECK(parseWindTemp("garbage\n<html>").empty());
+    {   // a 4-letter form of the identifier reads the same (robustness for a product change)
+        auto k4 = parseWindTemp("FT  3000    6000    9000   12000   18000   24000  30000  34000  39000\nKABI 2420    2625+11 2731+06 2834+00 2938-16 3047-30 305945 305552 305157\n");
+        CHECK(k4.size() == 1 && k4[0].id == "ABI" && k4[0].levels.size() == 9);
+    }
 
     {   // blending: two stations either side of a point; closer one dominates
         std::vector<AloftStation> st2(2);
@@ -1034,6 +1038,105 @@ int main() {
         RadarCell c4; c4.lat = 38; c4.lon = -98; c4.dbz = 45; c4.frac = 1; c4.topKnown = true; c4.topM = 11000; c4.rateMmH = rateFromDbz(45);
         XpWx s4 = b4; applyStorm(s4, c4, oc, 380, 38);
         CHECK(s4.clouds[1].baseM == b4.clouds[1].baseM && s4.clouds[2].topM == 11000);
+    }
+
+    // ---- 2026-11-06: FL350 excursion near Creede, CO (KC24) and the checks added for it ----------------------------------------------
+    {   // station elevation sanity: 8,680 "m" is 8,680 ft; ordinary mountain neighbours stay as they are
+        std::vector<Station> st(4);
+        st[0].icao = "KC24"; st[0].lat = 37.82; st[0].lon = -106.93; st[0].elevM = 8680;     // the bad value from the log
+        st[1].icao = "KDRO"; st[1].lat = 37.15; st[1].lon = -107.75; st[1].elevM = 2038;
+        st[2].icao = "KPSO"; st[2].lat = 37.29; st[2].lon = -107.06; st[2].elevM = 2343;
+        st[3].icao = "KLXV"; st[3].lat = 39.22; st[3].lon = -106.32; st[3].elevM = 3027;     // a genuinely high field
+        const std::string note = checkStationElevations(st);
+        NEAR(st[0].elevM, 2645.7, 1.0);
+        CHECK(st[1].elevM == 2038 && st[2].elevM == 2343 && st[3].elevM == 3027);
+        CHECK(note.find("KC24") != std::string::npos && note.find("KDRO") == std::string::npos);
+        std::vector<Station> lone(1); lone[0].icao = "XXXX"; lone[0].elevM = 9000;    // no neighbours, still impossible: read as feet
+        checkStationElevations(lone); NEAR(lone[0].elevM, 2743.2, 1.0);
+        std::vector<Station> nan1(1); nan1[0].elevM = NAN; checkStationElevations(nan1); CHECK(nan1[0].elevM == 0.0);
+    }
+    // forecast levels as the global model gave them in the log, plus FD-style levels
+    std::vector<AloftSample> prof;
+    {
+        const double lv[][4] = {{3000, 140, 6, 18}, {6000, 150, 7, 10}, {9000, 135, 8, 4}, {12000, 136, 3, -2}, {18000, 305, 16, -13},
+                                {24000, 299, 32, -26}, {30000, 288, 40, -40}, {34000, 282, 40, -50}, {39000, 272, 49, -57}, {45354, 289, 45, -57}, {53614, 283, 38, -58}};
+        for (const auto& l : lv) { AloftSample a; a.altFt = l[0]; a.hasWind = true; a.dirDeg = l[1]; a.speedKt = l[2]; a.hasTemp = true; a.tempC = l[3]; prof.push_back(a); }
+    }
+    auto checkProfile = [&](const XpWx& x, double elevM, const char* what) {
+        bool asc = true, spaced = true;
+        for (size_t i = 1; i < x.winds.size(); ++i) { asc = asc && x.winds[i].altMsl > x.winds[i - 1].altMsl; spaced = spaced && x.winds[i].altMsl - x.winds[i - 1].altMsl >= 150.0f; }
+        if (!(asc && spaced && x.winds.size() <= 13 && x.winds.size() >= 12)) std::printf("  profile check failed: %s\n", what);
+        CHECK(asc && spaced && x.winds.size() <= 13 && x.winds.size() >= 12);
+        XpWx v = x; std::string vw; const int vb = validateProfile(v, false, &vw); if (vb) std::printf("  %s: %s\n", what, vw.c_str()); CHECK(vb == 0);
+        (void)elevM;
+    };
+    {   // high-elevation station (KC24 at its real 2,646 m): no squeezed layers, the forecast temperatures kept below and above the ground
+        Station s; s.icao = "KC24"; s.lat = 37.82; s.lon = -106.93; s.elevM = 2646;
+        parseReport("KC24 052315Z AUTO 00000KT 10SM CLR 03/M10 A3027", s.report);
+        XpWx x; x.hasWind = true; XpWind w0; w0.altMsl = 2656; x.winds.push_back(w0); x.hasTemp = true; x.tempC = 3;
+        buildAloftProfile(x, prof, s.elevM, true, 3.0f);
+        checkProfile(x, s.elevM, "KC24 real elevation");
+        NEAR(profileTemp(x.tempProfile, 18000 * 0.3048f), -13.0, 0.5);   // was +3 (the surface temperature held up to FL240)
+        NEAR(profileTemp(x.tempProfile, 24000 * 0.3048f), -26.0, 0.5);
+        const XpWind f350 = windAt(x.winds, 35000 * 0.3048f);
+        CHECK(f350.ms / 0.514444f > 38 && f350.ms / 0.514444f < 46);      // the jet-level wind, not a calm band
+        const XpWind below = windAt(x.winds, 1000.0f);                    // under the ground: the surface wind, held
+        CHECK(below.ms < 0.5f);
+        // the same station with the elevation the log had (8,690 m): still ordered and spaced; no 7 layers within 20 ft
+        XpWx y; y.hasWind = true; XpWind w1; w1.altMsl = 8690; y.winds.push_back(w1);
+        buildAloftProfile(y, prof, 8680, true, 3.0f);
+        checkProfile(y, 8680, "KC24 bad elevation");
+    }
+    {   // missing and malformed winds-aloft data: NaN, impossible speed, impossible temperature are dropped, never turned into 0
+        std::vector<AloftSample> bad = prof;
+        bad[6].speedKt = NAN; bad[7].speedKt = 900; bad[8].tempC = 45; bad[2].tempC = NAN;
+        XpWx x; buildAloftProfile(x, bad, 300, false, 0);
+        CHECK(x.aloftRejected == 4);
+        const XpWind f300 = windAt(x.winds, 30000 * 0.3048f);
+        CHECK(f300.ms / 0.514444f > 20);                                   // interpolated across the gap, not 0
+        XpWx none; buildAloftProfile(none, std::vector<AloftSample>(), 300, false, 0);
+        CHECK(none.winds.empty() && !none.aloft);                          // no data: nothing invented
+    }
+    {   // directions across north interpolate as vectors
+        std::vector<XpWind> p(2);
+        p[0].altMsl = 1000; p[0].dir = 350; p[0].ms = 10; p[1].altMsl = 2000; p[1].dir = 10; p[1].ms = 10;
+        const XpWind m = windAt(p, 1500);
+        CHECK((m.dir > 359.0f || m.dir < 1.0f) && m.ms > 9.7f && m.ms < 9.9f);
+        p[0].dir = 270; p[1].dir = 90; p[1].ms = 0;                        // strong gradient: speed fades, direction holds
+        CHECK(std::fabs(windAt(p, 1500).dir - 270.0f) < 0.5f);
+    }
+    {   // magnetic to true
+        CHECK(magneticToTrue(270, 10, false) == 280);
+        CHECK(magneticToTrue(270, -10, false) == 260);
+        CHECK(magneticToTrue(5, -10, false) == 355);
+        CHECK(magneticToTrue(355, 10, false) == 5);
+        CHECK(magneticToTrue(360, 0.2, false) == 360);                     // near-zero variation
+        CHECK(magneticToTrue(10, -10, false) == 360);                      // north stays 360, never 0 (0 means calm)
+        CHECK(magneticToTrue(0, 15, true) == 0);                           // calm / variable: untouched
+        CHECK(magneticToTrue(150, -20.5, false) == 130);                   // large west variation
+        Station a; parseReport("KCMH 061951Z 15013G19KT 10SM OVC100 17/15 A2984", a.report);
+        Report atis; parseReport("CMH ATIS INFO P 1951Z. 15013G19KT 5SM RA BR OVC100 17/15 A2984", atis, true);
+        mergeAtis(a, atis, "x");
+        CHECK(a.report.windMagnetic && a.report.windDir == 150);           // flagged for the sim-thread conversion
+        Station m; parseReport("KCMH 061951Z 15013G19KT 10SM OVC100 17/15 A2984", m.report);
+        CHECK(!m.report.windMagnetic);                                     // METAR wind is true: never converted
+    }
+    {   // validation: compressed layers, NaN and impossible values never pass
+        XpWx v; for (int i = 0; i < 4; ++i) { XpWind w; w.altMsl = 8690.0f + i; v.winds.push_back(w); }
+        XpWind ok; ok.altMsl = 9144; ok.ms = 18; ok.dir = 302; v.winds.push_back(ok);
+        std::string why;
+        CHECK(validateProfile(v, true, &why) == 3 && v.winds.size() == 2 && why.find("100 m") != std::string::npos);
+        XpWx t; t.tempProfile = {{1000, 10}, {5000, NAN}, {7000, 3}, {9000, 10}}; t.qnhPa = 50000; t.precip = NAN;
+        CHECK(validateProfile(t, true) == 4 && t.tempProfile.size() == 2 && t.qnhPa == 0 && t.precip == 0);
+        // the KC24 column (+3 C at FL240 = ISA+36) is unusual but possible, so it is the elevation fix, not this check, that removes it
+        XpWx w; w.tempProfile = {{2646, 3}, {7315, 3}, {9144, -28}};
+        CHECK(validateProfile(w, false) == 0);
+    }
+    {   // a dry METAR gives no rain; a rain METAR does
+        Config dc; Station d; d.elevM = 200; parseReport("KAAA 061951Z 27005KT 10SM CLR 15/05 A3000", d.report);
+        CHECK(buildXp(d, dc, now).precip == 0.0f);
+        Station r; r.elevM = 200; parseReport("KAAA 061951Z 27005KT 3SM RA OVC010 15/14 A3000", r.report);
+        CHECK(buildXp(r, dc, now).precip > 0.0f);
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

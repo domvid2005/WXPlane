@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include "geo.h"
 #include <cstdio>
 
 #include "json_mini.h"
@@ -129,6 +130,37 @@ std::vector<Station> parseAwcMetarJson(const std::string& body, std::string* err
         const Json* el = o.get("elev");
         s.elevM = el ? el->asNum(0) : 0; // AWC reports station elevation in metres
         out.push_back(std::move(s));
+    }
+    return out;
+}
+
+std::string checkStationElevations(std::vector<Station>& st) {
+    std::string out;
+    std::vector<double> orig;
+    for (const auto& s : st) orig.push_back(s.elevM);
+    auto inRange = [](double m) { return std::isfinite(m) && m >= -450.0 && m <= 5600.0; };
+    for (size_t i = 0; i < st.size(); ++i) {
+        std::vector<double> nb;
+        for (size_t j = 0; j < st.size(); ++j)
+            if (j != i && inRange(orig[j]) && distNm(st[i].lat, st[i].lon, st[j].lat, st[j].lon) < 50.0) nb.push_back(orig[j]);
+        std::sort(nb.begin(), nb.end());
+        const bool haveNb = nb.size() >= 2;
+        const double med = haveNb ? nb[nb.size() / 2] : 0.0;
+        const double e = orig[i], asFt = e * 0.3048;
+        double fixed = e;
+        const char* why = nullptr;
+        if (!inRange(e)) {
+            if (inRange(asFt) && (!haveNb || std::fabs(asFt - med) < 1200.0)) { fixed = asFt; why = "outside -450..5600 m, read as feet"; }
+            else { fixed = med; why = haveNb ? "outside -450..5600 m, neighbours' median used" : "outside -450..5600 m, sea level used"; }
+        } else if (haveNb && std::fabs(e - med) > 1500.0 && std::fabs(asFt - med) < 600.0) {
+            fixed = asFt; why = "far from every neighbour, fits them in feet";
+        }
+        if (why) {
+            char b[200];
+            std::snprintf(b, sizeof b, "%s%s elevation %.0f m -> %.0f m (%s)", out.empty() ? "" : "; ", st[i].icao.c_str(), e, fixed, why);
+            out += b;
+            st[i].elevM = fixed;
+        }
     }
     return out;
 }
