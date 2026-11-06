@@ -17,7 +17,14 @@ size_t sink(char* ptr, size_t size, size_t nmemb, void* ud) {
 void httpGlobalInit() { curl_global_init(CURL_GLOBAL_DEFAULT); }
 void httpGlobalCleanup() { curl_global_cleanup(); }
 
+static bool get(const std::string& url, const char* range, std::string& body, long& status, std::string& error, long timeoutSec, size_t maxBytes);
 bool httpGet(const std::string& url, std::string& body, long& status, std::string& error, long timeoutSec, size_t maxBytes) {
+    return get(url, nullptr, body, status, error, timeoutSec, maxBytes);
+}
+bool httpGetRange(const std::string& url, const std::string& range, std::string& body, long& status, std::string& error, long timeoutSec, size_t maxBytes) {
+    return get(url, range.c_str(), body, status, error, timeoutSec, maxBytes);
+}
+static bool get(const std::string& url, const char* range, std::string& body, long& status, std::string& error, long timeoutSec, size_t maxBytes) {
     body.clear();
     status = 0;
     Sink k{&body, maxBytes};
@@ -35,6 +42,7 @@ bool httpGet(const std::string& url, std::string& body, long& status, std::strin
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 8L);
     curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L); // required for multithreaded use
     curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
+    if (range) curl_easy_setopt(c, CURLOPT_RANGE, range);
     CURLcode rc = curl_easy_perform(c);
     if (rc != CURLE_OK) {
         error = errbuf[0] ? errbuf : curl_easy_strerror(rc);
