@@ -477,12 +477,16 @@ void surfaceDiag() {
 // centre), so the log shows how far the wind reaches (the footprint) and how fast it fades in (the latency). The aircraft is never touched,
 // and the record is erased when the test stops or after 5 minutes. Run it in cruise: the test wind is low-level only.
 void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x);
+struct ShearProbe {
+    double lat = 0, lon = 0, radiusNm = 0, lineBrg = 0;
+    XPLMWeatherInfo_t info;        // as sent, re-sent with any update that replaces all our records
+};
 struct ShearTest {
     bool active = false, sent = false;
-    int sizeIdx = 0, samples = 0;
-    double lat = 0, lon = 0, radiusNm = 0, groundM = 0, lineBrg = 0;
+    int samples = 0;
+    double groundM = 0;
     float dirDeg = 0, kt = 25;
-    XPLMWeatherInfo_t info;        // as sent, re-sent with any update that replaces all our records
+    ShearProbe p[3];               // all three sizes at once (2026-11-06: one size per run took three full runs and restarts reset it)
     Clock::time_point t0, next;
 } g_st;
 bool g_shearCmd = false;
@@ -490,9 +494,8 @@ bool g_shearCmd = false;
 void shearLog(const char* fmt, ...);
 bool shearTestActive() { return g_st.active && g_st.sent; }
 void shearTestResend() {   // inside an open XPLMBeginWeatherUpdate
-    XPLMWeatherInfo_t i = g_st.info;
-    XPLMSetWeatherAtLocation(g_st.lat, g_st.lon, g_st.groundM, &i);
-    shearLog("test record re-sent with WXPlane's replacing update");
+    for (auto& q : g_st.p) { XPLMWeatherInfo_t i = q.info; XPLMSetWeatherAtLocation(q.lat, q.lon, g_st.groundM, &i); }
+    shearLog("test records re-sent with WXPlane's replacing update");
 }
 
 void shearLog(const char* fmt, ...) {
@@ -516,11 +519,11 @@ void shearTestStop(const char* why) {
     if (!g_st.active) return;
     if (g_st.sent) {
         XPLMBeginWeatherUpdate();
-        XPLMEraseWeatherAtLocation(g_st.lat, g_st.lon);
-        XPLMEndWeatherUpdate(1 /*incremental: only this record*/, 0);
+        for (const auto& q : g_st.p) XPLMEraseWeatherAtLocation(q.lat, q.lon);
+        XPLMEndWeatherUpdate(1 /*incremental: only these records*/, 0);
     }
     g_st.active = false;
-    shearLog("test stopped (%s); test record erased", why);
+    shearLog("test stopped (%s); test records erased", why);
 }
 
 void shearTestToggle() {
@@ -531,35 +534,37 @@ void shearTestToggle() {
     static XPLMDataRef drElT = XPLMFindDataRef("sim/flightmodel/position/elevation");
     const double alat = XPLMGetDatad(g_drLat), alon = XPLMGetDatad(g_drLon);
     const double trk = drTrk ? XPLMGetDataf(drTrk) : 0.0, agl = drAglT ? XPLMGetDataf(drAglT) : 0.0, el = drElT ? XPLMGetDatad(drElT) : 0.0;
-    static const double kRadii[] = {1.0, 2.5, 5.0};
-    g_st.radiusNm = kRadii[g_st.sizeIdx % 3];
-    ++g_st.sizeIdx;
-    destPoint(alat, alon, trk + 30.0, 6.0, g_st.lat, g_st.lon);   // 6 nm ahead, 30 deg off the track
     g_st.groundM = std::max(-400.0, el - agl);                     // the ground under the aircraft, taken as flat for the probe
     g_st.dirDeg = (float)std::fmod(trk + 90.0 + 360.0, 360.0);    // across the track
-    g_st.lineBrg = trk + 30.0;                                     // probe line: from the aircraft through the centre and beyond
-    wx::Station b = wx::blendAt(g_lastRes.stations, g_st.lat, g_st.lon);
-    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, false);
     const float topM = (float)g_st.groundM + 3000.0f * 0.3048f;
-    bool any = false;
-    for (auto& w : x.winds) if (w.altMsl < topM) { w.dir = g_st.dirDeg; w.ms = g_st.kt * 0.514444f; w.gustMs = w.ms; any = true; }
-    if (!any) { wx::XpWind w; w.altMsl = (float)g_st.groundM + 10.0f; w.dir = g_st.dirDeg; w.ms = g_st.kt * 0.514444f; w.gustMs = w.ms; x.winds.insert(x.winds.begin(), w); }
-    XPLMWeatherInfo_t info;
-    fillInfo(info, x);
-    info.radius_nm = (float)g_st.radiusNm;
-    if (info.pressure_alt > 0) { info.pressure_sl = info.pressure_alt; info.pressure_alt = 0; }
-    g_st.info = info;
+    // 1, 2.5 and 5 nm records, 10 nm from the aircraft at 50 deg left, straight ahead and 50 deg right: at least 8 nm apart
+    static const double kR[3] = {1.0, 2.5, 5.0}, kOffDeg[3] = {-50.0, 0.0, 50.0};
     XPLMBeginWeatherUpdate();
-    XPLMSetWeatherAtLocation(g_st.lat, g_st.lon, g_st.groundM, &info);
+    for (int k = 0; k < 3; ++k) {
+        ShearProbe& q = g_st.p[k];
+        q.radiusNm = kR[k];
+        q.lineBrg = trk + kOffDeg[k];
+        destPoint(alat, alon, q.lineBrg, 10.0, q.lat, q.lon);
+        wx::Station b = wx::blendAt(g_lastRes.stations, q.lat, q.lon);
+        wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, false);
+        bool any = false;
+        for (auto& w : x.winds) if (w.altMsl < topM) { w.dir = g_st.dirDeg; w.ms = g_st.kt * 0.514444f; w.gustMs = w.ms; any = true; }
+        if (!any) { wx::XpWind w; w.altMsl = (float)g_st.groundM + 10.0f; w.dir = g_st.dirDeg; w.ms = g_st.kt * 0.514444f; w.gustMs = w.ms; x.winds.insert(x.winds.begin(), w); }
+        fillInfo(q.info, x);
+        q.info.radius_nm = (float)q.radiusNm;
+        if (q.info.pressure_alt > 0) { q.info.pressure_sl = q.info.pressure_alt; q.info.pressure_alt = 0; }
+        XPLMWeatherInfo_t i = q.info;
+        XPLMSetWeatherAtLocation(q.lat, q.lon, g_st.groundM, &i);
+        shearLog("test record %d: r=%.1f nm at %.4f,%.4f (10 nm out, %+.0f deg from track %.0f)", k + 1, q.radiusNm, q.lat, q.lon, kOffDeg[k], trk);
+    }
     XPLMEndWeatherUpdate(1 /*incremental*/, 0 /*not immediate: the normal fade*/);
     g_st.active = g_st.sent = true;
     g_st.samples = 0;
     g_st.t0 = Clock::now();
     g_st.next = g_st.t0;
-    shearLog("test started: record r=%.1f nm at %.4f,%.4f (6 nm ahead, 30 deg right of track %.0f), ground %.0f ft, wind %03.0f/%.0f kt below %.0f ft MSL; aircraft %.0f ft AGL",
-             g_st.radiusNm, g_st.lat, g_st.lon, trk, g_st.groundM / 0.3048, g_st.dirDeg, g_st.kt, topM / 0.3048, agl / 0.3048);
+    shearLog("test started: 3 records, ground %.0f ft, wind %03.0f/%.0f kt below %.0f ft MSL; aircraft %.0f ft AGL. It stops itself after 5 min: please do not stop it",
+             g_st.groundM / 0.3048, g_st.dirDeg, g_st.kt, topM / 0.3048, agl / 0.3048);
     shearLog("X-Plane's records have no vertical-wind field: downdrafts cannot be tested or applied through the weather API");
-    shearLog("let it run the full 4 minutes (it stops itself after 5); X-Plane starts fading a record in after ~30 s");
 }
 
 void shearTestTick() {
@@ -567,34 +572,25 @@ void shearTestTick() {
     if (!g_st.active) return;
     const auto now = Clock::now();
     const double t = std::chrono::duration<double>(now - g_st.t0).count();
-    if (t > 300.0) { shearTestStop("5 min"); return; }
-    if (now < g_st.next || t > 240.0) return;
-    g_st.next = now + std::chrono::seconds(t < 60.0 ? 5 : 15);
-    // along the line from the aircraft's start through the centre: -12..+12 nm from the centre
-    static const double kOff[] = {-12, -6, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 6, 12};
-    std::string line;
+    if (t > 300.0) { shearTestStop("5 min, complete"); return; }
+    if (now < g_st.next) return;
+    g_st.next = now + std::chrono::seconds(t < 180.0 ? 10 : 20);
+    static const double kOff[] = {-8, -5, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 5, 8};   // along the line from the aircraft through each centre
     const double hM = g_st.groundM + 300.0 * 0.3048;
-    for (double o : kOff) {
-        double la, lo;
-        destPoint(g_st.lat, g_st.lon, g_st.lineBrg, o, la, lo);
-        XPLMWeatherInfo_t q;
-        std::memset(&q, 0, sizeof q);
-        q.structSize = sizeof q;
-        XPLMGetWeatherAtLocation(la, lo, hM, &q);
-        char b[40];
-        std::snprintf(b, sizeof b, " %+.1fnm %03.0f/%.0f", o, q.wind_dir_alt, q.wind_spd_alt / 0.514444f);
-        line += b;
-    }
-    shearLog("t+%3.0fs wind 300 ft AGL along the probe line (record r=%.1f nm at 0):%s", t, g_st.radiusNm, line.c_str());
-    if (g_st.samples % 4 == 0) {   // the region arrays' lowest levels, to tell a record's wind from the region profile
-        static XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
-                           drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
-        float al[3] = {0}, sp[3] = {0}, di[3] = {0};
-        if (drA && drS && drD) {
-            XPLMGetDatavf(drA, al, 0, 3); XPLMGetDatavf(drS, sp, 0, 3); XPLMGetDatavf(drD, di, 0, 3);
-            shearLog("      region arrays (lowest 3): %.0fft %03.0f/%.0fkt  %.0fft %03.0f/%.0fkt  %.0fft %03.0f/%.0fkt", al[0] / 0.3048f, di[0], sp[0] / 0.514444f,
-                     al[1] / 0.3048f, di[1], sp[1] / 0.514444f, al[2] / 0.3048f, di[2], sp[2] / 0.514444f);
+    for (const auto& q : g_st.p) {
+        std::string line;
+        for (double o : kOff) {
+            double la, lo;
+            destPoint(q.lat, q.lon, q.lineBrg, o, la, lo);
+            XPLMWeatherInfo_t w;
+            std::memset(&w, 0, sizeof w);
+            w.structSize = sizeof w;
+            XPLMGetWeatherAtLocation(la, lo, hM, &w);
+            char b[40];
+            std::snprintf(b, sizeof b, " %+.1fnm %03.0f/%.0f", o, w.wind_dir_alt, w.wind_spd_alt / 0.514444f);
+            line += b;
         }
+        shearLog("t+%3.0fs r=%.1f nm, wind 300 ft AGL:%s", t, q.radiusNm, line.c_str());
     }
     ++g_st.samples;
 }

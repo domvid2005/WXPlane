@@ -27,11 +27,12 @@ Laminar's documentation, or WXPlane logs from real flights. Answers marked "meas
 
 Use it in cruise or well above the ground; the test wind sits below 3,000 ft AGL.
 
-1. Choose the menu item once. A record of radius 1 nm goes 6 nm ahead, 30° right of your track. Every wind layer below 3,000 ft above the
-   ground in it becomes 25 kt across your track.
-2. For 4 minutes the log reads X-Plane's own wind 300 ft above the ground along a line through the record, from 12 nm before to 12 nm
-   beyond it: every 5 s for the first minute, then every 15 s. Lines start with `[WXPlane Windshear]`.
-3. Choose it again to stop early. Each new start uses the next radius: 1, 2.5, then 5 nm. The record is erased at stop or after 5 minutes.
+1. Choose the menu item once. Three records go out at the same time, 10 nm from the aircraft: r=1 nm at 50° left of track, r=2.5 nm
+   straight ahead, r=5 nm at 50° right. In each, every wind layer below 3,000 ft above the ground becomes 25 kt across your track.
+2. For 5 minutes the log reads X-Plane's own wind 300 ft above the ground along a line through each record, from 8 nm before to 8 nm beyond
+   its centre: every 10 s for 3 minutes, then every 20 s. Lines start with `[WXPlane Windshear]`, one per record.
+3. Don't stop it: it ends by itself with "test stopped (5 min, complete)" and erases the records. Choosing the menu item again stops it
+   early.
 
 From the log:
 - **footprint:** how far from the centre the 25 kt reaches, for each radius;
@@ -39,8 +40,7 @@ From the log:
 - **fade-in time:** how long X-Plane takes to show it.
 
 Caveats:
-- A regular WXPlane update that replaces all records (the log says "one replacing update") also wipes the test record, so run the probe
-  just after an update.
+- If a regular WXPlane update replaces all records meanwhile, the test records are re-sent with it.
 - The ground is taken as flat at the height under the aircraft.
 
 ## Probe results so far (logs 2026-11-06 11:45 and 11:51, Daytona Beach, ~2,000 ft AGL, region writes on)

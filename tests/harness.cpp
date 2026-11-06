@@ -709,12 +709,12 @@ int main() {
         const int er0 = g_erases;
         g_menuHandler(nullptr, (void*)(intptr_t)9 /*kShearTest*/);
         g_cb(1, 1, 90000, nullptr);
-        CHECK(g_logAll.find("[WXPlane Windshear] test started: record r=1.0 nm") != std::string::npos);
-        CHECK(g_logAll.find("probe line (record r=1.0 nm at 0)") != std::string::npos);
+        CHECK(g_logAll.find("[WXPlane Windshear] test started: 3 records") != std::string::npos && g_logAll.find("test record 3: r=5.0 nm") != std::string::npos);
+        CHECK(g_logAll.find("r=1.0 nm, wind 300 ft AGL:") != std::string::npos && g_logAll.find("r=5.0 nm, wind 300 ft AGL:") != std::string::npos);
         CHECK(g_logAll.find("no vertical-wind field") != std::string::npos);
         g_menuHandler(nullptr, (void*)(intptr_t)9);
         g_cb(1, 1, 90001, nullptr);
-        CHECK(g_erases >= er0 + 1 && g_logAll.find("test stopped (menu)") != std::string::npos);
+        CHECK(g_erases >= er0 + 3 && g_logAll.find("test stopped (menu)") != std::string::npos);
     }
     XPluginDisable();
     {   // records are removed from the next pre-flight-model callback, once, and the loop then stops itself
