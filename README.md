@@ -415,3 +415,10 @@ Full investigation: `docs/2026-11-06-fl350-investigation.md`.
 - ATIS winds (magnetic) are converted to true with X-Plane's variation at the airport; METAR and winds-aloft winds are already true.
 - `diag_verbosity` (0/1/2): event-triggered flight-state logging (UTC, position, IAS/TAS/Mach/GS, wind, then the full weather picture);
   surface-state lines at start-up for wet-runway reports.
+
+## Windshear: capability probe first (2026-11-06)
+
+`docs/windshear-sdk-assessment.md` sets out what X-Plane's weather API can do for windshear. Downdrafts are not possible: records have no
+vertical wind. Vertical wind profiles only reach the sim region-wide. The menu item **Windshear Test: probe X-Plane (start / stop)** places
+one test wind record ahead of the aircraft and logs, for 4 minutes, how far and how fast X-Plane applies it. It decides whether gust fronts
+and microburst outflows can be represented at all. No windshear model is active yet.

@@ -41,7 +41,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kShearTest };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
@@ -439,6 +439,116 @@ void surfaceDiag() {
          done, best ? best->icao.c_str() : "none", bd, raw.substr(0, 120).c_str(), best ? best->info.precip_rate : 0.0f,
          drRain ? std::to_string(XPLMGetDataf(drRain)).c_str() : "n/a", drFr ? std::to_string(XPLMGetDatai(drFr)).c_str() : "n/a",
          drPr ? std::to_string(XPLMGetDataf(drPr)).c_str() : "n/a");
+}
+
+// ---- Windshear capability probe (2026-11-06) -----------------------------------------------------------------------------------------
+// Before a windshear model is built on X-Plane's weather API, this measures what the API actually does with a small, strong wind area.
+// The XPLMWeather records have no vertical-wind field, so only the horizontal part (a gust front / outflow) can be tested at all.
+// One test record is placed 6 nm ahead of the aircraft, off its track: the nearest record's weather, with every wind layer below 3,000 ft
+// above the ground replaced by a 25 kt wind across the aircraft's track. Each start uses the next radius (1, 2.5, 5 nm). For 4 minutes,
+// X-Plane's own wind 300 ft above the ground is read at the record's centre and at 0.5 to 12 nm from it (along a line through the
+// centre), so the log shows how far the wind reaches (the footprint) and how fast it fades in (the latency). The aircraft is never touched,
+// and the record is erased when the test stops or after 5 minutes. Run it in cruise: the test wind is low-level only.
+void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x);
+struct ShearTest {
+    bool active = false, sent = false;
+    int sizeIdx = 0, samples = 0;
+    double lat = 0, lon = 0, radiusNm = 0, groundM = 0, lineBrg = 0;
+    float dirDeg = 0, kt = 25;
+    Clock::time_point t0, next;
+} g_st;
+bool g_shearCmd = false;
+
+void shearLog(const char* fmt, ...) {
+    char buf[700];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    XPLMDebugString((std::string("[WXPlane Windshear] ") + buf + "\n").c_str());
+}
+
+void destPoint(double lat, double lon, double brgDeg, double nm, double& outLat, double& outLon) {
+    const double kPiD = 3.14159265358979323846;
+    const double r = 3440.065, d = nm / r, b = brgDeg * kPiD / 180.0, la = lat * kPiD / 180.0, lo = lon * kPiD / 180.0;
+    const double la2 = std::asin(std::sin(la) * std::cos(d) + std::cos(la) * std::sin(d) * std::cos(b));
+    const double lo2 = lo + std::atan2(std::sin(b) * std::sin(d) * std::cos(la), std::cos(d) - std::sin(la) * std::sin(la2));
+    outLat = la2 * 180.0 / kPiD; outLon = lo2 * 180.0 / kPiD;
+}
+
+void shearTestStop(const char* why) {
+    if (!g_st.active) return;
+    if (g_st.sent) {
+        XPLMBeginWeatherUpdate();
+        XPLMEraseWeatherAtLocation(g_st.lat, g_st.lon);
+        XPLMEndWeatherUpdate(1 /*incremental: only this record*/, 0);
+    }
+    g_st.active = false;
+    shearLog("test stopped (%s); test record erased", why);
+}
+
+void shearTestToggle() {
+    if (g_st.active) { shearTestStop("menu"); return; }
+    if (!g_haveLast || g_lastRes.stations.empty()) { shearLog("test not started: no weather applied yet"); return; }
+    static XPLMDataRef drTrk = XPLMFindDataRef("sim/flightmodel/position/hpath");
+    static XPLMDataRef drAglT = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+    static XPLMDataRef drElT = XPLMFindDataRef("sim/flightmodel/position/elevation");
+    const double alat = XPLMGetDatad(g_drLat), alon = XPLMGetDatad(g_drLon);
+    const double trk = drTrk ? XPLMGetDataf(drTrk) : 0.0, agl = drAglT ? XPLMGetDataf(drAglT) : 0.0, el = drElT ? XPLMGetDatad(drElT) : 0.0;
+    static const double kRadii[] = {1.0, 2.5, 5.0};
+    g_st.radiusNm = kRadii[g_st.sizeIdx % 3];
+    ++g_st.sizeIdx;
+    destPoint(alat, alon, trk + 30.0, 6.0, g_st.lat, g_st.lon);   // 6 nm ahead, 30 deg off the track
+    g_st.groundM = std::max(-400.0, el - agl);                     // the ground under the aircraft, taken as flat for the probe
+    g_st.dirDeg = (float)std::fmod(trk + 90.0 + 360.0, 360.0);    // across the track
+    g_st.lineBrg = trk + 30.0;                                     // probe line: from the aircraft through the centre and beyond
+    wx::Station b = wx::blendAt(g_lastRes.stations, g_st.lat, g_st.lon);
+    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, false);
+    const float topM = (float)g_st.groundM + 3000.0f * 0.3048f;
+    bool any = false;
+    for (auto& w : x.winds) if (w.altMsl < topM) { w.dir = g_st.dirDeg; w.ms = g_st.kt * 0.514444f; w.gustMs = w.ms; any = true; }
+    if (!any) { wx::XpWind w; w.altMsl = (float)g_st.groundM + 10.0f; w.dir = g_st.dirDeg; w.ms = g_st.kt * 0.514444f; w.gustMs = w.ms; x.winds.insert(x.winds.begin(), w); }
+    XPLMWeatherInfo_t info;
+    fillInfo(info, x);
+    info.radius_nm = (float)g_st.radiusNm;
+    if (info.pressure_alt > 0) { info.pressure_sl = info.pressure_alt; info.pressure_alt = 0; }
+    XPLMBeginWeatherUpdate();
+    XPLMSetWeatherAtLocation(g_st.lat, g_st.lon, g_st.groundM, &info);
+    XPLMEndWeatherUpdate(1 /*incremental*/, 0 /*not immediate: the normal fade*/);
+    g_st.active = g_st.sent = true;
+    g_st.samples = 0;
+    g_st.t0 = Clock::now();
+    g_st.next = g_st.t0;
+    shearLog("test started: record r=%.1f nm at %.4f,%.4f (6 nm ahead, 30 deg right of track %.0f), ground %.0f ft, wind %03.0f/%.0f kt below %.0f ft MSL; aircraft %.0f ft AGL",
+             g_st.radiusNm, g_st.lat, g_st.lon, trk, g_st.groundM / 0.3048, g_st.dirDeg, g_st.kt, topM / 0.3048, agl / 0.3048);
+    shearLog("X-Plane's records have no vertical-wind field: downdrafts cannot be tested or applied through the weather API");
+}
+
+void shearTestTick() {
+    if (g_shearCmd) { g_shearCmd = false; shearTestToggle(); }
+    if (!g_st.active) return;
+    const auto now = Clock::now();
+    const double t = std::chrono::duration<double>(now - g_st.t0).count();
+    if (t > 300.0) { shearTestStop("5 min"); return; }
+    if (now < g_st.next || t > 240.0) return;
+    g_st.next = now + std::chrono::seconds(t < 60.0 ? 5 : 15);
+    // along the line from the aircraft's start through the centre: -12..+12 nm from the centre
+    static const double kOff[] = {-12, -6, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 6, 12};
+    std::string line;
+    const double hM = g_st.groundM + 300.0 * 0.3048;
+    for (double o : kOff) {
+        double la, lo;
+        destPoint(g_st.lat, g_st.lon, g_st.lineBrg, o, la, lo);
+        XPLMWeatherInfo_t q;
+        std::memset(&q, 0, sizeof q);
+        q.structSize = sizeof q;
+        XPLMGetWeatherAtLocation(la, lo, hM, &q);
+        char b[40];
+        std::snprintf(b, sizeof b, " %+.1fnm %03.0f/%.0f", o, q.wind_dir_alt, q.wind_spd_alt / 0.514444f);
+        line += b;
+    }
+    shearLog("t+%3.0fs wind 300 ft AGL along the probe line (record r=%.1f nm at 0):%s", t, g_st.radiusNm, line.c_str());
+    ++g_st.samples;
 }
 
 void flushPending() {
@@ -1550,6 +1660,7 @@ float flightLoop(float, float, int, void*) {
         static Clock::time_point nextRegion{};
         if (Clock::now() >= nextRegion) { nextRegion = Clock::now() + std::chrono::seconds(20); regionTick(); }
     }
+    shearTestTick();
     if (g_eventDump && g_haveLast) { g_eventDump = false; logf("full weather picture at the aircraft for the event above:"); weatherWatch(); }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();
@@ -1877,6 +1988,9 @@ void menuHandler(void*, void* item) {
         case kSettings:
             showSettings();
             break;
+        case kShearTest:
+            g_shearCmd = true;   // the weather API may only be used from the pre-flight-model loop: done there
+            break;
         case kRadar:
             g_cfg.radar = !g_cfg.radar;
             if (g_cfg.enabled) { if (g_cfg.radar && g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
@@ -1929,6 +2043,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     XPLMAppendMenuItem(g_menu, "Storm Settings (turbulence)...", (void*)(intptr_t)kSettings, 0);
+    XPLMAppendMenuItem(g_menu, "Windshear Test: probe X-Plane (start / stop)", (void*)(intptr_t)kShearTest, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);
@@ -1989,6 +2104,7 @@ PLUGIN_API void XPluginDisable(void) {
     // pre-flight-model callback, so the erase is done there on the next frame (the loop stays alive until XPluginStop); only if
     // the sim is going away before another frame does XPluginStop erase directly.
     g_disableErase = true;
+    g_st.active = false;   // the windshear test record goes with the rest of our records
     if (g_loop) XPLMScheduleFlightLoop(g_loop, -1.0f, 1);   // negative = every frame; the callback stops itself after the erase
 }
 
