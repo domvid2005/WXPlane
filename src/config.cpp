@@ -102,7 +102,6 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_natural") c.radarNatural = toBool(v);
         else if (k == "smooth_pressure") c.smoothPressure = toBool(v);
         else if (k == "region_winds") c.regionWinds = toBool(v);
-        else if (k == "dry_runways") c.dryRunways = toBool(v);
         else if (k == "dry_runway_min") c.dryRunwayMin = d < 15 ? 15 : (d > 180 ? 180 : d);
         else if (k == "windshear") c.windshear = toBool(v);
         else if (k == "windshear_seed") c.windshearSeed = (int)d;
@@ -224,7 +223,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_natural = " << (c.radarNatural ? 1 : 0) << "\n"
       << "smooth_pressure = " << (c.smoothPressure ? 1 : 0) << "\n"
       << "region_winds = " << (c.regionWinds ? 1 : 0) << "\n"
-      << "dry_runways = " << (c.dryRunways ? 1 : 0) << "\n"
       << "dry_runway_min = " << c.dryRunwayMin << "\n"
       << "windshear = " << (c.windshear ? 1 : 0) << "\n"
       << "windshear_seed = " << c.windshearSeed << "\n"

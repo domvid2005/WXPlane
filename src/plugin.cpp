@@ -43,14 +43,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kWindshear, kDryRunways };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kWindshear };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxWindshear = -1, g_idxDry = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxWindshear = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -126,7 +126,6 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
-    if (g_idxDry >= 0) XPLMCheckMenuItem(g_menu, g_idxDry, g_cfg.dryRunways ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxWindshear >= 0) XPLMCheckMenuItem(g_menu, g_idxWindshear, g_cfg.windshear ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
 
@@ -445,7 +444,7 @@ void drSetNum(XPLMDataRef r, double v) {
 
 void dryRunwayTick() {
     static Clock::time_point next{};
-    if (!g_cfg.dryRunways || !g_haveLast || g_lastRes.stations.empty() || Clock::now() < next) return;
+    if (!g_haveLast || g_lastRes.stations.empty() || Clock::now() < next) return;   // always on (2026-11-06)
     next = Clock::now() + std::chrono::seconds(10);
     static XPLMDataRef drFr = XPLMFindDataRef("sim/weather/region/runway_friction"), drPatchy = XPLMFindDataRef("sim/weather/region/runway_is_patchy"),
                        drRain = XPLMFindDataRef("sim/weather/region/rain_percent"), drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
@@ -2135,10 +2134,6 @@ void menuHandler(void*, void* item) {
             g_cfg.windshear = !g_cfg.windshear;
             g_wsCmd = g_cfg.windshear ? 1 : -1;   // applied in the pre-flight-model loop (weather API)
             break;
-        case kDryRunways:
-            g_cfg.dryRunways = !g_cfg.dryRunways;
-            logf("dry runways when no recent rain: %s", g_cfg.dryRunways ? "ON" : "OFF");
-            break;
         case kRadar:
             g_cfg.radar = !g_cfg.radar;
             if (g_cfg.enabled) { if (g_cfg.radar && g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
@@ -2191,7 +2186,6 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     XPLMAppendMenuItem(g_menu, "Storm Settings (turbulence)...", (void*)(intptr_t)kSettings, 0);
-    g_idxDry = XPLMAppendMenuItem(g_menu, "Dry Runways When No Recent Rain", (void*)(intptr_t)kDryRunways, 0);
     g_idxWindshear = XPLMAppendMenuItem(g_menu, "Enable Realistic Windshear", (void*)(intptr_t)kWindshear, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);

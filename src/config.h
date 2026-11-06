@@ -77,7 +77,6 @@ struct Config {
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
     bool smoothPressure = true;
-    bool dryRunways = true;           // runway dry near an airport with no precipitation for dry_runway_min (menu: Dry Runways When No Recent Rain)
     double dryRunwayMin = 45;         // minutes without precipitation before the runway is dried
     bool windshear = true;            // realistic windshear (menu: Enable Realistic Windshear), on by default since config v29
     int windshearSeed = 1;            // fixed seed: the same weather gives the same windshear fields

@@ -430,7 +430,7 @@ no vertical wind. Details, limits and calibration: `docs/windshear.md`.
 
 ## Dry runways when no recent rain (2026-11-06)
 
-Menu **Dry Runways When No Recent Rain** (on by default; `dry_runways`, `dry_runway_min = 45`).
+Always on (no menu item); `dry_runway_min = 45` sets the dry time.
 - **History:** the METAR request now asks for the last 2 hours. Each station keeps its latest report; the older reports (up to 80 min
   back), begin/end remarks (`RAB10E35`, `RAE50`), hourly amounts (`P0000`) and recent-weather groups (`RERA`) tell when precipitation
   was last seen. Showers in the vicinity (`VCSH`) don't count.
