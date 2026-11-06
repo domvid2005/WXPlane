@@ -144,7 +144,9 @@ void buildAloftProfile(XpWx& x, const std::vector<AloftSample>& smp, double elev
     }
     if (src.size() < 2) { x.aloft = !x.tempProfile.empty(); return; }   // no forecast winds: the record keeps only its surface wind
     // The same nominal altitudes in every record; under the lowest source point (the ground) a level holds that point's wind.
-    static const double kGridFt[] = {3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000, 66000};
+    // 1,500 ft instead of 53,000 (2026-11-06): a low-level jet near 2,000 ft was smeared between the ground and 3,000 ft; 45,000-60,000 ft
+    // is interpolated as a vector instead
+    static const double kGridFt[] = {1500, 3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 60000, 66000};
     const float sfcAlt = haveSfc ? sfc.altMsl : -1e9f;
     std::vector<XpWind> out;
     if (haveSfc) out.push_back(sfc);

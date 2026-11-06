@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <set>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -28,6 +29,7 @@
 #include "XPLMScenery.h"
 #include "XPLMUtilities.h"
 #include "XPLMWeather.h"
+#include "windshear.h"
 
 #include "config.h"
 #include "fetcher.h"
@@ -41,14 +43,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kShearTest, kHumidity };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kShearTest, kHumidity, kWindshear, kWsForce };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxHumidity = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxHumidity = -1, g_idxWindshear = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -125,6 +127,7 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxHumidity >= 0) XPLMCheckMenuItem(g_menu, g_idxHumidity, g_cfg.humidityAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    if (g_idxWindshear >= 0) XPLMCheckMenuItem(g_menu, g_idxWindshear, g_cfg.windshear ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
 
 // Removes every record this plugin has set, handing control back to X-Plane's own weather.
@@ -596,8 +599,236 @@ void shearTestTick() {
     ++g_st.samples;
 }
 
+// ---- Realistic windshear (2026-11-06) ------------------------------------------------------------------------------------------------
+// The model (windshear.cpp) decides where fields form, from the stations and radar cells of the last update, stepped with simulation time.
+// What reaches X-Plane are low-level wind records (gust fronts, microburst outflow) sent through incremental weather updates in this
+// pre-flight-model loop: X-Plane fades a record in over ~2 min and delivers 60-80 % of it (probe, 2026-11-06), so each record is sent
+// for the state windshear_lead_s ahead and windshear_gain stronger. Downdrafts are modelled and logged, never applied: the weather API
+// has no vertical wind. The aircraft is never touched.
+bool g_disableErase = false;   // plugin was disabled: erase our records from the next callback, then stop
+wx::shear::Engine g_ws;
+int g_wsCmd = 0;   // 1 enable, -1 disable, 2 force a test event (set by the menu, done in the loop)
+struct WsSent { double lat = 0, lon = 0; float kt = 0, dir = 0; XPLMWeatherInfo_t info; };
+std::map<std::string, WsSent> g_wsSent;
+bool g_wsForceMb = true;
+
+void wsLog(const char* fmt, ...) {
+    char buf[900];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    XPLMDebugString((std::string("[WXPlane Windshear] ") + buf + "\n").c_str());
+}
+
+void windshearForget() { g_wsSent.clear(); g_ws.clear(); }
+
+void windshearResend() {   // inside an open XPLMBeginWeatherUpdate that replaces all our records
+    if (g_wsSent.empty()) return;
+    for (auto& kv : g_wsSent) { XPLMWeatherInfo_t i = kv.second.info; XPLMSetWeatherAtLocation(kv.second.lat, kv.second.lon, 0.0, &i); }
+    wsLog("%zu windshear record(s) re-sent with WXPlane's replacing update", g_wsSent.size());
+}
+
+double wsSimTime() {
+    static XPLMDataRef dr = XPLMFindDataRef("sim/time/total_running_time_sec");   // simulation time: stops while paused, runs faster with time acceleration
+    return dr ? (double)XPLMGetDataf(dr) : 0.0;
+}
+
+wx::shear::Env wsEnv(double lat, double lon) {
+    wx::shear::Env e;
+    e.stations = &g_lastRes.stations;
+    e.cells = &g_lastRes.radar.cells;
+    // steering wind: the profile at the aircraft at 10,000 ft (FD / global model)
+    wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
+    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, false);
+    if (x.winds.size() >= 2) {
+        const wx::XpWind w = wx::windAt(x.winds, 3048.0f);
+        if (std::isfinite(w.dir) && std::isfinite(w.ms)) { e.steerDirDeg = w.dir; e.steerKt = w.ms / 0.514444f; }
+    }
+    return e;
+}
+
+// The record X-Plane gets for one windshear record: the normal weather of that place, its winds up to topAglFt above the ground
+// being the place's own wind plus the outflow vector.
+void wsBuildInfo(const wx::shear::ShearRecord& r, XPLMWeatherInfo_t& info, double& groundM) {
+    wx::Station b = wx::blendAt(g_lastRes.stations, r.lat, r.lon);
+    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, false);
+    groundM = b.elevM;
+    const float topM = (float)(b.elevM + r.topAglFt * 0.3048);
+    const float rr = r.towardDeg * 3.14159265f / 180.0f, addE = r.kt * 0.514444f * std::sin(rr), addN = r.kt * 0.514444f * std::cos(rr);
+    bool any = false;
+    for (auto& w : x.winds) {
+        if (w.altMsl > topM) continue;
+        const float wr = w.dir * 3.14159265f / 180.0f;
+        const float e = -w.ms * std::sin(wr) + addE, n = -w.ms * std::cos(wr) + addN;   // FROM direction -> toward components
+        w.ms = std::sqrt(e * e + n * n);
+        w.dir = std::fmod(std::atan2(-e, -n) * 180.0f / 3.14159265f + 360.0f, 360.0f);
+        w.gustMs = std::max(w.gustMs, w.ms);
+        any = true;
+    }
+    if (!any) {
+        wx::XpWind w; w.altMsl = (float)b.elevM + 10.0f; w.ms = r.kt * 0.514444f; w.dir = std::fmod(r.towardDeg + 180.0f, 360.0f); w.gustMs = w.ms;
+        x.winds.insert(x.winds.begin(), w);
+    }
+    fillInfo(info, x);
+    info.radius_nm = r.radiusNm;
+    if (info.pressure_alt > 0) { info.pressure_sl = info.pressure_alt; info.pressure_alt = 0; }
+}
+
+void windshearTick() {
+    static double nextEval = -1, nextSend = -1, nextExp = -1;
+    static double lastLat = 0, lastLon = 0;
+    static std::time_t lastRisk = 0;
+    static std::string lastRiskLine;
+    if (!g_haveLast || g_lastRes.stations.empty() || g_disableErase) return;
+    const double simT = wsSimTime();
+    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
+    if (!std::isfinite(lat) || !std::isfinite(lon) || !std::isfinite(simT)) return;
+    bool sendNow = false;
+    if (g_wsCmd != 0) {
+        const int cmd = g_wsCmd; g_wsCmd = 0;
+        if (cmd == 1) { g_ws.setSeed((uint32_t)g_cfg.windshearSeed); wsLog("realistic windshear enabled (seed %d)", g_cfg.windshearSeed); nextEval = simT; }
+        else if (cmd == -1) {
+            if (!g_wsSent.empty()) {
+                XPLMBeginWeatherUpdate();
+                for (const auto& kv : g_wsSent) XPLMEraseWeatherAtLocation(kv.second.lat, kv.second.lon);
+                XPLMEndWeatherUpdate(1, 0);
+            }
+            wsLog("realistic windshear disabled: %zu field(s) and %zu record(s) removed", g_ws.fields().size(), g_wsSent.size());
+            windshearForget();
+            return;
+        } else if (cmd == 2) {
+            static XPLMDataRef drTrk = XPLMFindDataRef("sim/flightmodel/position/hpath"), drGs = XPLMFindDataRef("sim/flightmodel/position/groundspeed"),
+                               drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+            const double trk = drTrk ? XPLMGetDataf(drTrk) : 0.0, gsKt = drGs ? XPLMGetDataf(drGs) / 0.514444 : 0.0, agl = drAgl ? XPLMGetDataf(drAgl) / 0.3048 : 0.0;
+            // ahead on the track, where the aircraft gets to once X-Plane has faded the records in (~150 s), 3..12 nm
+            const double d = std::max(3.0, std::min(12.0, gsKt * 150.0 / 3600.0));
+            const double kPiD = 3.14159265358979323846, dr = d / 3440.065, b = trk * kPiD / 180.0, la = lat * kPiD / 180.0, lo = lon * kPiD / 180.0;
+            const double la2 = std::asin(std::sin(la) * std::cos(dr) + std::cos(la) * std::sin(dr) * std::cos(b));
+            const double lo2 = lo + std::atan2(std::sin(b) * std::sin(dr) * std::cos(la), std::cos(dr) - std::sin(la) * std::sin(la2));
+            const int type = g_wsForceMb ? wx::shear::kMicroburst : wx::shear::kGustFront;
+            g_wsForceMb = !g_wsForceMb;
+            const wx::shear::Field& f = g_ws.force(type, la2 * 180.0 / kPiD, lo2 * 180.0 / kPiD, simT, trk, wsEnv(lat, lon));
+            wsLog("TEST: %s #%u placed %.1f nm ahead on track %03.0f at %.4f,%.4f, peak %.0f kt%s; X-Plane fades it in over ~2 min. Aircraft %.0f ft AGL%s",
+                  wx::shear::fieldName(type).c_str(), f.id, d, trk, la2 * 180.0 / kPiD, lo2 * 180.0 / kPiD, f.peakKt,
+                  type == wx::shear::kMicroburst ? " outflow (the 3,300 fpm downdraft is modelled only)" : " headwind outflow",
+                  agl, agl > 3000 ? " - the shear is below 3,000 ft AGL, so fly it low to feel it" : "");
+            sendNow = true;
+        }
+    }
+    const bool any = !g_ws.fields().empty();
+    if (!g_cfg.windshear && !any && g_wsSent.empty()) return;
+    // a jump (teleport, new flight): fields far away are dropped, not carried to the new place
+    if (wx::distNm(lat, lon, lastLat, lastLon) > 50.0) {
+        const int n = g_ws.dropFar(lat, lon, 150.0, simT);
+        if (n) wsLog("aircraft moved %.0f nm at once: %d far field(s) dropped", wx::distNm(lat, lon, lastLat, lastLon), n);
+    }
+    lastLat = lat; lastLon = lon;
+    // 1) the atmosphere: every 30 s of simulation time
+    if (g_cfg.windshear && (nextEval < 0 || simT >= nextEval || simT < nextEval - 3600)) {
+        nextEval = simT + 30.0;
+        const wx::shear::Env env = wsEnv(lat, lon);
+        // only the atmosphere around the aircraft is simulated (within 100 nm); a field formed there keeps existing when the aircraft leaves
+        std::vector<wx::shear::Source> src;
+        for (const auto& s : wx::shear::assess(env)) if (wx::distNm(lat, lon, s.lat, s.lon) < 100.0) src.push_back(s);
+        int hi = 0, md = 0, lo = 0; std::string top; float topDbz = -1;
+        for (const auto& s : src) {
+            if (s.confidence == wx::shear::kHigh) ++hi; else if (s.confidence == wx::shear::kMedium) ++md; else ++lo;
+            if (s.dbz > topDbz) { topDbz = s.dbz; top = s.why; }
+        }
+        char rl[300];
+        std::snprintf(rl, sizeof rl, "risk: %zu source(s) supporting windshear (confidence high %d, medium %d, low %d)%s%s; steering wind %03.0f/%.0f kt; "
+                      "nonconvective shear (fronts, gradients, low-level jets) is in the station and winds-aloft data already, nothing added",
+                      src.size(), hi, md, lo, src.empty() ? "" : "; strongest: ", top.c_str(), env.steerDirDeg, env.steerKt);
+        const std::time_t now = std::time(nullptr);
+        if (rl != lastRiskLine || now - lastRisk > 600) { wsLog("%s", rl); lastRiskLine = rl; lastRisk = now; }
+        for (const auto& l : g_ws.step(simT, src, env)) wsLog("%s", l.c_str());
+        sendNow = true;
+    }
+    // 2) records to X-Plane (incremental, only between WXPlane's own batches)
+    if ((sendNow || simT >= nextSend) && g_pendingTodo.empty() && g_pendingGone.empty()) {
+        nextSend = simT + 30.0;
+        std::vector<wx::shear::ShearRecord> want = g_ws.records(simT + g_cfg.windshearLeadS, g_cfg.windshearGain);
+        std::vector<wx::shear::ShearRecord> near;
+        for (const auto& r : want) if (wx::distNm(lat, lon, r.lat, r.lon) < 60.0 && near.size() < 40) near.push_back(r);
+        std::set<std::string> keep;
+        int sets = 0, erases = 0;
+        bool open = false;
+        auto begin = [&]() { if (!open) { XPLMBeginWeatherUpdate(); open = true; } };
+        for (const auto& r : near) {
+            keep.insert(r.key);
+            auto it = g_wsSent.find(r.key);
+            const bool moved = it != g_wsSent.end() && wx::distNm(it->second.lat, it->second.lon, r.lat, r.lon) > 0.3;
+            if (it != g_wsSent.end() && !moved && std::fabs(it->second.kt - r.kt) < 2.0f && std::fabs(it->second.dir - r.towardDeg) < 5.0f) continue;
+            begin();
+            if (moved) { XPLMEraseWeatherAtLocation(it->second.lat, it->second.lon); ++erases; }
+            WsSent s; s.lat = r.lat; s.lon = r.lon; s.kt = r.kt; s.dir = r.towardDeg;
+            double g = 0;
+            wsBuildInfo(r, s.info, g);
+            XPLMWeatherInfo_t i = s.info;
+            XPLMSetWeatherAtLocation(r.lat, r.lon, 0.0, &i);
+            g_wsSent[r.key] = s;
+            ++sets;
+        }
+        for (auto it = g_wsSent.begin(); it != g_wsSent.end();) {
+            if (keep.count(it->first)) { ++it; continue; }
+            begin();
+            XPLMEraseWeatherAtLocation(it->second.lat, it->second.lon);
+            ++erases;
+            it = g_wsSent.erase(it);
+        }
+        if (open) {
+            XPLMEndWeatherUpdate(1 /*incremental*/, 0 /*fade in*/);
+            wsLog("records: %d sent/updated, %d removed, %zu active (state %.0f s ahead, x%.1f for X-Plane's blending)", sets, erases, g_wsSent.size(),
+                  g_cfg.windshearLeadS, g_cfg.windshearGain);
+        }
+    }
+    // 3) the aircraft in a field: entry, exit and the winds every 10 s
+    if (simT >= nextExp) {
+        nextExp = simT + 2.0;
+        static XPLMDataRef drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl"), drEl = XPLMFindDataRef("sim/flightmodel/position/elevation"),
+                           drTrk = XPLMFindDataRef("sim/flightmodel/position/hpath"), drGs = XPLMFindDataRef("sim/flightmodel/position/groundspeed"),
+                           drIas = XPLMFindDataRef("sim/flightmodel/position/indicated_airspeed"), drVs = XPLMFindDataRef("sim/flightmodel/position/vh_ind_fpm");
+        const double agl = drAgl ? XPLMGetDataf(drAgl) / 0.3048 : 1e9, trk = drTrk ? XPLMGetDataf(drTrk) : 0.0;
+        const wx::shear::Vec3 p = g_ws.perturbation(lat, lon, agl, simT);
+        const double tr = trk * 3.14159265 / 180.0;
+        const double head = -(p.east * std::sin(tr) + p.north * std::cos(tr));   // + = headwind added by the field
+        const double mag = std::sqrt(p.east * p.east + p.north * p.north);
+        static bool inside = false;
+        static double maxHead = -1e9, minHead = 1e9, maxDown = 0, enterT = 0;
+        static double nextLog = 0;
+        const bool now = mag > 3.0 || p.up < -300.0;
+        if (now || inside) {
+            XPLMWeatherInfo_t w;
+            std::memset(&w, 0, sizeof w);
+            w.structSize = sizeof w;
+            XPLMGetWeatherAtLocation(lat, lon, drEl ? XPLMGetDatad(drEl) : 0.0, &w);
+            const double gs = drGs ? XPLMGetDataf(drGs) / 0.514444 : 0, ias = drIas ? XPLMGetDataf(drIas) : 0, vs = drVs ? XPLMGetDataf(drVs) : 0;
+            if (now && !inside) {
+                inside = true; enterT = simT; maxHead = minHead = head; maxDown = p.up; nextLog = simT;
+                wsLog("aircraft ENTERS windshear at %.4f,%.4f, %.0f ft AGL: model adds %.0f kt (headwind %+.0f), vertical %.0f fpm (not applied) | X-Plane wind here %03.0f/%.0f kt, GS %.0f kt, IAS %.0f kt",
+                      lat, lon, agl, mag, head, p.up, w.wind_dir_alt, w.wind_spd_alt / 0.514444f, gs, ias);
+            }
+            if (inside) {
+                maxHead = std::max(maxHead, head); minHead = std::min(minHead, head); maxDown = std::min(maxDown, p.up);
+                if (simT >= nextLog) {
+                    nextLog = simT + 10.0;
+                    wsLog("  in windshear %+.0f s: model headwind %+.0f kt, vertical %.0f fpm (not applied) | X-Plane wind %03.0f/%.0f kt, GS %.0f, IAS %.0f, VS %+.0f, %.0f ft AGL",
+                          simT - enterT, head, p.up, w.wind_dir_alt, w.wind_spd_alt / 0.514444f, gs, ias, vs, agl);
+                }
+                if (!now) {
+                    inside = false;
+                    wsLog("aircraft EXITS windshear after %.0f s: model headwind went %+.0f .. %+.0f kt (change %.0f kt), strongest modelled downdraft %.0f fpm (not applied)",
+                          simT - enterT, minHead, maxHead, maxHead - minHead, maxDown);
+                }
+            }
+        }
+    }
+}
+
 bool shearTestActive();
 void shearTestResend();
+void windshearResend();
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
     if (g_pendingStartup && g_cfg.regenWeatherOnStart) {
@@ -628,6 +859,7 @@ void flushPending() {
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
     // A replacing update wiped the windshear probe's record (log 2026-11-06 11:51: it faded out from t+92 s): it goes along with it.
     if (g_pendingReplace && shearTestActive()) shearTestResend();
+    if (g_pendingReplace) windshearResend();
     XPLMEndWeatherUpdate(g_pendingReplace ? 0 : 1 /*0: replaces all our previous records*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     if (g_pendingTodo.empty()) g_pendingReplace = false;
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -1365,7 +1597,8 @@ void pushRegionWinds(const wx::XpWx& xin) {
     // Fixed altitudes, the same at every write (before, the layout followed the nearest station's terrain and could squeeze 7 layers into
     // 20 ft), and each write moves at most 3 m/s per level towards the new profile, so crossing from one record's winds to another's is
     // a change over a minute or two, not a step the autopilot and the ground speed feel at once.
-    static const float kRegionFt[XPLM_NUM_WIND_LAYERS] = {1000, 3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000, 53000, 60000};
+    // low levels closer together (2026-11-06, windshear): vertical shear in the lowest 4,500 ft (low-level jets, inversions) is kept
+    static const float kRegionFt[XPLM_NUM_WIND_LAYERS] = {1000, 2000, 3000, 4500, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000};
     static bool haveW = false;
     static float cu[XPLM_NUM_WIND_LAYERS], cv[XPLM_NUM_WIND_LAYERS];
     float al[XPLM_NUM_WIND_LAYERS], sp[XPLM_NUM_WIND_LAYERS], di[XPLM_NUM_WIND_LAYERS];
@@ -1619,7 +1852,6 @@ bool sceneryReady() {
     return std::chrono::duration<double>(now - g_calmSince).count() >= g_cfg.startupCalmS;
 }
 
-bool g_disableErase = false;   // plugin was disabled: erase our records from the next callback, then stop
 Clock::time_point g_lastLoopAt{};
 int g_stallLogs = 0;
 Clock::time_point g_lastStallLog{};
@@ -1761,6 +1993,7 @@ float flightLoop(float, float, int, void*) {
         if (Clock::now() >= nextRegion) { nextRegion = Clock::now() + std::chrono::seconds(20); regionTick(); }
     }
     shearTestTick();
+    windshearTick();
     if (g_eventDump && g_haveLast) { g_eventDump = false; logf("full weather picture at the aircraft for the event above:"); weatherWatch(); }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();
@@ -2088,6 +2321,13 @@ void menuHandler(void*, void* item) {
         case kSettings:
             showSettings();
             break;
+        case kWindshear:
+            g_cfg.windshear = !g_cfg.windshear;
+            g_wsCmd = g_cfg.windshear ? 1 : -1;   // applied in the pre-flight-model loop (weather API)
+            break;
+        case kWsForce:
+            g_wsCmd = 2;
+            break;
         case kHumidity:
             g_cfg.humidityAloft = !g_cfg.humidityAloft;
             logf("humidity aloft from the global model %s (experiment against X-Plane's pop-up showers)", g_cfg.humidityAloft ? "ON" : "OFF");
@@ -2148,6 +2388,8 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     XPLMAppendMenuItem(g_menu, "Storm Settings (turbulence)...", (void*)(intptr_t)kSettings, 0);
+    g_idxWindshear = XPLMAppendMenuItem(g_menu, "Enable Realistic Windshear", (void*)(intptr_t)kWindshear, 0);
+    XPLMAppendMenuItem(g_menu, "Windshear Test: event ahead now (microburst / gust front, alternating)", (void*)(intptr_t)kWsForce, 0);
     XPLMAppendMenuItem(g_menu, "Windshear Test: probe X-Plane (start / stop)", (void*)(intptr_t)kShearTest, 0);
     g_idxHumidity = XPLMAppendMenuItem(g_menu, "Experiment: Humidity Aloft from GFS (fewer pop-up showers?)", (void*)(intptr_t)kHumidity, 0);
     XPLMAppendMenuSeparator(g_menu);
@@ -2211,6 +2453,7 @@ PLUGIN_API void XPluginDisable(void) {
     // the sim is going away before another frame does XPluginStop erase directly.
     g_disableErase = true;
     g_st.active = false;   // the windshear test record goes with the rest of our records
+    windshearForget();     // and so do the windshear records
     if (g_loop) XPLMScheduleFlightLoop(g_loop, -1.0f, 1);   // negative = every frame; the callback stops itself after the erase
 }
 

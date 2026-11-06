@@ -705,6 +705,24 @@ int main() {
     std::printf("  largest batch handed to X-Plane in one update: %zu records\n", g_maxBatch);
     CHECK(g_maxBatch <= 4);                                   // never a burst
     CHECK(!g_sawImmediate);                                   // never forced an immediate rebuild
+    {   // realistic windshear: the menu toggles it and forces a test event; records go out from the loop, and are removed when it is turned off
+        const int er0 = g_erases;
+        g_menuHandler(nullptr, (void*)(intptr_t)11 /*kWindshear*/);
+        g_cb(1, 1, 89000, nullptr);
+        CHECK(g_logAll.find("[WXPlane Windshear] realistic windshear enabled (seed 1)") != std::string::npos);
+        CHECK(g_logAll.find("[WXPlane Windshear] risk:") != std::string::npos);
+        for (int i = 0; i < 200; ++i) g_cb(1, 1, 88000 + i, nullptr);   // let WXPlane's own queue drain first
+        g_menuHandler(nullptr, (void*)(intptr_t)12 /*kWsForce*/);
+        g_cb(1, 1, 89001, nullptr);
+        CHECK(g_logAll.find("TEST: microburst") != std::string::npos);
+        CHECK(g_logAll.find("records: 6 sent/updated") != std::string::npos);
+        g_menuHandler(nullptr, (void*)(intptr_t)12);
+        g_cb(1, 1, 89002, nullptr);
+        CHECK(g_logAll.find("TEST: gust front") != std::string::npos);
+        g_menuHandler(nullptr, (void*)(intptr_t)11);
+        g_cb(1, 1, 89003, nullptr);
+        CHECK(g_logAll.find("realistic windshear disabled") != std::string::npos && g_erases >= er0 + 6);
+    }
     {   // windshear capability probe: the menu only sets a flag; start and stop happen in the flight loop, the record is erased at stop
         const int er0 = g_erases;
         g_menuHandler(nullptr, (void*)(intptr_t)9 /*kShearTest*/);

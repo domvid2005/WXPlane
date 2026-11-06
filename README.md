@@ -422,3 +422,10 @@ Full investigation: `docs/2026-11-06-fl350-investigation.md`.
 vertical wind. Vertical wind profiles only reach the sim region-wide. The menu item **Windshear Test: probe X-Plane (start / stop)** places
 one test wind record ahead of the aircraft and logs, for 4 minutes, how far and how fast X-Plane applies it. It decides whether gust fronts
 and microburst outflows can be represented at all. No windshear model is active yet.
+
+## Realistic windshear (2026-11-06)
+
+Menu **Enable Realistic Windshear** (off by default) and **Windshear Test: event ahead now**. Gust fronts and microburst outflow form near
+real convection (radar echoes, TS reports) with seeded, frame-rate-independent probabilities. They are sent to X-Plane as low-level wind
+records, ahead of time and scaled for X-Plane's fade-in and blending. Downdrafts are modelled and logged only: X-Plane's weather API has
+no vertical wind. Details, limits and calibration: `docs/windshear.md`.

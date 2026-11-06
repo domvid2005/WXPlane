@@ -9,6 +9,7 @@
 #include "../src/metar.h"
 #include "../src/radar.h"
 #include "../src/sources.h"
+#include "../src/windshear.h"
 #include "../src/viewer.h"
 #include "../src/windsaloft.h"
 #include "../src/wxmodel.h"
@@ -929,7 +930,7 @@ int main() {
         parseReport("KABI 301553Z 24012G20KT 10SM CLR 30/10 A2990", kabi.report);
         XpWx xa = buildXp(kabi, cfg, now, &st2);
         CHECK(xa.aloft && xa.maxAltFt == 60000 && xa.winds.size() >= 8);
-        NEAR(xa.winds.back().altMsl, 60000 * kFtToM, 1);       // top NOAA wind is held up to FL600
+        CHECK(xa.winds.back().altMsl >= 60000 * kFtToM - 1);   // top NOAA wind is held up to FL600 (66,000 ft when a low level was skipped)
         NEAR(xa.winds.back().ms, xa.winds[xa.winds.size() - 2].ms, 0.001);
         CHECK(xa.winds[0].altMsl < 570 && xa.winds[0].gustMs > xa.winds[0].ms);
         for (size_t i = 1; i < xa.winds.size(); ++i) CHECK(xa.winds[i].altMsl > xa.winds[i - 1].altMsl);
@@ -1143,6 +1144,149 @@ int main() {
         CHECK(buildXp(d, dc, now).precip == 0.0f);
         Station r; r.elevM = 200; parseReport("KAAA 061951Z 27005KT 3SM RA OVC010 15/14 A3000", r.report);
         CHECK(buildXp(r, dc, now).precip > 0.0f);
+    }
+
+    // ---- windshear model (2026-11-06): scenarios A-K of the specification --------------------------------------------------------------
+    {
+        using namespace wx::shear;
+        NEAR(intervalProbability(0.10, 3600), 0.10, 1e-9);                               // the hazard rate gives the hourly target back
+        NEAR(1.0 - std::pow(1.0 - intervalProbability(0.10, 30), 120), 0.10, 1e-9);      // and 120 x 30 s make an hour
+        auto mkStation = [&](const char* metar, double la, double lo) { Station s; s.lat = la; s.lon = lo; s.elevM = 50; parseReport(metar, s.report); s.icao = s.report.icao; return s; };
+        auto cell = [](double la, double lo, float dbz) { RadarCell c; c.lat = la; c.lon = lo; c.dbz = dbz; c.dbzFine = dbz; return c; };
+        auto run = [](Engine& e, const std::vector<Source>& src, const Env& env, double hours, double dt) {
+            for (double t = 0; t <= hours * 3600.0; t += dt) e.step(t, src, env);
+        };
+        // A: clear, calm weather - no source, no field, nothing added anywhere
+        std::vector<Station> calm = {mkStation("KAAA 061951Z 00000KT 10SM CLR 20/10 A3000", 30, -90), mkStation("KBBB 061951Z 00000KT 10SM CLR 20/10 A3000", 30.3, -90)};
+        std::vector<RadarCell> none;
+        Env eA; eA.stations = &calm; eA.cells = &none;
+        CHECK(assess(eA).empty());
+        { Engine e(1); run(e, assess(eA), eA, 100, 30); CHECK(e.fields().empty()); const Vec3 p = e.perturbation(30, -90, 500, 1000); CHECK(p.east == 0 && p.north == 0 && p.up == 0); }
+        // B: low-level jet (light surface wind, 35 kt at 1,500-2,000 ft): sustained vertical shear comes from the data, no synthetic field
+        {
+            XpWx x; x.hasWind = true; XpWind w0; w0.altMsl = 60; w0.ms = 5 * 0.514444f; w0.dir = 180; x.winds.push_back(w0);
+            std::vector<AloftSample> llj(3);
+            llj[0].altFt = 2000; llj[0].hasWind = true; llj[0].dirDeg = 200; llj[0].speedKt = 35;
+            llj[1].altFt = 6000; llj[1].hasWind = true; llj[1].dirDeg = 230; llj[1].speedKt = 25;
+            llj[2].altFt = 12000; llj[2].hasWind = true; llj[2].dirDeg = 250; llj[2].speedKt = 30;
+            buildAloftProfile(x, llj, 50, false, 0);
+            const XpWind lo = windAt(x.winds, 60), hi = windAt(x.winds, 2000 * 0.3048f);
+            CHECK(lo.ms / 0.514444f < 6 && hi.ms / 0.514444f > 25);           // 5 kt at the ground, ~30 kt at 2,000 ft: the shear is there
+            CHECK(assess(eA).empty());                                          // and nothing is added on top
+        }
+        // C: gusty frontal passage between two stations: the wind change is in the station records already
+        {
+            std::vector<Station> front = {mkStation("KAAA 061951Z 20015G25KT 10SM BKN030 20/15 A3000", 30, -90), mkStation("KBBB 061951Z 32020G32KT 10SM BKN030 12/05 A3005", 30.3, -90)};
+            Env eC; eC.stations = &front; eC.cells = &none;
+            CHECK(assess(eC).empty());
+        }
+        // D: moderate thunderstorms (40-45 dBZ): gust fronts possible, microbursts rare, nothing guaranteed
+        std::vector<Station> tsSt = {mkStation("KAAA 061951Z 24012G22KT 5SM -TSRA BKN040CB 28/22 A2990", 30, -90)};
+        std::vector<RadarCell> mod = {cell(30.05, -90.05, 42)};
+        Env eD; eD.stations = &tsSt; eD.cells = &mod;
+        const std::vector<Source> sD = assess(eD);
+        CHECK(sD.size() == 1 && sD[0].confidence == kMedium && std::fabs(sD[0].pHourGustFront - 0.10) < 1e-9 && std::fabs(sD[0].pHourMicroburst - 0.007) < 1e-9);
+        int gD = 0, mD = 0;
+        {
+            Engine e(7);
+            for (double t = 0; t <= 200 * 3600.0; t += 30) for (const auto& l : e.step(t, sD, eD)) { if (l.find("formed: gust front") != std::string::npos) ++gD; if (l.find("formed: microburst") != std::string::npos) ++mD; }
+            std::printf("  windshear calibration, moderate storm, 200 h: %d gust fronts, %d microbursts\n", gD, mD);
+            CHECK(gD >= 6 && gD <= 30 && mD <= 6 && mD < gD);
+        }
+        // E: intense storms (55 dBZ, TS, gusts 35 kt): more, and occasionally intense; extreme ones stay uncommon
+        std::vector<Station> sevSt = {mkStation("KAAA 061951Z 27025G35KT 2SM +TSRA BKN020CB 24/22 A2985", 30, -90)};
+        std::vector<RadarCell> sev = {cell(30.02, -90.02, 55)};
+        Env eE; eE.stations = &sevSt; eE.cells = &sev;
+        const std::vector<Source> sE = assess(eE);
+        CHECK(sE.size() == 1 && sE[0].confidence == kHigh && std::fabs(sE[0].pHourMicroburst - 0.02) < 1e-9);
+        {
+            int mb = 0, ext = 0, strongMb = 0;
+            Engine e(3);
+            for (double t = 0; t <= 2000 * 3600.0; t += 30) {
+                e.step(t, sE, eE);
+                for (const auto& f : e.fields()) if (f.type == kMicroburst && f.t0 == std::floor(t / 30.0) * 30.0) { ++mb; if (f.peakKt >= 40) ++ext; if (f.peakKt >= 20) ++strongMb; }
+            }
+            std::printf("  windshear calibration, intense storm, 2000 h: %d microbursts, %d with 20+ kt outflow, %d with 40+ kt\n", mb, strongMb, ext);
+            CHECK(mb >= 20 && mb <= 60 && ext * 10 <= mb && ext >= 0);
+        }
+        // F: dry microburst environment: convective echo without heavy rain, 27 C spread, cloud base 12,000 ft
+        {
+            std::vector<Station> drySt = {mkStation("KAAA 061951Z 22010KT 10SM SCT120 32/05 A2995", 35, -110)};
+            std::vector<RadarCell> virga = {cell(35.03, -110.0, 35)};
+            Env eF; eF.stations = &drySt; eF.cells = &virga;
+            const std::vector<Source> sF = assess(eF);
+            CHECK(sF.size() == 1 && sF[0].dry && sF[0].confidence == kLow && sF[0].pHourMicroburst > 0 && sF[0].pHourMicroburst < 0.005);
+            std::vector<Station> moist = {mkStation("KAAA 061951Z 22010KT 10SM SCT120 32/25 A2995", 35, -110)};   // spread alone is not enough...
+            Env eF2; eF2.stations = &moist; eF2.cells = &virga;
+            CHECK(assess(eF2).empty());                                                                          // ...and a moist one gives none
+            std::vector<Station> noCloud = {mkStation("KAAA 061951Z 22010KT 10SM CLR 32/05 A2995", 35, -110)};
+            Env eF3; eF3.stations = &noCloud; eF3.cells = &none;
+            CHECK(assess(eF3).empty());                                                                          // dry air without a convective source: none
+        }
+        // G/H: an approach through a mature microburst, straight through and offset
+        {
+            Engine e(1);
+            const Field& f = e.force(kMicroburst, 30.0, -90.0, 1000.0, 0.0, eD);
+            const double t = 1000.0;
+            CHECK(Engine::intensity(f, t) > 0.99);
+            auto headAt = [&](double dNorth, double dEast, double agl) {   // aircraft flying north
+                const Vec3 p = e.perturbation(30.0 + dNorth / 60.0, -90.0 + dEast / 60.0 / std::cos(30.0 * 3.14159265 / 180.0), agl, t);
+                return -p.north;   // headwind for a northbound aircraft
+            };
+            const double hIn = headAt(-1.0, 0, 500), hOut = headAt(1.0, 0, 500);
+            const Vec3 core = e.perturbation(30.0, -90.0, 1500, t);
+            std::printf("  microburst centreline at 500 ft: headwind %+.0f kt 1 nm before, %+.0f kt 1 nm after, downdraft %.0f fpm at 1,500 ft (modelled)\n", hIn, hOut, core.up);
+            CHECK(hIn > 15 && hOut < -15 && core.up < -2000);                   // headwind, downdraft, tailwind
+            const double oIn = headAt(-1.0, 1.2, 500), oOut = headAt(1.0, 1.2, 500);
+            const Vec3 side = e.perturbation(30.0, -90.0 + 1.2 / 60.0 / std::cos(30.0 * 3.14159265 / 180.0), 500, t);
+            CHECK(oIn - oOut < hIn - hOut && std::fabs(side.east) > 10);       // offset: less head/tail change, a crosswind instead
+            // a fast and a slow aircraft on the same line: same field, the transition takes 140 kt / 250 kt times as long
+            auto crossTime = [&](double gsKt) { double t0 = -1, t1 = -1; for (double s = 0; s < 400; s += 0.5) { const double d = -2.0 + gsKt * s / 3600.0; const double h = headAt(d, 0, 500); if (t0 < 0 && h < 10) t0 = s; if (t1 < 0 && h < -10) { t1 = s; break; } } return t1 - t0; };
+            const double slow = crossTime(140), fast = crossTime(250);
+            CHECK(slow > fast * 1.6 && slow < fast * 1.9);
+            // J: FL350 above the storm - no low-level effect at all
+            const Vec3 hiP = e.perturbation(30.0, -90.0 + 1.0 / 60.0, 35000, t);
+            CHECK(hiP.east == 0 && hiP.north == 0 && hiP.up == 0);
+            // records: a ring of six outward 1 nm records, scaled for X-Plane's blending, only while the field lives
+            const auto recs = e.records(t, 1.4);
+            CHECK(recs.size() == 6 && std::fabs(recs[0].kt - 42.0f) < 0.5f && recs[3].towardDeg == 180.0f);
+            CHECK(e.records(t + 900.0, 1.4).empty());
+        }
+        {   // gust front across the track: behind it the outflow, ahead of it nothing; FL350 nothing
+            Engine e(1);
+            e.force(kGustFront, 30.0, -90.0, 0.0, 0.0, eD);   // aircraft flying north, front 0 nm ahead at 30,-90, outflow toward the south
+            const Vec3 behind = e.perturbation(30.0 + 2.0 / 60.0, -90.0, 800, 0.0), ahead = e.perturbation(30.0 - 2.0 / 60.0, -90.0, 800, 0.0);
+            CHECK(-behind.north > 15 && std::fabs(ahead.north) < 3);
+            CHECK(e.perturbation(30.0 + 2.0 / 60.0, -90.0, 35000, 0.0).north == 0);
+            CHECK(e.records(0.0, 1.0).size() == 4);
+        }
+        {   // I: a weather refresh during an event (new station list, same evidence): no reset, no duplicate
+            Engine e(5);
+            double tForm = -1; uint32_t id = 0;
+            for (double t = 0; t <= 50 * 3600.0 && tForm < 0; t += 30) { e.step(t, sD, eD); for (const auto& f : e.fields()) if (f.type == kGustFront) { tForm = t; id = f.id; } }
+            CHECK(tForm >= 0);
+            std::vector<Station> refreshed = tsSt; refreshed[0].report.gustKt = 24;
+            Env eI = eD; eI.stations = &refreshed;
+            const std::vector<Source> sI = assess(eI);
+            e.step(tForm + 30, sI, eI);
+            int n = 0; for (const auto& f : e.fields()) if (f.type == kGustFront) { ++n; CHECK(f.id == id); }
+            CHECK(n == 1);
+        }
+        {   // K: the same weather gives the same fields whatever the evaluation rate (frame rate), and the seed decides them
+            Engine a(9), b(9), c(10);
+            std::vector<Source> many;
+            for (int k = 0; k < 20; ++k) { Source s = sD[0]; s.key = "k" + std::to_string(k); s.lat += k * 0.2; many.push_back(s); }
+            for (double t = 0; t <= 20 * 3600.0; t += 30) a.step(t, many, eD);
+            for (double t = 0; t <= 20 * 3600.0; t += 0.7) b.step(t, many, eD);
+            for (double t = 0; t <= 20 * 3600.0; t += 30) c.step(t, many, eD);
+            auto sig = [](const Engine& e) { std::string s; for (const auto& f : e.fields()) s += f.source + ":" + std::to_string((long)f.t0) + ";"; return s; };
+            CHECK(sig(a) == sig(b) && sig(a) != sig(c));
+            // no frame-rate burst after a long jump in time, and nothing invalid comes out
+            Engine j(9); j.step(0, many, eD); j.step(400000, many, eD);
+            for (const auto& r : j.records(400000, 1.4)) CHECK(std::isfinite(r.lat) && std::isfinite(r.kt) && r.kt <= 60.0f && r.radiusNm > 0);
+            CHECK(j.fields().size() <= 12);
+            Engine nanE(1); CHECK(nanE.step(NAN, many, eD).size() == 1 && nanE.fields().empty());
+        }
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
