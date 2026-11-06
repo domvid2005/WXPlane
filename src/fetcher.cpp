@@ -298,7 +298,10 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
     for (const std::string& region : mrmsRegionsFor(rq.lat, rq.lon)) {
         const std::string name = region.empty() ? "CONUS" : region;
         GribField refl;
-        if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) { lastErr = name + ": " + lastErr; continue; }
+        if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) {
+            refl = GribField();   // one retry: a truncated download ("bad gzip data", 2026-11-06) made the first load fall back to RainViewer
+            if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) { lastErr = name + ": " + lastErr; continue; }
+        }
         if (refl.refTime > 0 && now - refl.refTime > 30 * 60) {
             lastErr = name + ": radar mosaic is " + std::to_string((now - refl.refTime) / 60) + " min old, ignoring";
             continue;
