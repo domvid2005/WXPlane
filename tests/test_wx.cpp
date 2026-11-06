@@ -659,12 +659,6 @@ int main() {
                 auto mh = parseOpenMeteo(b2, pts, lv, 4500, &perr);
                 CHECK(mh.size() == 1 && std::fabs(mh[0].highCloud - 0.6) < 1e-9 && m[0].highCloud < 0);
             }
-            {   // relative humidity becomes a dewpoint (Magnus): -21 C at 50 % -> about -28.7 C; no humidity, no dewpoint
-                CHECK(url.find("relative_humidity_500hPa") != std::string::npos);
-                std::string b3 = body; b3.insert(b3.find("\"wind_speed_500hPa\""), "\"relative_humidity_500hPa\":[50,50],");
-                auto mr = parseOpenMeteo(b3, pts, lv, 4500, &perr);
-                CHECK(mr.size() == 1 && mr[0].levels[0].hasDewp && std::fabs(mr[0].levels[0].dewpC - (-28.7)) < 0.3 && !mr[0].levels[1].hasDewp);
-            }
             CHECK(parseOpenMeteo("garbage", pts, lv, 0, &e2).empty());
             // merged: FD gives the low levels, the model only what is more than 1000 ft above the FD top
             auto lw = [](double alt, double dir, double kt, double tc) { AloftLevel L; L.altFt = alt; L.hasWind = true; L.dirDeg = dir; L.speedKt = kt; L.hasTemp = true; L.tempC = tc; return L; };

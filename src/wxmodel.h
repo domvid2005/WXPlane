@@ -52,8 +52,7 @@ struct XpWx {
     std::vector<XpWind> winds;                         // surface layer first, then aloft levels (ascending)
     bool modelCirrus = false;   // a cirrus layer was added from the global model's high cloud
     std::vector<std::pair<float, float>> tempProfile; // (altitude MSL m, degC), ascending
-    int aloftRejected = 0;
-    std::vector<std::pair<float, float>> dewpProfile; // (altitude MSL m, degC) from the global model's humidity, ascending (may be empty)                            // forecast values dropped as impossible (NaN, out of range)
+    int aloftRejected = 0;                            // forecast values dropped as impossible (NaN, out of range)
     float maxAltFt = 10000;
 };
 

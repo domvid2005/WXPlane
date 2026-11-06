@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -105,7 +106,6 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "windshear_seed") c.windshearSeed = (int)d;
         else if (k == "windshear_gain") c.windshearGain = d < 0.5 ? 0.5 : (d > 3 ? 3 : d);
         else if (k == "windshear_lead_s") c.windshearLeadS = d < 0 ? 0 : (d > 600 ? 600 : d);
-        else if (k == "humidity_aloft") c.humidityAloft = toBool(v);
         else if (k == "diag_verbosity") c.diagVerbosity = (int)(d < 0 ? 0 : (d > 2 ? 2 : d));
         else if (k == "storm_clouds_at_stations") c.stormCloudsAtStations = toBool(v);
         else if (k == "qnh_as_sea_level") c.qnhAsSeaLevel = toBool(v);
@@ -135,6 +135,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
     if (version < 26) { Config d; c.regionWinds = d.regionWinds; }
+    if (version < 28 && std::fabs(c.windshearGain - 1.4) < 1e-6) { Config d; c.windshearGain = d.windshearGain; }   // v28: 1.4 left ~40 % of the outflow
     if (version < 27 && c.radarNaturalMax == 150) { Config d; c.radarNaturalMax = d.radarNaturalMax; }   // v27: 150 left widespread rain in 24 nm squares   // v26: one build saved region_winds = 0, which left the winds aloft out of the sim
     if (version < 25) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; c.stormCoreCoverage = d.stormCoreCoverage; c.stormTopMaxDropM = d.stormTopMaxDropM; }   // v25: back to the look of the earlier build (ragged walls)
     if (version < 24) { Config d; c.stormRadiusFactor = d.stormRadiusFactor; }   // v24: wider overlap
@@ -224,7 +225,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "windshear_seed = " << c.windshearSeed << "\n"
       << "windshear_gain = " << c.windshearGain << "\n"
       << "windshear_lead_s = " << c.windshearLeadS << "\n"
-      << "humidity_aloft = " << (c.humidityAloft ? 1 : 0) << "\n"
       << "diag_verbosity = " << c.diagVerbosity << "\n"
       << "storm_clouds_at_stations = " << (c.stormCloudsAtStations ? 1 : 0) << "\n"
       << "qnh_as_sea_level = " << (c.qnhAsSeaLevel ? 1 : 0) << "\n"

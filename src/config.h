@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 27;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 28;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -79,9 +79,8 @@ struct Config {
     bool smoothPressure = true;
     bool windshear = false;           // realistic windshear (menu: Enable Realistic Windshear), off for existing installations
     int windshearSeed = 1;            // fixed seed: the same weather gives the same windshear fields
-    double windshearGain = 1.4;       // X-Plane delivered 60-80 % of a small record's wind in the probe: records are sent this much stronger
+    double windshearGain = 2.5;       // X-Plane delivered ~40 % of the cells' outflow in the first microburst test (2026-11-06): sent this much stronger
     double windshearLeadS = 120;      // records are sent for the state this far ahead: X-Plane takes ~2 min to fade one in
-    bool humidityAloft = false;       // experiment: dewpoints aloft from the global model (menu: Experiment: humidity aloft)
     int diagVerbosity = 1;            // 0 = no flight-state log, 1 = events + a summary every 5 min, 2 = every 10 s
     bool stormCloudsAtStations = true; // a station inside a storm gets the storm cloud too (its circle was a hole in the storm deck)
     bool qnhAsSeaLevel = true;        // send the QNH as sea-level pressure (pressure_sl): X-Plane read it in pressure_alt as station pressure

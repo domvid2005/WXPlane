@@ -416,12 +416,10 @@ Full investigation: `docs/2026-11-06-fl350-investigation.md`.
 - `diag_verbosity` (0/1/2): event-triggered flight-state logging (UTC, position, IAS/TAS/Mach/GS, wind, then the full weather picture);
   surface-state lines at start-up for wet-runway reports.
 
-## Windshear: capability probe first (2026-11-06)
+## Windshear: capability probe (2026-11-06, removed)
 
-`docs/windshear-sdk-assessment.md` sets out what X-Plane's weather API can do for windshear. Downdrafts are not possible: records have no
-vertical wind. Vertical wind profiles only reach the sim region-wide. The menu item **Windshear Test: probe X-Plane (start / stop)** places
-one test wind record ahead of the aircraft and logs, for 4 minutes, how far and how fast X-Plane applies it. It decides whether gust fronts
-and microburst outflows can be represented at all. No windshear model is active yet.
+`docs/windshear-sdk-assessment.md` sets out what X-Plane's weather API can do for windshear, with the results of the in-sim probe. That
+probe's menu item and the humidity-aloft experiment (it did not change X-Plane's pop-up showers) have been removed.
 
 ## Realistic windshear (2026-11-06)
 

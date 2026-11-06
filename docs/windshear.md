@@ -58,7 +58,7 @@ Log lines start with `[WXPlane Windshear]`.
 - **Why fixed:** the first in-sim test (13:48) used records that moved with the field. A moved record is a new one, and each new one
   restarted X-Plane's 2-minute fade, so the gust front reached the aircraft at about a third of its strength. Fixed cells only change
   their wind, which X-Plane updates in place.
-- **Timing and strength:** cells are sent for the state `windshear_lead_s` (120 s) ahead, `windshear_gain` (1.4) times stronger.
+- **Timing and strength:** cells are sent for the state `windshear_lead_s` (120 s) ahead, `windshear_gain` (2.5) times stronger, capped at 60 kt per cell. The first in-sim microburst test (14:07) delivered ~40 % of the cells' outflow at 1.4: a +9 to −14 kt headwind change where the model had +29 to −28 kt, with a 14 kt airspeed loss.
 - **Updates:** every 30 s, only for cells whose wind changed by 2 kt or 5°. The 80 cells nearest the aircraft within 40 nm are sent.
 - **Re-sending and removal:** cells are re-sent with any of WXPlane's replacing updates. They are removed when windshear is turned off,
   when the plugin is disabled, or when they drop below 3 kt.
@@ -68,7 +68,7 @@ Log lines start with `[WXPlane Windshear]`.
 Each choice alternates between a microburst and a gust front. The event is placed ahead on the track, at the distance the aircraft
 covers in ~150 s (3–12 nm), so it is faded in when the aircraft gets there. It is already mature, does not move, and lives its normal
 lifecycle.
-- **Microburst:** 30 kt outflow (42 kt sent), 3,300 fpm downdraft modelled only.
+- **Microburst:** 30 kt outflow (up to 60 kt sent), 3,300 fpm downdraft modelled only.
 - **Gust front:** 25 kt headwind outflow.
 
 It works with the windshear toggle on or off. Fly it below 3,000 ft AGL.

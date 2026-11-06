@@ -23,7 +23,7 @@ Laminar's documentation, or WXPlane logs from real flights. Answers marked "meas
   and logged only, never applied.
 - **Microburst outflow:** only if the probe shows a ~2 nm pattern survives X-Plane's blending.
 
-## The probe (menu: Windshear Test: probe X-Plane)
+## The probe (removed 2026-11-06 after its results went into the windshear model)
 
 Use it in cruise or well above the ground; the test wind sits below 3,000 ft AGL.
 
