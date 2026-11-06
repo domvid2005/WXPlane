@@ -72,6 +72,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_min_dbz") c.radarMinDbz = d < 5 ? 5 : (d > 45 ? 45 : d);
         else if (k == "radar_rain_full_mmh") c.radarRainFullMmH = d < 5 ? 5 : d;
         else if (k == "max_turbulence") c.maxTurbulence = d < 0 ? 0 : (d > 1 ? 1 : d);
+        else if (k == "turb_reports") c.turbReports = toBool(v);
         else if (k == "realistic_turbulence") { c.realisticTurbulence = toBool(v); sawRealistic = true; }
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
@@ -221,6 +222,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_rain_full_mmh = " << c.radarRainFullMmH << "\n"
       << "max_turbulence = " << c.maxTurbulence << "\n"
       << "realistic_turbulence = " << (c.realisticTurbulence ? 1 : 0) << "\n"
+      << "turb_reports = " << (c.turbReports ? 1 : 0) << "\n"
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"

@@ -143,12 +143,14 @@ XPLMMapLayerID XPLMCreateMapLayer(XPLMCreateMapLayer_t* p) { g_mapLabelCb = p->l
 int XPLMDestroyMapLayer(XPLMMapLayerID) { g_mapDestroyed = true; return 1; }
 void XPLMRegisterMapCreationHook(XPLMMapCreatedCallback_f f, void*) { g_mapHook = f; }
 int XPLMMapExists(const char*) { return 1; }
+void XPLMSetGraphicsState(int, int, int, int, int, int, int) {}
 void XPLMDrawMapLabel(XPLMMapLayerID, const char* t, float, float, XPLMMapOrientation, float) { g_mapLabels.push_back(t); }
 void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* y) { *x = (float)lo; *y = (float)la; }
 
 // ---------------- mock libcurl ----------------
 struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
+static std::string g_pirepJson;   // HARNESS_TURB: pilot reports served for /api/data/pirep
 static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
 static std::vector<std::string> g_urls;
 static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
@@ -220,6 +222,11 @@ CURLcode curl_easy_perform(CURL* c) {
     ++g_netRequests;
     std::printf("  net: GET %s\n", e->url.c_str());
     g_urls.push_back(e->url);
+    if (!g_pirepJson.empty() && e->url.find("aviationweather.gov/api/data/") != std::string::npos &&
+        (e->url.find("/pirep?") != std::string::npos || e->url.find("sigmet?") != std::string::npos || e->url.find("gairmet?") != std::string::npos)) {
+        const std::string b = e->url.find("/pirep?") != std::string::npos ? g_pirepJson : std::string("[]");
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
     if (!g_gtgnFile.empty() && (e->url.find("nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn") != std::string::npos || e->url.find("data.ecmwf.int") != std::string::npos)) {
         const bool ec = e->url.find("data.ecmwf.int") != std::string::npos;
         if (ec && e->url.size() > 6 && e->url.compare(e->url.size() - 6, 6, ".index") == 0) { e->status = 200; e->wf((char*)g_ecIndex.data(), 1, g_ecIndex.size(), e->wd); return 0; }
@@ -574,7 +581,8 @@ static int runTurb() {
     };
     std::printf("[turb] 1) inside the US at 33,000 ft: GTGN\n");
     CHECK(pumpUntil("realistic turbulence on", 60));
-    CHECK(g_logAll.find("EDR levels 0..50000 ft") != std::string::npos);
+    CHECK(pumpUntil("EDR levels 0..50000 ft", 60));
+    CHECK(pumpUntil("in memory, crop", 30));
     CHECK(g_logAll.find("packing 5.40") != std::string::npos);
     CHECK(pumpUntil("| GTGN |", 20) || g_logAll.find("GTGN | data") != std::string::npos);
     // layer 10 is 10,000 m = 32,808 ft: EDR between 0.20 (30,000) and 0.23 (35,000), + up to 0.02 west-east, x0.83..1.2 variation
@@ -589,14 +597,30 @@ static int runTurb() {
     CHECK(g_logAll.find("GTGN: " + g_gtgnName + " valid") != std::string::npos);
     CHECK(g_logAll.find("ECMWF:") == std::string::npos);   // deep inside GTGN coverage: ECMWF not downloaded
     (void)gtgnBytes;
+    {   // a moderate report from an A320 at FL330 just north of the Germany test point (outside GTGN): raises the turbulence there
+        char pj[600];
+        std::snprintf(pj, sizeof pj, "[{\"obsTime\":%ld,\"acType\":\"A320\",\"lat\":50.05,\"lon\":10.0,\"fltLvl\":330,\"tbBas1\":null,\"tbTop1\":null,\"tbInt1\":\"MOD\",\"tbInt2\":\"\",\"pirepType\":\"PIREP\",\"rawOb\":\"XXX UA /OV XXX/TM 0000/FL330/TP A320/TB MOD\"}]", (long)std::time(nullptr));
+        g_pirepJson = pj;
+    }
     std::printf("[turb] 2) over Germany: ECMWF estimate, the source changes\n");
     g_lat = 50.0; g_lon = 10.0;
     CHECK(pumpUntil("wind fields", 60));
-    CHECK(pumpUntil("ECMWF estimate |", 40));
+    CHECK(pumpUntil("ECMWF Ellrod TI1", 40));   // the estimate is there; the report floor is above it, so the source shows the floor
     CHECK(g_logAll.find("source changed: GTGN -> ") != std::string::npos);
     CHECK(g_logAll.find("Ellrod TI1") != std::string::npos);
-    std::printf("[turb]   layer 10 = %.2f\n", g_turbArr[10]);
-    CHECK(g_turbArr[10] >= 0 && g_turbArr[10] <= 3);
+    CHECK(pumpUntil("floor EDR 0.300 from PIREP MOD A320 (medium", 60));
+    for (int i = 0; i < 300 && std::fabs(g_turbArr[10] - wx::turb::edrToXpLevel(0.30)) > 0.02; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+    std::printf("[turb]   layer 10 = %.2f (a MOD report from an A320 nearby: expected %.2f)\n", g_turbArr[10], wx::turb::edrToXpLevel(0.30));
+    CHECK(std::fabs(g_turbArr[10] - wx::turb::edrToXpLevel(0.30)) < 0.03);
+    // the map: the pilot-report layer labels the report
+    CHECK(g_mapLabelCb != nullptr);
+    if (g_mapLabelCb) {
+        const float bounds[4] = {0, 60, 20, 40};   // left, top, right, bottom in the stub's map units (x = lon, y = lat)
+        g_mapLabels.clear();
+        g_mapLabelCb((void*)77, bounds, 1, 1, 0, nullptr, nullptr);
+        std::printf("[turb]   map labels: %zu, first '%s'\n", g_mapLabels.size(), g_mapLabels.empty() ? "" : g_mapLabels[0].c_str());
+        CHECK(!g_mapLabels.empty() && g_mapLabels[0].find("MOD FL330 A320") != std::string::npos);
+    }
     std::printf("[turb] 3) the menu toggle puts X-Plane's values back\n");
     g_menuHandler(nullptr, (void*)(intptr_t)10 /*kTurbulence*/);
     CHECK(pumpUntil("realistic turbulence off: X-Plane's region turbulence put back", 5));

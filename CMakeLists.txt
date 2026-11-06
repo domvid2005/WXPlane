@@ -49,15 +49,15 @@ target_compile_definitions(wx_codecs INTERFACE OPJ_STATIC)
 
 set(WX_CORE_SOURCES
   src/json_mini.cpp src/metar.cpp src/sources.cpp src/wxmodel.cpp src/windsaloft.cpp src/config.cpp src/viewer.cpp
-  src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp src/windshear.cpp src/gribx.cpp src/turbulence.cpp)
+  src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp src/windshear.cpp src/gribx.cpp src/turbulence.cpp src/hazards.cpp)
 
 add_library(WXPlane MODULE
-  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/plugin.cpp)
+  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/wxgl.cpp src/plugin.cpp)
 
 target_include_directories(WXPlane PRIVATE "${XPLANE_SDK}/CHeaders/XPLM")
 target_compile_definitions(WXPlane PRIVATE
   XPLM200=1 XPLM210=1 XPLM300=1 XPLM301=1 XPLM303=1 XPLM400=1 XPLM410=1 XPLM420=1)
-target_link_libraries(WXPlane PRIVATE CURL::libcurl Threads::Threads wx_codecs)
+target_link_libraries(WXPlane PRIVATE CURL::libcurl Threads::Threads wx_codecs ${CMAKE_DL_LIBS})
 
 # --- Output: <build>/package/WXPlane/<lin_x64|mac_x64|win_x64>/WXPlane.xpl ----------------------
 if(WIN32)

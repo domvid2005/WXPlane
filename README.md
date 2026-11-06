@@ -449,6 +449,11 @@ Menu **Enable Realistic Turbulence** (on by default) and **Max Turbulence...** (
   and X-Plane's own values are put back when the feature is turned off.
 - **Stale data is not used:** a GTGN analysis older than 45 minutes, or an ECMWF step more than 4 hours from now, is ignored.
   With no current data, nothing is added.
+- **Pilot reports, SIGMETs and AIRMETs** (NOAA AWC) raise the turbulence where GTGN does not cover it. A report is converted
+  for the reporting aircraft's size: "extreme" from a C172 is less air than "moderate-to-severe" from an A320; an unknown type
+  counts as the lightest class. `turb_reports = 0` turns this off.
+- **On X-Plane's map:** two layers with their own toggles in the map's layer list: "WXPlane: Pilot reports (turbulence)" and
+  "WXPlane: SIGMETs and AIRMETs" (every current US and international SIGMET and G-AIRMET, coloured by hazard).
 - **GTGN files** are in hour folders on NOMADS: `gtgn.YYYYMMDD/HH/gtgn.tHHMMz.3km.grib2`.
 - **Log:** lines start with `[WXPlane Turbulence]`, every minute: source and valid time, EDR or index at the aircraft, the level
   requested, the level X-Plane holds, and the aircraft's load-factor spread. `diag_verbosity = 2` adds every layer.

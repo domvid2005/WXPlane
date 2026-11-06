@@ -41,6 +41,7 @@
 #include "sources.h"
 #include "radar.h"
 #include "turbfetch.h"
+#include "wxgl.h"
 #include "viewer.h"
 #include "wxmodel.h"
 
@@ -434,6 +435,7 @@ void eraseRec(const std::string& k) {
 // Only sim/weather/region/turbulence is written. When the feature is turned off, X-Plane's own values from before are put back.
 double awGet(XPLMDataRef r);
 wx::turb::Fetcher g_turbFetch;
+std::shared_ptr<const wx::hz::Snapshot> g_mapReports;   // latest reports/SIGMETs/AIRMETs, for the map and the floor
 struct TurbState {
     XPLMDataRef arr = nullptr, alts = nullptr, gN = nullptr, simT = nullptr, elev = nullptr;
     int n = 0;
@@ -485,7 +487,9 @@ void turbulenceTick() {
     const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
     const double altFt = t.elev ? XPLMGetDatad(t.elev) / 0.3048 : 0;
     const bool on = g_cfg.enabled && g_cfg.realisticTurbulence && !(lat == 0 && lon == 0);
-    g_turbFetch.update(lat, lon, altFt, on);
+    // Pilot reports, SIGMETs and AIRMETs are kept current whenever the weather is on (for the map layers and the floor).
+    g_turbFetch.update(lat, lon, altFt, on, g_cfg.enabled && !(lat == 0 && lon == 0));
+    g_mapReports = g_turbFetch.reports();
     if (!on) { turbRestore(g_cfg.realisticTurbulence ? "weather off" : "realistic turbulence off"); return; }
     if (!t.arr || !XPLMCanWriteDataRef(t.arr) || t.n <= 0) {
         if (!t.loggedNoArr) { t.loggedNoArr = true; turbLog("sim/weather/region/turbulence %s: realistic turbulence not possible", t.arr ? "is not writable" : "not found"); }
@@ -501,14 +505,28 @@ void turbulenceTick() {
     const wx::turb::Inputs in = g_turbFetch.inputs();
     const std::time_t wall = std::time(nullptr);
     const double simT = t.simT ? XPLMGetDataf(t.simT) : 0.0;
-    if (!in.gtgn && !in.ecA) return;   // nothing has arrived yet: X-Plane's values stay as they are
+    const std::shared_ptr<const wx::hz::Snapshot> rep = g_cfg.turbReports ? g_mapReports : nullptr;
+    if (!in.gtgn && !in.ecA && !rep) return;   // nothing has arrived yet: X-Plane's values stay as they are
+    // Reports and turbulence SIGMETs/AIRMETs raise the gridded value where the gridded data does not already contain them:
+    // GTGN assimilates pilot reports, so the floor is weighted by (1 - GTGN coverage).
+    auto withReports = [&](const wx::turb::Sample& sm, double altQ, std::string* why) {
+        double e = std::strcmp(sm.source, "none") != 0 ? sm.edr : 0.0;
+        if (rep) {
+            const wx::hz::Floor f = wx::hz::floorAt(*rep, lat, lon, altQ, wall);
+            const double fl = f.edr * (1.0 - sm.coverage);
+            if (fl > e) { e = fl; if (why) *why = f.why; }
+        }
+        return e;
+    };
     if ((int)t.edrS.size() != t.n) { t.edrS.assign((size_t)t.n, 0.0); t.sent.assign((size_t)t.n, 0.0f); t.has.assign((size_t)t.n, false); }
     const double scale = std::max(0.0, std::min(1.0, g_cfg.maxTurbulence)), a = 1.0 - std::exp(-1.0 / 20.0);
     for (int k = 0; k < t.n; ++k) {
         const wx::turb::Sample s = wx::turb::sampleAt(in, lat, lon, altM[k] / 0.3048, wall, simT);
-        const double e = s.edr * scale;
+        std::string why;
+        const double raw = withReports(s, altM[k] / 0.3048, &why);
+        const double e = raw * scale;
         const bool had = t.has[k];
-        t.has[k] = std::strcmp(s.source, "none") != 0;
+        t.has[k] = std::strcmp(s.source, "none") != 0 || !why.empty();
         if (!t.has[k]) t.edrS[k] = 0;
         else t.edrS[k] = (t.everData && had) ? t.edrS[k] + (e - t.edrS[k]) * a : e;
     }
@@ -535,10 +553,13 @@ void turbulenceTick() {
     }
     // Log every minute, and when the source changes: what the data says at the aircraft and what X-Plane does with it.
     const wx::turb::Sample here = wx::turb::sampleAt(in, lat, lon, altFt, wall, simT);
-    if (now >= t.nextLog || here.source != t.lastSource) {
+    std::string hereWhy;
+    const double hereEdr = withReports(here, altFt, &hereWhy);
+    const std::string hereSource = hereWhy.empty() ? std::string(here.source) : "report/SIGMET/AIRMET floor";
+    if (now >= t.nextLog || hereSource != t.lastSource) {
         t.nextLog = now + std::chrono::seconds(60);
-        if (here.source != t.lastSource && !t.lastSource.empty()) turbLog("source changed: %s -> %s", t.lastSource.c_str(), here.source);
-        t.lastSource = here.source;
+        if (hereSource != t.lastSource && !t.lastSource.empty()) turbLog("source changed: %s -> %s", t.lastSource.c_str(), hereSource.c_str());
+        t.lastSource = hereSource;
         // requested level at the aircraft's altitude (between the two layers around it) and what X-Plane holds there
         std::vector<float> back((size_t)t.n, 0.0f);
         XPLMGetDatavf(t.arr, back.data(), 0, t.n);
@@ -557,9 +578,10 @@ void turbulenceTick() {
         std::string parts;
         if (here.gtgnEdr >= 0) { std::snprintf(b, sizeof b, " GTGN EDR %.3f", here.gtgnEdr); parts += b; }
         if (here.ecTi >= 0) { std::snprintf(b, sizeof b, " ECMWF Ellrod TI1 %.1f (EDR-equivalent %.2f, estimate)", here.ecTi, here.ecEdr); parts += b; }
+        if (!hereWhy.empty()) { std::snprintf(b, sizeof b, " floor EDR %.3f from %s", hereEdr, hereWhy.c_str()); parts += b; }
         const double m = t.cnt ? t.sg / t.cnt : 1.0, sd = t.cnt > 1 ? std::sqrt(std::max(0.0, t.sg2 / t.cnt - m * m)) : 0.0;
         turbLog("%s | data: %s | aircraft %.0f ft MSL:%s%s; coverage %.2f, variation x%.2f -> EDR %.3f (x max %.2f, smoothed %.3f) -> X-Plane level %.2f requested, %.2f held | load factor sd %.3f g over %d samples",
-                here.source, data.c_str(), altFt, parts.empty() ? " no value at this altitude" : parts.c_str(), "", here.coverage, here.noise, here.edr, scale,
+                hereSource.c_str(), data.c_str(), altFt, parts.empty() ? " no value at this altitude" : parts.c_str(), "", here.coverage, here.noise, hereEdr, scale,
                 edrHere, req, held, sd, t.cnt);
         if (g_cfg.diagVerbosity >= 2) {
             std::string L;
@@ -572,6 +594,154 @@ void turbulenceTick() {
         }
         t.sg = t.sg2 = 0; t.cnt = 0;
     }
+}
+
+
+// ---- Map layers: pilot reports, and SIGMETs/AIRMETs (each with its own toggle in X-Plane's map layer list) ----------------------
+XPLMMapLayerID g_mapPireps = nullptr, g_mapAreas = nullptr;
+
+void hazardColor(const std::string& h, float* c) {
+    auto set = [&](float r, float g, float b) { c[0] = r; c[1] = g; c[2] = b; };
+    if (h == "TS" || h == "CONVECTIVE") set(1.0f, 0.25f, 0.25f);
+    else if (h == "TURB" || h == "TURB-LO" || h == "TURB-HI" || h == "MTW") set(1.0f, 0.6f, 0.1f);
+    else if (h == "ICE") set(0.3f, 0.8f, 1.0f);
+    else if (h == "IFR") set(0.75f, 0.45f, 1.0f);
+    else if (h == "MT_OBSC") set(0.8f, 0.55f, 0.3f);
+    else if (h == "LLWS") set(1.0f, 1.0f, 0.25f);
+    else if (h == "SFC_WND") set(0.45f, 1.0f, 0.45f);
+    else if (h == "FZLVL" || h == "M_FZLVL") set(0.6f, 0.75f, 1.0f);
+    else if (h == "TC") set(1.0f, 0.35f, 1.0f);
+    else if (h == "VA") set(0.75f, 0.75f, 0.75f);
+    else set(1.0f, 1.0f, 1.0f);
+}
+void pirepColor(const std::string& i, float* c) {
+    auto set = [&](float r, float g, float b) { c[0] = r; c[1] = g; c[2] = b; };
+    if (i == "NEG" || i == "SMTH") set(0.35f, 0.95f, 0.35f);
+    else if (i == "SMTH-LGT" || i == "LGT") set(1.0f, 0.95f, 0.3f);
+    else if (i == "LGT-MOD" || i == "MOD") set(1.0f, 0.6f, 0.1f);
+    else set(1.0f, 0.2f, 0.2f);
+}
+bool areaCurrent(const wx::hz::Area& a, std::time_t now) { return (!a.validTo || now <= a.validTo) && (!a.validFrom || now >= a.validFrom - 1800); }
+std::string flRange(double lo, double hi) {
+    char b[40];
+    std::string L = lo >= 0 ? (lo >= 18000 ? "FL" + std::to_string((int)std::lround(lo / 100)) : std::to_string((int)std::lround(lo)) + " ft") : "SFC";
+    std::string H = hi >= 0 ? (hi >= 18000 ? "FL" + std::to_string((int)std::lround(hi / 100)) : std::to_string((int)std::lround(hi)) + " ft") : "";
+    std::snprintf(b, sizeof b, "%s%s%s", L.c_str(), H.empty() ? "" : "-", H.c_str());
+    return b;
+}
+bool inBounds(const float* bd, float x, float y) { return x >= bd[0] && x <= bd[2] && y <= bd[1] && y >= bd[3]; }
+
+void drawAreas(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
+    if (!g_mapReports || !wxgl::load()) return;
+    const std::time_t now = std::time(nullptr);
+    XPLMSetGraphicsState(0, 0, 0, 0, 1, 0, 0);
+    for (const auto& a : g_mapReports->areas) {
+        if (!areaCurrent(a, now) || a.pts.empty()) continue;
+        float c[3]; hazardColor(a.hazard, c);
+        std::vector<float> xs, ys; bool any = false;
+        for (const auto& p : a.pts) { float x, y; XPLMMapProject(proj, p.first, p.second, &x, &y); xs.push_back(x); ys.push_back(y); any = any || inBounds(bd, x, y); }
+        if (!any) {   // still draw a large area that surrounds the view
+            float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
+            for (size_t k = 1; k < xs.size(); ++k) { x0 = std::min(x0, xs[k]); x1 = std::max(x1, xs[k]); y0 = std::min(y0, ys[k]); y1 = std::max(y1, ys[k]); }
+            if (x1 < bd[0] || x0 > bd[2] || y1 < bd[3] || y0 > bd[1]) continue;
+        }
+        if (a.pts.size() == 1) {   // a point SIGMET: a small diamond
+            const float r = 6 * uiUnit;
+            wxgl::color(c[0], c[1], c[2], 0.9f); wxgl::lineWidth(2);
+            wxgl::begin(wxgl::LINE_LOOP); wxgl::vertex(xs[0] - r, ys[0]); wxgl::vertex(xs[0], ys[0] + r); wxgl::vertex(xs[0] + r, ys[0]); wxgl::vertex(xs[0], ys[0] - r); wxgl::end();
+            continue;
+        }
+        wxgl::color(c[0], c[1], c[2], a.line ? 0.55f : 0.9f);
+        wxgl::lineWidth(a.product.find("SIGMET") != std::string::npos ? 2.5f : 1.5f);
+        wxgl::begin(a.line ? wxgl::LINE_STRIP : wxgl::LINE_LOOP);
+        for (size_t k = 0; k < xs.size(); ++k) wxgl::vertex(xs[k], ys[k]);
+        wxgl::end();
+    }
+}
+
+void labelAreas(XPLMMapLayerID layer, const float* bd, float, float, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
+    if (!g_mapReports) return;
+    const std::time_t now = std::time(nullptr);
+    for (const auto& a : g_mapReports->areas) {
+        if (!areaCurrent(a, now) || a.pts.empty()) continue;
+        double sx = 0, sy = 0; int n = 0;
+        for (const auto& p : a.pts) { float x, y; XPLMMapProject(proj, p.first, p.second, &x, &y); sx += x; sy += y; ++n; }
+        const float x = (float)(sx / n), y = (float)(sy / n);
+        if (!inBounds(bd, x, y)) continue;
+        std::string prod = a.product;
+        if (prod == "CONVECTIVE SIGMET") prod = "CONV SIGMET";
+        std::string t = prod + (a.id.empty() ? "" : " " + a.id) + " " + (a.severity.empty() ? "" : a.severity + " ") + a.hazard;
+        if (a.baseFt >= 0 || a.topFt >= 0) t += " " + flRange(a.baseFt, a.topFt);
+        XPLMDrawMapLabel(layer, t.c_str(), x, y, xplm_MapOrientation_UI, 0);
+    }
+}
+
+void drawPireps(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
+    if (!g_mapReports || !wxgl::load()) return;
+    XPLMSetGraphicsState(0, 0, 0, 0, 1, 0, 0);
+    const float r = 5 * uiUnit;
+    for (const auto& p : g_mapReports->pireps) {
+        if (p.intensity.empty()) continue;   // only reports that say something about turbulence
+        float x, y; XPLMMapProject(proj, p.lat, p.lon, &x, &y);
+        if (!inBounds(bd, x, y)) continue;
+        float c[3]; pirepColor(p.intensity, c);
+        const float rr = p.urgent ? r * 1.5f : r;
+        wxgl::color(c[0], c[1], c[2], 0.95f);
+        wxgl::begin(wxgl::TRIANGLE_FAN);   // a triangle pointing up, the usual turbulence-report mark
+        wxgl::vertex(x, y + rr); wxgl::vertex(x - rr, y - rr * 0.8f); wxgl::vertex(x + rr, y - rr * 0.8f);
+        wxgl::end();
+        wxgl::color(0, 0, 0, 0.8f); wxgl::lineWidth(1);
+        wxgl::begin(wxgl::LINE_LOOP); wxgl::vertex(x, y + rr); wxgl::vertex(x - rr, y - rr * 0.8f); wxgl::vertex(x + rr, y - rr * 0.8f); wxgl::end();
+    }
+}
+
+void labelPireps(XPLMMapLayerID layer, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
+    if (!g_mapReports) return;
+    std::vector<std::pair<std::pair<float, float>, const wx::hz::Pirep*>> vis;
+    for (const auto& p : g_mapReports->pireps) {
+        if (p.intensity.empty()) continue;
+        float x, y; XPLMMapProject(proj, p.lat, p.lon, &x, &y);
+        if (inBounds(bd, x, y)) vis.push_back({{x, y}, &p});
+    }
+    if (vis.size() > 80) return;   // zoomed out over a busy area: marks only, labels would overlap
+    for (const auto& v : vis) {
+        const wx::hz::Pirep& p = *v.second;
+        std::tm g{}; std::time_t t = p.obsTime;
+#ifdef _WIN32
+        gmtime_s(&g, &t);
+#else
+        gmtime_r(&t, &g);
+#endif
+        char b[120];
+        std::snprintf(b, sizeof b, "%s%s %s %s %02d%02dZ", p.urgent ? "UUA " : "", p.intensity.c_str(),
+                      p.altFt >= 0 ? ("FL" + std::to_string((int)std::lround(p.altFt / 100))).c_str() : "", p.acType.c_str(), g.tm_hour, g.tm_min);
+        XPLMDrawMapLabel(layer, b, v.first.first, v.first.second - 9 * uiUnit, xplm_MapOrientation_UI, 0);
+    }
+}
+
+void mapLayerDeleted(XPLMMapLayerID l, void*) { if (l == g_mapPireps) g_mapPireps = nullptr; if (l == g_mapAreas) g_mapAreas = nullptr; }
+
+void createMapLayers() {
+    XPLMCreateMapLayer_t p;
+    std::memset(&p, 0, sizeof p);
+    p.structSize = sizeof p;
+    p.mapToCreateLayerIn = XPLM_MAP_USER_INTERFACE;
+    p.layerType = xplm_MapLayer_Markings;
+    p.willBeDeletedCallback = mapLayerDeleted;
+    p.showUiToggle = 1;
+    if (!g_mapAreas) {
+        p.drawCallback = drawAreas; p.labelCallback = labelAreas; p.layerName = "WXPlane: SIGMETs and AIRMETs";
+        g_mapAreas = XPLMCreateMapLayer(&p);
+    }
+    if (!g_mapPireps) {
+        p.drawCallback = drawPireps; p.labelCallback = labelPireps; p.layerName = "WXPlane: Pilot reports (turbulence)";
+        g_mapPireps = XPLMCreateMapLayer(&p);
+    }
+}
+void mapCreated(const char* id, void*) { if (g_pluginEnabled && std::strcmp(id, XPLM_MAP_USER_INTERFACE) == 0) createMapLayers(); }
+void destroyMapLayers() {
+    if (g_mapPireps) { XPLMDestroyMapLayer(g_mapPireps); g_mapPireps = nullptr; }
+    if (g_mapAreas) { XPLMDestroyMapLayer(g_mapAreas); g_mapAreas = nullptr; }
 }
 
 // ---- Dry runways (2026-11-06) ---------------------------------------------------------------------------------------------------------
@@ -2414,6 +2584,8 @@ PLUGIN_API int XPluginEnable(void) {
     wx::httpGlobalInit();
     g_fetcher.start();
     g_turbFetch.start();
+    if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayers();
+    {   static bool hooked = false; if (!hooked) { hooked = true; XPLMRegisterMapCreationHook(mapCreated, nullptr); } }
     g_enabledAt = Clock::now();
     g_loopStarted = false;
     g_visK = (float)g_cfg.visScale;
@@ -2448,6 +2620,7 @@ PLUGIN_API void XPluginDisable(void) {
     g_fetcher.stop();
     g_turbFetch.stop();
     turbRestore("plugin disabled");
+    destroyMapLayers();
     wx::httpGlobalCleanup();
     // Give weather back to X-Plane so our fog/cloud records don't outlive the plugin. The weather API may only be used from the
     // pre-flight-model callback, so the erase is done there on the next frame (the loop stays alive until XPluginStop); only if

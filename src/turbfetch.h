@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "hazards.h"
 #include "turbulence.h"
 
 namespace wx {
@@ -20,14 +21,17 @@ public:
     void start();
     void stop();
     // From the flight loop: where the aircraft is, and whether realistic turbulence is on.
-    void update(double lat, double lon, double altFt, bool enabled);
+    // `reports`: also keep pilot reports, SIGMETs and AIRMETs current (for the map and the turbulence floor).
+    void update(double lat, double lon, double altFt, bool enabled, bool reports = false);
     Inputs inputs() const;
+    std::shared_ptr<const hz::Snapshot> reports() const;
     std::vector<std::string> takeLog();
 
 private:
     void run();
     void gtgnStep(double lat, double lon, double alt, std::time_t now);
     void ecStep(double lat, double lon, double alt, std::time_t now);
+    void reportsStep(double lat, double lon, std::time_t now);
     bool get(const std::string& url, const std::string& range, std::string& body, long& status, std::string& err, long timeout, size_t maxBytes);
     void log(const std::string& s);
 
@@ -36,8 +40,10 @@ private:
     mutable std::mutex mx_;
     std::condition_variable cv_;
     double lat_ = 0, lon_ = 0, alt_ = 0;
-    bool enabled_ = false, havePos_ = false;
+    bool enabled_ = false, havePos_ = false, reports_ = false;
     Inputs pub_;
+    std::shared_ptr<const hz::Snapshot> hz_;
+    std::time_t hzNext_ = 0; double hzLat_ = 999, hzLon_ = 999; int hzFail_ = 0;
     std::vector<std::string> log_;
 
     // GTGN state (worker only)

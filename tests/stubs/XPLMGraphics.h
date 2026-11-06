@@ -7,3 +7,4 @@ void XPLMDrawString(float* rgb, int x, int y, char* str, int* wordWrapWidth, XPL
 float XPLMMeasureString(XPLMFontID font, const char* str, int n);
 void XPLMGetFontDimensions(XPLMFontID font, int* w, int* h, int* digitsOnly);
 void XPLMDrawTranslucentDarkBox(int l, int t, int r, int b);
+void XPLMSetGraphicsState(int fog, int texUnits, int lighting, int alphaTest, int alphaBlend, int depthTest, int depthWrite);

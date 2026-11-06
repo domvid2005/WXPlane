@@ -9,6 +9,7 @@
 #include <ctime>
 #include <set>
 
+#include "geo.h"
 #include "gribx.h"
 #include "http.h"
 
@@ -73,14 +74,15 @@ void Fetcher::stop() {
     if (th_.joinable()) th_.join();
 }
 
-void Fetcher::update(double lat, double lon, double alt, bool enabled) {
+void Fetcher::update(double lat, double lon, double alt, bool enabled, bool reports) {
     std::lock_guard<std::mutex> l(mx_);
-    bool wake = enabled && !enabled_;
-    lat_ = lat; lon_ = lon; alt_ = alt; enabled_ = enabled; havePos_ = true;
+    bool wake = (enabled && !enabled_) || (reports && !reports_);
+    lat_ = lat; lon_ = lon; alt_ = alt; enabled_ = enabled; reports_ = reports; havePos_ = true;
     if (wake) cv_.notify_all();
 }
 
 Inputs Fetcher::inputs() const { std::lock_guard<std::mutex> l(mx_); return pub_; }
+std::shared_ptr<const hz::Snapshot> Fetcher::reports() const { std::lock_guard<std::mutex> l(mx_); return hz_; }
 
 std::vector<std::string> Fetcher::takeLog() {
     std::lock_guard<std::mutex> l(mx_);
@@ -117,19 +119,68 @@ bool Fetcher::get(const std::string& url, const std::string& rg, std::string& bo
 
 void Fetcher::run() {
     while (!stop_) {
-        double lat, lon, alt; bool en, pos;
+        double lat, lon, alt; bool en, pos, rep;
         {
             std::unique_lock<std::mutex> l(mx_);
             cv_.wait_for(l, std::chrono::seconds(5), [&] { return stop_.load(); });
             if (stop_) break;
-            lat = lat_; lon = lon_; alt = alt_; en = enabled_; pos = havePos_;
+            lat = lat_; lon = lon_; alt = alt_; en = enabled_; pos = havePos_; rep = reports_;
         }
-        if (!en || !pos) continue;
+        if ((!en && !rep) || !pos) continue;
         std::time_t now = std::time(nullptr);
+        if (rep) reportsStep(lat, lon, now);
+        if (stop_ || !en) continue;
         gtgnStep(lat, lon, alt, now);
         if (stop_) break;
         ecStep(lat, lon, alt, now);
     }
+}
+
+// ---- Pilot reports, SIGMETs, AIRMETs (NOAA AWC data API), every 10 minutes ---------------------------------------
+void Fetcher::reportsStep(double lat, double lon, std::time_t now) {
+    const bool moved = hzLat_ > 900 || distNm(lat, lon, hzLat_, hzLon_) > 300;
+    if (now < hzNext_ && !moved) return;
+    hzNext_ = now + 600;
+    auto snap = std::make_shared<hz::Snapshot>();
+    std::shared_ptr<const hz::Snapshot> old = reports();
+    std::string body, err, problems;
+    long st = 0;
+    const std::string base = "https://aviationweather.gov/api/data/";
+    char bbox[96];
+    std::snprintf(bbox, sizeof bbox, "%.1f,%.1f,%.1f,%.1f", std::max(-90.0, lat - 8), std::max(-180.0, lon - 12), std::min(90.0, lat + 8), std::min(180.0, lon + 12));
+    // Reports around the aircraft (the API returns at most a few hundred, so the box is kept to ~1,000 km).
+    if (get(base + "pirep?format=json&age=1.5&bbox=" + bbox, "", body, st, err, 30, 8u << 20)) snap->pireps = hz::parsePireps(body, &err);
+    else { problems += " PIREPs: " + (st ? "HTTP " + std::to_string(st) : err) + ";"; if (old) snap->pireps = old->pireps; }
+    struct Src { const char* path; int kind; };
+    for (const Src& q : {Src{"airsigmet?format=json", 0}, Src{"isigmet?format=json", 1}, Src{"gairmet?format=json", 2}}) {
+        if (stop_) return;
+        if (!get(base + q.path, "", body, st, err, 30, 16u << 20)) {
+            problems += std::string(" ") + q.path + ": " + (st ? "HTTP " + std::to_string(st) : err) + ";";
+            if (old) for (const auto& a : old->areas) {
+                const bool fromThis = (q.kind == 0 && (a.product == "SIGMET" || a.product == "CONVECTIVE SIGMET" || a.product == "AIRMET")) ||
+                                      (q.kind == 1 && a.product == "INTL SIGMET") || (q.kind == 2 && a.product.compare(0, 8, "G-AIRMET") == 0);
+                if (fromThis) snap->areas.push_back(a);
+            }
+            continue;
+        }
+        std::vector<hz::Area> v = q.kind == 0 ? hz::parseAirSigmets(body, &err) : q.kind == 1 ? hz::parseIntlSigmets(body, &err) : hz::parseGairmets(body, now, &err);
+        snap->areas.insert(snap->areas.end(), v.begin(), v.end());
+    }
+    snap->fetched = now;
+    hzLat_ = lat; hzLon_ = lon;
+    int turbP = 0, sig = 0, intl = 0, gair = 0, turbA = 0;
+    for (const auto& p : snap->pireps) if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++turbP;
+    for (const auto& a : snap->areas) {
+        if (a.product == "INTL SIGMET") ++intl; else if (a.product.compare(0, 8, "G-AIRMET") == 0) ++gair; else ++sig;
+        if (a.isTurbulence()) ++turbA;
+    }
+    if (!problems.empty()) { ++hzFail_; hzNext_ = now + std::min(600, 60 * hzFail_); } else hzFail_ = 0;
+    char b[300];
+    std::snprintf(b, sizeof b, "reports: %zu PIREPs/AIREPs within ~500 nm (%d with turbulence), %d US SIGMETs, %d international SIGMETs, %d G-AIRMETs (%d turbulence areas)%s",
+                  snap->pireps.size(), turbP, sig, intl, gair, turbA, problems.empty() ? "" : ("; failed:" + problems).c_str());
+    log(b);
+    std::lock_guard<std::mutex> l(mx_);
+    hz_ = snap;
 }
 
 // ---- NOAA GTGN ----------------------------------------------------------------------------------------------------

@@ -21,6 +21,7 @@ static bool nr(double a, double b, double t) { return std::fabs(a - b) <= t; }
 
 using namespace wx;
 #include "test_turb.h"
+#include "test_hazards.h"
 
 static void utc(std::time_t t, std::tm* out) {
 #ifdef _WIN32
@@ -1349,6 +1350,7 @@ int main() {
     }
 
     tt::run();
+    th::run();
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

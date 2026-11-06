@@ -82,6 +82,51 @@ Log lines start with `[WXPlane Turbulence]`.
    feature is turned off, the weather is turned off, or the plugin is disabled. Storm and gust turbulence in WXPlane's weather records
    is unchanged except for the Max turbulence scale.
 
+## Pilot reports, SIGMETs and AIRMETs (2026-11-06)
+
+Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/turbfetch.cpp`, map layers in `src/plugin.cpp`.
+
+- **Data:** NOAA AWC data API, every 10 minutes (and after a move of 300 nm), whenever the weather is on:
+  - `pirep` within about ±8° latitude and ±12° longitude of the aircraft, last 90 minutes;
+  - `airsigmet` (US SIGMETs, convective and not);
+  - `isigmet` (international SIGMETs, worldwide);
+  - `gairmet` (G-AIRMET Sierra, Tango and Zulu; only the forecast snapshot nearest now).
+- **Reporter size:** a reported intensity describes how the reporting aircraft felt it. It is turned into the EDR of the air with the
+  reporter's ICAO type:
+
+| Class | Examples | Factor |
+|---|---|---|
+| light | C172, PA28, SR22, King Air, PC-12, TBM, Caravan | ×0.6 |
+| regional | CRJ, ERJ, Dash 8, ATR, Citations, Learjets, Gulfstreams | ×0.85 |
+| medium | A320 family, 737 family, 757, A220, MD-80 | ×1.0 |
+| heavy | widebodies (747, 767, 777, 787, A330, A350, A380), C-17 | ×1.25 |
+| type not determinable | blank, UNKN, an AIREP callsign, or a type not in the lists | ×0.6 (lightest, so a report never overstates) |
+
+  The category centres for a medium aircraft are: LGT 0.15, LGT-MOD 0.22, MOD 0.30, MOD-SEV 0.40, SEV 0.50 and EXTRM 0.60. So
+  "extreme" from a C172 (0.36) is less than "moderate-to-severe" from an A320 (0.40). The resulting EDR goes to X-Plane like any
+  other, and X-Plane's flight model makes the user's own aircraft respond to it.
+- **The floor:** the turbulence is raised to the floor and never lowered by it. A NEG report raises nothing.
+  - **PIREPs:** full strength within 10 nm and 30 minutes, fading to nothing at 50 nm and 90 minutes. They apply within the reported
+    layer, or ±3,000 ft of the flight level when there is no layer, with a 2,000 ft taper.
+  - **Turbulence SIGMETs (TURB, MTW):** 0.30 inside the area and its altitudes while valid. A SIGMET covers a broad forecast area,
+    so it is not treated as severe everywhere inside it.
+  - **G-AIRMET Tango (TURB-LO, TURB-HI, moderate):** 0.18.
+  - **Weight:** each floor is weighted by (1 − GTGN coverage). GTGN already assimilates pilot reports, so this mainly acts outside
+    the US.
+  - **Off switch:** `turb_reports = 0` turns the floor off. The map layers stay.
+- **Map:** two layers in X-Plane's map, each with its own toggle in the map's layer list:
+  - **"WXPlane: Pilot reports (turbulence)":** a triangle at each report that mentions turbulence. Green NEG, yellow LGT, orange
+    LGT-MOD/MOD, red MOD-SEV and above; urgent (UUA) reports are larger. The label shows intensity, flight level, type and time.
+    Labels are hidden when more than 80 reports are in view.
+  - **"WXPlane: SIGMETs and AIRMETs":** every current US SIGMET, international SIGMET and G-AIRMET, outlined by hazard.
+    Convection red, turbulence and mountain wave orange, icing cyan, IFR purple, mountain obscuration brown, low-level wind shear
+    yellow, surface wind green, freezing level light blue (lines), tropical cyclone magenta, volcanic ash grey. The label shows the
+    product, ID, severity, hazard and altitudes.
+  - **Drawing:** lines use OpenGL 1.x through X-Plane's drawing callback. The functions are looked up at run time, so the plugin
+    links no OpenGL library.
+- **Log:** a line per refresh (`reports: …`) and, when a floor sets the turbulence, `floor EDR x from PIREP MOD A320 (medium,
+  x1.00) FL330, 3 nm, 0 min ago`.
+
 ## Failures and stale data
 
 - **NOMADS throttling:** requests to NOMADS are spaced at least 0.6 s apart. On 2026-11-06 a burst during the header walk got
