@@ -1,6 +1,7 @@
 #include "turbfetch.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -120,41 +121,51 @@ void Fetcher::gtgnStep(double lat, double lon, double alt, std::time_t now) {
     // 1) The newest analysis (every 5 minutes): one is published every 15 minutes.
     if (now >= gNextCheck_) {
         gNextCheck_ = now + 300;
-        std::string found, foundHead;
-        std::time_t foundT = 0;
-        std::string codes;
-        for (int k = 0; k < 8 && !stop_; ++k) {
-            std::time_t t = (now / 900) * 900 - (std::time_t)k * 900;
-            std::string url = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn/prod/gtgn." + utc(t, "%Y%m%d") + "/gtgn.t" + utc(t, "%H%M") + "z.3km.grib2";
-            if (url == gFile_) { found = url; foundT = t; break; }
-            auto miss = gMissing_.find(url);
-            if (miss != gMissing_.end() && now < miss->second) continue;
-            if (get(url, "0-4095", body, st, err, 20, 64 * 1024)) { found = url; foundT = t; foundHead = body; break; }
-            codes += (codes.empty() ? "" : ", ") + utc(t, "%H%MZ") + " " + (st ? "HTTP " + std::to_string(st) : err);
-            if (st == 404) gMissing_[url] = now + (k < 2 ? 240 : 3600);
+        // The day folder is listed (the file names are taken from it; guessed names were refused with 404 on 2026-11-06).
+        std::string found, foundHead, problem, names;
+        int count = 0;
+        for (int back = 0; back < 2 && found.empty() && !stop_; ++back) {
+            const std::time_t day = now - (std::time_t)back * 86400;
+            const std::string dir = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn/prod/gtgn." + utc(day, "%Y%m%d") + "/";
+            std::string lb, le; long ls = 0;
+            if (!get(dir, "", lb, ls, le, 30, 8u << 20)) { problem += (problem.empty() ? "" : "; ") + dir + " " + (ls ? "HTTP " + std::to_string(ls) : le); continue; }
+            std::vector<std::string> files;
+            for (size_t p = lb.find("href=\""); p != std::string::npos; p = lb.find("href=\"", p + 6)) {
+                size_t e = lb.find('"', p + 6);
+                if (e == std::string::npos) break;
+                std::string f = lb.substr(p + 6, e - p - 6);
+                if (f.find(".grib2") == std::string::npos || f.find(".idx") != std::string::npos || f.find('/') != std::string::npos || f.find('?') != std::string::npos) continue;
+                files.push_back(f);
+            }
+            count = (int)files.size();
+            if (files.empty()) {
+                std::string head = lb.substr(0, 300);
+                for (char& c : head) if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+                problem += (problem.empty() ? "" : "; ") + dir + " lists no .grib2 files (start: " + head + ")";
+                continue;
+            }
+            // Prefer the 3 km product if there are several; the newest name sorts last.
+            auto is3km = [](const std::string& f) { size_t q = f.find("3km"); return q != std::string::npos && (q == 0 || !std::isdigit((unsigned char)f[q - 1])); };
+            std::vector<std::string> pick;
+            for (auto& f : files) if (is3km(f)) pick.push_back(f);
+            if (pick.empty()) pick = files;
+            std::sort(pick.begin(), pick.end());
+            for (size_t k = pick.size() > 3 ? pick.size() - 3 : 0; k < pick.size(); ++k) names += (names.empty() ? "" : ", ") + pick[k];
+            found = dir + pick.back();
+        }
+        if (!found.empty() && found != gFile_ && !get(found, "0-4095", foundHead, st, err, 20, 64 * 1024)) {
+            problem = found + ": first bytes " + (st ? "HTTP " + std::to_string(st) : err);
+            found.clear();
         }
         if (found.empty()) {
             ++gFail_;
-            std::string p = "GTGN: no analysis in the last 2 hours (" + codes + ")";
+            std::string p = "GTGN: no analysis (" + problem + ")";
             if (p != gLastProblem_) { log(p); gLastProblem_ = p; }
-            if (now - gLastListing_ > 3600) {   // what the server shows, for the log
-                gLastListing_ = now;
-                std::string dir = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn/prod/";
-                std::string lb, le; long ls = 0;
-                bool ok = get(dir, "", lb, ls, le, 20, 2u << 20);
-                std::string head = lb.substr(0, 400);
-                for (char& c : head) if (c == '\n' || c == '\r' || c == '\t') c = ' ';
-                std::string dirs;
-                for (size_t p2 = lb.find("gtgn."); p2 != std::string::npos && dirs.size() < 200; p2 = lb.find("gtgn.", p2 + 1)) {
-                    size_t e = lb.find_first_of("/\"<", p2);
-                    if (e != std::string::npos && e - p2 < 20) { std::string d = lb.substr(p2, e - p2); if (dirs.find(d) == std::string::npos) dirs += d + " "; }
-                }
-                log("GTGN: directory " + dir + (ok ? " answered HTTP " + std::to_string(ls) : " failed: " + le) + "; day folders: " + (dirs.empty() ? "none" : dirs) +
-                    "; start: " + head);
-            }
             gNextTry_ = now + std::min(900, 60 * gFail_);
             return;
         }
+        if (found != gFile_) log("GTGN: day folder lists " + std::to_string(count) + " GRIB2 file(s); newest: " + names);
+        std::time_t foundT = 0;
         if (found != gFile_) {
             // 2) Its layout: the header of every message, read with small byte ranges.
             std::vector<GMsg> lay;
@@ -173,7 +184,7 @@ void Fetcher::gtgnStep(double lat, double lon, double alt, std::time_t now) {
                 if (isEdr(m)) {
                     double ft = gtgnLevelFt(m);
                     if (std::isnan(ft)) otherTypes.insert(m.levelType);
-                    else { lay.push_back({off, m.length, ft}); grid = m.grid; packing = m.packing; }
+                    else { lay.push_back({off, m.length, ft}); grid = m.grid; packing = m.packing; if (!foundT) foundT = m.validTime(); }
                 }
                 off += m.length;
                 head.clear();
@@ -190,7 +201,7 @@ void Fetcher::gtgnStep(double lat, double lon, double alt, std::time_t now) {
                 log("GTGN: " + found.substr(found.rfind('/') + 1) + ": " + std::to_string(lay.size()) + " EDR levels " + std::to_string((int)lay.front().altFt) +
                     ".." + std::to_string((int)lay.back().altFt) + " ft, " + grid.describe() + ", packing 5." + std::to_string(packing) +
                     (otherTypes.empty() ? "" : ", other level types skipped"));
-            gFile_ = found; gValid_ = foundT; gLayout_ = lay; gRaw_.clear();
+            gFile_ = found; gValid_ = foundT ? foundT : now; gLayout_ = lay; gRaw_.clear();
             gCube_.reset();
         }
     }

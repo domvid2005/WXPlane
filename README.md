@@ -444,10 +444,12 @@ Menu **Enable Realistic Turbulence** (on by default) and **Max Turbulence...** (
   estimate, used only from FL100 to FL500, and never called severe.
 - **Near the edge of GTGN's grid** the two are blended over about 60 km.
 - **To X-Plane:** the EDR at each of the 13 layers of `sim/weather/region/turbulence` (smoothed over 20 s, at most 0.5 per 5 s) goes
-  through the response measured in the sim: X-Plane's scale is usable only from 0 to 3, and not linearly. Nothing else is written,
+  through the response measured in the sim: X-Plane's scale is usable only from 0 to 3, and not linearly. Smooth air (EDR
+  ≤ 0.07) adds nothing; layers without data keep X-Plane's own value. Nothing else is written,
   and X-Plane's own values are put back when the feature is turned off.
 - **Stale data is not used:** a GTGN analysis older than 45 minutes, or an ECMWF step more than 4 hours from now, is ignored.
   With no current data, nothing is added.
+- **GTGN files** are taken from the NOMADS day-folder listing (guessed names were refused).
 - **Log:** lines start with `[WXPlane Turbulence]`, every minute: source and valid time, EDR or index at the aircraft, the level
   requested, the level X-Plane holds, and the aircraft's load-factor spread. `diag_verbosity = 2` adds every layer.
 - The response test used for the calibration has been removed.

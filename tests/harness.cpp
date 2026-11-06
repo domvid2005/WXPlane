@@ -223,6 +223,10 @@ CURLcode curl_easy_perform(CURL* c) {
     if (!g_gtgnFile.empty() && (e->url.find("nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn") != std::string::npos || e->url.find("data.ecmwf.int") != std::string::npos)) {
         const bool ec = e->url.find("data.ecmwf.int") != std::string::npos;
         if (ec && e->url.size() > 6 && e->url.compare(e->url.size() - 6, 6, ".index") == 0) { e->status = 200; e->wf((char*)g_ecIndex.data(), 1, g_ecIndex.size(), e->wd); return 0; }
+        if (!ec && e->url.back() == '/') {   // the day folder: an Apache-style listing
+            std::string l = "<html><body><a href=\"?C=N;O=D\">Name</a> <a href=\"/pub/data/nccf/com/gtgn/prod/\">Parent</a>\n<a href=\"gtgn.t0000z.3km.grib2\">old</a>\n<a href=\"" + g_gtgnName + "\">" + g_gtgnName + "</a>\n<a href=\"" + g_gtgnName + ".idx\">idx</a></body></html>";
+            e->status = 200; e->wf((char*)l.data(), 1, l.size(), e->wd); return 0;
+        }
         const std::string& f = ec ? g_ecFile : g_gtgnFile;
         if ((!ec && e->url.find(g_gtgnName) == std::string::npos) || e->range.empty()) { e->status = 404; return 0; }
         size_t a = std::strtoull(e->range.c_str(), nullptr, 10), b = std::strtoull(e->range.c_str() + e->range.find('-') + 1, nullptr, 10);
@@ -536,6 +540,7 @@ std::string ecMsg(std::time_t run, int step, bool isU, int hpa, int k) {
 }
 } // namespace gen
 
+static bool nr(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 static int runTurb() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 1\nmax_turbulence = 1\ndiag_verbosity = 2\n", f); std::fclose(f); }
@@ -559,6 +564,7 @@ static int runTurb() {
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
     g_lat = 37.65; g_lon = -97.43; g_elev = 33000 * 0.3048; g_agl = 9000;
+    for (float& v : g_turbArr) v = 0.7f;   // X-Plane's own values before WXPlane writes
     CHECK(XPluginStart(n, s, d) == 1);
     CHECK(XPluginEnable() == 1);
     auto pumpUntil = [&](const char* text, int seconds) {
@@ -575,7 +581,7 @@ static int runTurb() {
     std::printf("[turb]   region turbulence written %d times: layer 10 = %.2f (expected %.2f..%.2f), layer 0 = %.2f\n", g_turbWrites, g_turbArr[10], lo, hi, g_turbArr[0]);
     CHECK(g_turbWrites > 0 && g_turbArr[10] >= lo && g_turbArr[10] <= hi);
     CHECK(g_turbArr[11] > g_turbArr[9]);   // more EDR higher up in the synthetic data
-    CHECK(g_turbArr[3] == 0 && g_turbArr[12] == 0);   // layers far from the aircraft have no levels downloaded: nothing invented
+    CHECK(nr(g_turbArr[3], 0.7f) && nr(g_turbArr[12], 0.7f));   // layers far from the aircraft have no data: X-Plane's own value (0.7) is kept
     // only the needed levels were downloaded (+-9,500 ft around 33,000 and the ones just beyond), by byte range
     const size_t gtgnBytes = g_gtgnFile.size();
     std::printf("[turb]   range requests so far %d\n", g_rangeRequests);
@@ -593,8 +599,8 @@ static int runTurb() {
     std::printf("[turb] 3) the menu toggle puts X-Plane's values back\n");
     g_menuHandler(nullptr, (void*)(intptr_t)10 /*kTurbulence*/);
     CHECK(pumpUntil("realistic turbulence off: X-Plane's region turbulence put back", 5));
-    bool zero = true; for (float v : g_turbArr) if (v != 0) zero = false;
-    CHECK(zero);   // the values before were all 0
+    bool back = true; for (float v : g_turbArr) if (!nr(v, 0.7f)) back = false;
+    CHECK(back);   // the values before were all 0.7
     XPluginDisable();
     XPluginStop();
     std::printf(g_fail ? "HARNESS_TURB FAILED (%d)\n" : "HARNESS_TURB OK (%d failures)\n", g_fail);

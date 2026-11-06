@@ -23,9 +23,9 @@ Log lines start with `[WXPlane Turbulence]`.
 | Size | ~0.6 MB per level (about 3–5 MB per 15 min in cruise) | ~11 MB per step (a step lasts 3 h) |
 | Used when | analysis ≤ 45 min old | step within 4 h of now; FL100 to FL500 only |
 
-- **GTGN files:** they are found by trying the last 2 hours of 15-minute names directly
-  (`gtgn.YYYYMMDD/gtgn.tHHMMz.3km.grib2`, from NWS SCN 26-62). If none answers, the log shows the HTTP codes and, once an hour, what
-  the NOMADS directory returns.
+- **GTGN files:** the day folder (`gtgn.YYYYMMDD/`, today and then yesterday) is listed, and the newest `.grib2` file in it is
+  used, preferring a 3 km one. The valid time comes from the file's own GRIB2 header. The first build guessed the names from NWS
+  SCN 26-62 (`gtgn.tHHMMz.3km.grib2`); NOMADS answered 404 to all of them. The log now names the newest files it sees.
 - **Crops:** GTGN levels are cropped to 141 x 141 points (about 210 km) around the aircraft, and ECMWF fields to ±12°. They are cropped
   again when the aircraft nears the edge, from the downloaded bytes.
 - **Choosing a source:** ECMWF is downloaded only when GTGN does not fully cover the aircraft (outside the US, near the edge of the
@@ -39,8 +39,9 @@ Log lines start with `[WXPlane Turbulence]`.
   - DEF = √(DST² + DSH²), where DST = ∂u/∂x − ∂v/∂y and DSH = ∂v/∂x + ∂u/∂y, from centred differences of the layer-mean wind.
 - **Units and thresholds:** TI1 is in 10⁻⁷ s⁻². Commonly used thresholds are about 4 for light to moderate, 8 for moderate and 12
   for moderate to severe.
-- **EDR-equivalent:** each TI1 value is converted to the centre of its category: 0 → 0.01, 1 → 0.05, 2 → 0.08, 4 → 0.15, 8 → 0.25,
-  12 → 0.35, and 16 or more → 0.42. That top value is held, so the estimate alone never reaches "severe".
+- **EDR-equivalent:** each TI1 value is converted to the centre of its category: 0 → 0, 2 → 0.03, 4 → 0.12, 8 → 0.22,
+  12 → 0.32, and 16 or more → 0.40. That top value is held, so the estimate alone never reaches "severe". Below about TI1 2.5 the
+  result is under 0.07, so it adds nothing.
 - **Uncertainty:** about one category. Ellrod's thresholds were set on coarser grids; a 0.25° grid resolves stronger gradients. The
   log always labels this value "ECMWF Ellrod TI1 x (EDR-equivalent y, estimate)".
 - **Not used below FL100:** the index is a clear-air-turbulence diagnostic. Low-level turbulence outside the US is left to X-Plane and
@@ -60,17 +61,20 @@ Log lines start with `[WXPlane Turbulence]`.
    changes by at most 0.5 per 5 s write.
 4. **Max turbulence:** the EDR is multiplied by it. At 0, zero is written.
 5. **Calibration:**
-   - **Assumption:** the load-factor spread a typical transport should feel is σg = 0.65 × EDR. The ~1-minute peak (about 3σ) is then
-     ~0.5 g at EDR 0.25 (moderate) and ~1 g at EDR 0.5 (severe).
-   - **Measured:** the X-Plane level that gives that σg, from the in-sim test (2026-11-06, one aircraft, 250 kt, 3,000 ft, last 25 s
-     of each 50 s step; the smooth-air 0.022 g taken out):
+   - **Assumption:** the load-factor spread a typical transport should feel is σg = 0.65 × (EDR − 0.07). Air below EDR 0.07
+     (smooth to very light) adds nothing. The ~1-minute peak (about 3σ) is then ~0.35 g at EDR 0.25 and ~0.85 g at EDR 0.5.
+   - **Measured:** the X-Plane level that gives that σg (2026-11-06):
 
-| Level | 0 | 1 | 2 | 3 | 5, 7, 10 |
-|---|---|---|---|---|---|
-| load-factor sd measured | 0.022 g | 0.045 g | 0.213 g | 0.386 g | 0.40–0.42 g |
-| used (baseline removed) | 0 | 0.039 | 0.212 | 0.385 | (saturated: 3 is the top) |
+| Level | 0 | 0.6 (first flight, 11,000 ft) | 1 | 2 | 3 | 5, 7, 10 |
+|---|---|---|---|---|---|---|
+| load-factor sd measured | 0.01–0.02 g | 0.14 g | 0.045 g (test; applied late) | 0.21 g | 0.39 g | 0.40–0.42 g |
+| used | 0 | — | 0.23 g | 0.32 g | 0.39 g | (saturated: 3 is the top) |
 
-   Resulting mapping: EDR 0.02 → 0.3, 0.05 → 0.8, 0.10 → 1.15, 0.20 → 1.5, 0.30 → 1.9, 0.45 → 2.5, 0.60 and above → 3.0.
+   - **Why the first version was too strong:** it mapped EDR 0.05 (an ECMWF "smooth" estimate) to level 0.67, and the first flight
+     found that already bumpy (0.14 g). The test's level-1 point was low because X-Plane applied that step late. The flight point is
+     now used below level 1, and smooth air maps to 0.
+
+   Resulting mapping: EDR ≤ 0.07 → 0, 0.10 → 0.1, 0.20 → 0.4, 0.30 → 0.65, 0.45 → 1.2, 0.60 → 2.35, 0.67 and above → 3.0.
 
    X-Plane's response depends on the aircraft, as a real aircraft's does. The calibration targets the air, not one aircraft.
 6. **Writing:** only `sim/weather/region/turbulence` is written, every 5 s. Its earlier values are saved first and put back when the
@@ -82,7 +86,8 @@ Log lines start with `[WXPlane Turbulence]`.
 - **Network errors:** the worker retries with a growing delay (1 to 15 min for GTGN, 2 to 30 min for ECMWF) and logs each new problem
   once.
 - **Stale data:** a GTGN analysis older than 45 min, or an ECMWF step more than 4 h from now, is not used.
-- **No data:** with no current data at a layer, zero is written there; nothing is invented. Until the first data arrives, X-Plane's
+- **No data:** a layer with no current data keeps X-Plane's own value from before WXPlane wrote (below FL100 outside the US, for
+  example); nothing is invented. Until the first data arrives, X-Plane's
   values are left alone.
 - **No network on the sim's thread:** all downloads and decoding happen on the worker. The flight loop only reads the published
   cubes, once a second.

@@ -25,24 +25,28 @@ double pwl(const double (*t)[2], int n, double x) {
 
 // ---- Calibration --------------------------------------------------------------------------------------------------
 double targetSigmaG(double edr) {
-    // Assumption (docs/turbulence.md): sigma of the vertical load factor = 0.65 x EDR for a typical transport at cruise,
-    // so that the ~1-minute peak (about 3 sigma) is ~0.5 g at EDR 0.25 (moderate) and ~1.0 g at EDR 0.5 (severe).
-    return 0.65 * std::max(0.0, edr);
+    // Assumption (docs/turbulence.md): sigma of the vertical load factor = 0.65 x (EDR - 0.07) for a typical transport,
+    // so that air below EDR 0.07 (smooth to very light) adds nothing, the ~1-minute peak (about 3 sigma) is ~0.35 g at
+    // EDR 0.25 (light to moderate) and ~0.85 g at EDR 0.5 (severe). The 0.07 offset was added after the first flight
+    // (2026-11-06): EDR 0.05 from ECMWF gave a clearly bumpy ride.
+    return 0.65 * std::max(0.0, edr - 0.07);
 }
 
 double xpLevelForSigma(double s) {
-    // Measured 2026-11-06 (one aircraft, 250 kt, 3,000 ft, 25 s per step): load-factor sd with the 0.022 g of the
-    // smooth-air baseline removed. Levels above 3 gave no stronger response, so 3 is the top of the usable scale.
-    static const double t[][2] = {{0.0, 0.0}, {0.039, 1.0}, {0.212, 2.0}, {0.385, 3.0}};
+    // Measured 2026-11-06: in the response test (250 kt, 3,000 ft) level 2 gave 0.21 g and level 3 0.39 g, and levels above 3
+    // no more (3 is the top of the usable scale). In the first flight with this system (climbing through 11,000 ft) a held
+    // level of 0.6 already gave 0.14 g, far more than the test's level 1 (0.045 g, which X-Plane applied late). Below 1 the
+    // flight point is used: 0.23 g per level.
+    static const double t[][2] = {{0.0, 0.0}, {0.23, 1.0}, {0.32, 2.0}, {0.39, 3.0}};
     return pwl(t, 4, s);
 }
 
 double ellrodToEdrEquivalent(double ti) {
     // Ellrod & Knapp (1992) thresholds as commonly used (TI1, 1e-7 s^-2): ~4 light to moderate, ~8 moderate,
     // ~12 moderate to severe. The EDR values are the centres of the matching categories; above 16 the estimate is held
-    // at 0.42 because a 0.25-degree model index cannot support a "severe" call on its own.
-    static const double t[][2] = {{0, 0.01}, {1, 0.05}, {2, 0.08}, {4, 0.15}, {8, 0.25}, {12, 0.35}, {16, 0.42}};
-    return pwl(t, 7, std::max(0.0, ti));
+    // at 0.40 because a 0.25-degree model index cannot support a "severe" call on its own.
+    static const double t[][2] = {{0, 0.0}, {2, 0.03}, {4, 0.12}, {8, 0.22}, {12, 0.32}, {16, 0.40}};
+    return pwl(t, 6, std::max(0.0, ti));
 }
 
 double isaAltFt(double hPa) {

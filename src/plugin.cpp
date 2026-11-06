@@ -440,6 +440,7 @@ struct TurbState {
     bool init = false, writing = false, everData = false, loggedNoArr = false;
     std::vector<float> saved, sent;
     std::vector<double> edrS;
+    std::vector<bool> has;      // the layer has current data (otherwise X-Plane's own value is kept there)
     Clock::time_point nextSample, nextWrite, nextLog;
     double sg = 0, sg2 = 0; int cnt = 0;
     std::string lastSource;
@@ -501,16 +502,18 @@ void turbulenceTick() {
     const std::time_t wall = std::time(nullptr);
     const double simT = t.simT ? XPLMGetDataf(t.simT) : 0.0;
     if (!in.gtgn && !in.ecA) return;   // nothing has arrived yet: X-Plane's values stay as they are
-    if ((int)t.edrS.size() != t.n) { t.edrS.assign((size_t)t.n, 0.0); t.sent.assign((size_t)t.n, 0.0f); }
+    if ((int)t.edrS.size() != t.n) { t.edrS.assign((size_t)t.n, 0.0); t.sent.assign((size_t)t.n, 0.0f); t.has.assign((size_t)t.n, false); }
     const double scale = std::max(0.0, std::min(1.0, g_cfg.maxTurbulence)), a = 1.0 - std::exp(-1.0 / 20.0);
     for (int k = 0; k < t.n; ++k) {
         const wx::turb::Sample s = wx::turb::sampleAt(in, lat, lon, altM[k] / 0.3048, wall, simT);
         const double e = s.edr * scale;
-        t.edrS[k] = t.everData ? t.edrS[k] + (e - t.edrS[k]) * a : e;
+        const bool had = t.has[k];
+        t.has[k] = std::strcmp(s.source, "none") != 0;
+        if (!t.has[k]) t.edrS[k] = 0;
+        else t.edrS[k] = (t.everData && had) ? t.edrS[k] + (e - t.edrS[k]) * a : e;
     }
     if (!t.everData) {
         t.everData = true;
-        for (int k = 0; k < t.n; ++k) t.sent[k] = (float)wx::turb::edrToXpLevel(t.edrS[k]);   // start where the data is, then follow it gently
     }
     if (now >= t.nextWrite) {
         t.nextWrite = now + std::chrono::seconds(5);
@@ -519,10 +522,13 @@ void turbulenceTick() {
             XPLMGetDatavf(t.arr, t.saved.data(), 0, t.n);
             t.writing = true;
             t.nextLog = now;
+            for (int k = 0; k < t.n; ++k) t.sent[k] = t.has[k] ? (float)wx::turb::edrToXpLevel(t.edrS[k]) : t.saved[k];   // start where the data is
+
             turbLog("realistic turbulence on: writing sim/weather/region/turbulence (%d layers) every 5 s; max turbulence %.2f", t.n, scale);
         }
         for (int k = 0; k < t.n; ++k) {
-            const double target = wx::turb::edrToXpLevel(t.edrS[k]);
+            // A layer without data (e.g. below FL100 outside the US) keeps X-Plane's own value from before WXPlane wrote.
+            const double target = t.has[k] ? wx::turb::edrToXpLevel(t.edrS[k]) : t.saved[k];
             t.sent[k] += (float)std::max(-0.5, std::min(0.5, target - t.sent[k]));
         }
         XPLMSetDatavf(t.arr, t.sent.data(), 0, t.n);
@@ -557,7 +563,11 @@ void turbulenceTick() {
                 edrHere, req, held, sd, t.cnt);
         if (g_cfg.diagVerbosity >= 2) {
             std::string L;
-            for (int k = 0; k < t.n; ++k) { std::snprintf(b, sizeof b, " %.0f:%.2f/%.2f", altM[k] / 0.3048, t.edrS[k], t.sent[k]); L += b; }
+            for (int k = 0; k < t.n; ++k) {
+                if (t.has[k]) std::snprintf(b, sizeof b, " %.0f:%.2f/%.2f", altM[k] / 0.3048, t.edrS[k], t.sent[k]);
+                else std::snprintf(b, sizeof b, " %.0f:X-Plane/%.2f", altM[k] / 0.3048, t.sent[k]);
+                L += b;
+            }
             turbLog("  layers (ft: EDR/level):%s", L.c_str());
         }
         t.sg = t.sg2 = 0; t.cnt = 0;
