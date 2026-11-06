@@ -43,14 +43,25 @@ Caveats:
   just after an update.
 - The ground is taken as flat at the height under the aircraft.
 
-## First probe run (log 2026-11-06 11:4x, KDAB area, 2,000 ft AGL)
+## Probe results so far (logs 2026-11-06 11:45 and 11:51, Daytona Beach, ~2,000 ft AGL, region writes on)
 
-- **What happened:** the 1 nm record was stopped after 26 s. No change showed along the probe line: 229–234°/5–6 kt everywhere.
-- **Why it can't show:** X-Plane's wind read back at the aircraft equalled the region arrays exactly (1,000 ft 229/6 kt, 3,000 ft 247/6 kt
-  …). The station record's own surface wind was 220/6 kt, so with the region arrays rewritten every 20 s their profile appears to win over
-  the records' winds. That would also explain the earlier "records' upper layers ignored" finding.
-- **What changed:** the probe now pauses the region writes while it runs and logs the region arrays' lowest levels next to the probe line.
-  Let it run the full 4 minutes; it stops itself.
-- **What it may mean for normal weather:** if the region arrays also override each station's surface wind away from the aircraft, then
-  WXPlane's wind differences between stations don't reach the sim while `region_winds` is on. This is **suspected**; the next probe run
-  will show it.
+| Record radius | Result |
+|---|---|
+| 1 nm | Stopped at 26 s: too early to see anything (see the fade-in time below). |
+| 2.5 nm | **Visible.** The fade-in starts ~30 s after sending and builds over ~60 s; the peak is at ~90 s. At the centre the wind went from 234/5 kt to 166/13 kt: about half of the 25 kt sent, partly blended with the surrounding weather. It reached ±1 nm from the centre (174–175/10 kt), was barely there at ±2 nm (221–230/5 kt) and gone at ±3 nm. |
+| 5 nm | Not run yet. |
+
+At +77 s a regular WXPlane update replaced all records, which wiped the test record; it faded out over ~60 s (gone by 153 s). The
+probe now re-sends its record with any replacing update.
+
+**What this means:**
+- Records do change the low-level wind while the region arrays are being written: the region profile is the background they blend
+  over. The earlier guess that the region arrays override records was wrong.
+- **Fade-in:** ~30 s delay, then ~60 s ramp, so an effect needs 1.5 minutes or more to be fully there. A gust front that lives for an hour
+  fits. A microburst's 2–4 minutes at full strength barely does, and only if it is sent before it matures.
+- **Footprint and sharpness:** a 2.5 nm record acts on roughly ±1–1.5 nm and reaches only about half its own wind. The edge is about 1 nm
+  wide.
+- **Microburst outflow:** it needs opposite winds on either side of a ~2 nm core, so it would mostly blend away at this resolution. It is
+  **not representable faithfully.**
+- **Gust fronts and frontal boundaries:** a line of records ≥2.5 nm, a few nm deep, gives a boundary about 1 nm wide. Its strength has to
+  be set knowing about half of it arrives. Whether larger or stacked records reach full strength is still to be measured.

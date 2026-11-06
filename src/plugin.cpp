@@ -455,11 +455,18 @@ struct ShearTest {
     int sizeIdx = 0, samples = 0;
     double lat = 0, lon = 0, radiusNm = 0, groundM = 0, lineBrg = 0;
     float dirDeg = 0, kt = 25;
+    XPLMWeatherInfo_t info;        // as sent, re-sent with any update that replaces all our records
     Clock::time_point t0, next;
 } g_st;
 bool g_shearCmd = false;
 
-bool shearTestActive() { return g_st.active; }
+void shearLog(const char* fmt, ...);
+bool shearTestActive() { return g_st.active && g_st.sent; }
+void shearTestResend() {   // inside an open XPLMBeginWeatherUpdate
+    XPLMWeatherInfo_t i = g_st.info;
+    XPLMSetWeatherAtLocation(g_st.lat, g_st.lon, g_st.groundM, &i);
+    shearLog("test record re-sent with WXPlane's replacing update");
+}
 
 void shearLog(const char* fmt, ...) {
     char buf[700];
@@ -514,6 +521,7 @@ void shearTestToggle() {
     fillInfo(info, x);
     info.radius_nm = (float)g_st.radiusNm;
     if (info.pressure_alt > 0) { info.pressure_sl = info.pressure_alt; info.pressure_alt = 0; }
+    g_st.info = info;
     XPLMBeginWeatherUpdate();
     XPLMSetWeatherAtLocation(g_st.lat, g_st.lon, g_st.groundM, &info);
     XPLMEndWeatherUpdate(1 /*incremental*/, 0 /*not immediate: the normal fade*/);
@@ -524,7 +532,7 @@ void shearTestToggle() {
     shearLog("test started: record r=%.1f nm at %.4f,%.4f (6 nm ahead, 30 deg right of track %.0f), ground %.0f ft, wind %03.0f/%.0f kt below %.0f ft MSL; aircraft %.0f ft AGL",
              g_st.radiusNm, g_st.lat, g_st.lon, trk, g_st.groundM / 0.3048, g_st.dirDeg, g_st.kt, topM / 0.3048, agl / 0.3048);
     shearLog("X-Plane's records have no vertical-wind field: downdrafts cannot be tested or applied through the weather API");
-    shearLog("writing the region wind/temperature arrays is paused for the test; let it run the full 4 minutes (it stops itself after 5)");
+    shearLog("let it run the full 4 minutes (it stops itself after 5); X-Plane starts fading a record in after ~30 s");
 }
 
 void shearTestTick() {
@@ -564,6 +572,8 @@ void shearTestTick() {
     ++g_st.samples;
 }
 
+bool shearTestActive();
+void shearTestResend();
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
     if (g_pendingStartup && g_cfg.regenWeatherOnStart) {
@@ -592,6 +602,8 @@ void flushPending() {
     for (size_t i = 0; i < n; ++i) sendRec(g_pendingTodo[i]);
     sent = n;
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
+    // A replacing update wiped the windshear probe's record (log 2026-11-06 11:51: it faded out from t+92 s): it goes along with it.
+    if (g_pendingReplace && shearTestActive()) shearTestResend();
     XPLMEndWeatherUpdate(g_pendingReplace ? 0 : 1 /*0: replaces all our previous records*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     if (g_pendingTodo.empty()) g_pendingReplace = false;
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -1293,13 +1305,8 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
 // the profile for the aircraft's position is written into the sim's own region wind arrays. Throttled, and only if writable.
 // Still needed (log 2026-11-04 13:26): with this off, X-Plane read 180 deg / 1 kt at every flight level from FL100 up, whatever the
 // records said; the winds aloft only reach the sim through its region arrays. region_winds = 0 turns it off.
-bool shearTestActive();
 void pushRegionWinds(const wx::XpWx& xin) {
     if (!g_cfg.regionWinds) return;
-    // Paused while the windshear probe runs (log 2026-11-06 11:4x): with the region arrays rewritten every 20 s, X-Plane's wind read
-    // back everywhere along the probe line equalled the region profile, so the test record could not show at all. The arrays keep
-    // their last values meanwhile.
-    if (shearTestActive()) return;
     static std::time_t last = 0;
     static bool reported = false;
     const std::time_t now = std::time(nullptr);
