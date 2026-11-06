@@ -124,6 +124,8 @@ static int g_realWx = 0, g_realWxSets = 0;
 int XPLMGetDatai(XPLMDataRef r) { return r == (void*)77 ? g_realWx : g_loadingFlag; }
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) { return r == (void*)77 ? xplmType_Int : xplmType_Int | xplmType_Float | xplmType_Double; }
 int XPLMCanWriteDataRef(XPLMDataRef) { return 1; }
+void XPLMSetDataf(XPLMDataRef, float) {}
+void XPLMSetDatad(XPLMDataRef, double) {}
 int XPLMGetDatavi(XPLMDataRef, int* v, int, int n) { for (int i = 0; i < n; ++i) v[i] = 0; return n; }
 int XPLMCountDataRefs(void) { return 2; }
 void XPLMGetDataRefsByIndex(int, int count, XPLMDataRef* out) { for (int i = 0; i < count; ++i) out[i] = (void*)(intptr_t)(9100 + i); }

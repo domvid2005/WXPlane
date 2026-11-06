@@ -434,12 +434,15 @@ Menu **Dry Runways When No Recent Rain** (on by default; `dry_runways`, `dry_run
 - **History:** the METAR request now asks for the last 2 hours. Each station keeps its latest report; the older reports (up to 80 min
   back), begin/end remarks (`RAB10E35`, `RAE50`), hourly amounts (`P0000`) and recent-weather groups (`RERA`) tell when precipitation
   was last seen. Showers in the vicinity (`VCSH`) don't count.
-- **What it changes:** near the airport the aircraft is at or approaching (within 8 nm, below 3,000 ft AGL), X-Plane's runway state
-  (`sim/weather/region/runway_friction`) is set to dry, when all of these hold:
+- **What it changes:** near the airport the aircraft is at or approaching (within 8 nm, below 3,000 ft AGL), X-Plane's ground condition
+  (`sim/weather/region/runway_friction`, the weather screen's runway condition; it covers taxiways and aprons too) is set to dry, when
+  all of these hold:
   - that airport has had no precipitation for 45 minutes, counting the report's age;
   - the report is no more than 90 minutes old;
   - the history reaches back far enough;
   - WXPlane sends no rain there;
-  - the runway is currently wet or puddly (1–6).
+  - the ground is currently wet or has standing water (1–6). The scale, confirmed from the weather screen: 0 dry, 1–3 wet, 4–6
+    standing water, 7–9 snow, 10–12 ice, 13–15 snow and ice. It is read and written by its own type; read as a whole number it always
+    gave 0.
 - **What it never touches:** snow or ice (7–15), or anything after snow or freezing precipitation in the last hour.
 - **Log:** every decision is logged as "dry runway: …".

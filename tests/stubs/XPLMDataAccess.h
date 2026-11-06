@@ -16,3 +16,5 @@ typedef struct { int structSize; const char* name; XPLMDataTypeID type; int writ
 int XPLMCountDataRefs(void);
 void XPLMGetDataRefsByIndex(int offset, int count, XPLMDataRef* outDataRefs);
 void XPLMGetDataRefInfo(XPLMDataRef inDataRef, XPLMDataRefInfo_t* outInfo);
+void XPLMSetDataf(XPLMDataRef, float);
+void XPLMSetDatad(XPLMDataRef, double);

@@ -428,75 +428,19 @@ void eraseRec(const std::string& k) {
 // amounts, recent-weather groups), the sim's runway state is set to dry - only when it is wet or puddly, never when it shows snow or ice,
 // and never where WXPlane itself sends rain. The runway state is region-wide in X-Plane, so it follows the airport the aircraft is at
 // or approaching (within 8 nm, below 3,000 ft AGL). Everything it sees and does is logged with the prefix "dry runway".
-// Which dataref holds the ground's wet look (2026-11-06): with runway_friction already 0 (dry) the pavement still looked wet, while
-// switching X-Plane's weather screen from "standing water" to "dry" did dry it. 20 s into the flight every dataref whose name mentions
-// wetness, puddles, rain, water, snow, ice, friction, damp or dry (weather, scenery, graphics, environment, private) is listed once with
-// its value; after that, any of them that changes is logged with the old and new value, so a change in the weather screen names it.
-struct WetRef { XPLMDataRef r; std::string name; int type; double v[4]; int n; int changes = 0; };
-std::vector<WetRef> g_wetRefs;
-
-void wetReadVals(WetRef& w) {
-    for (double& x : w.v) x = 0;
-    w.n = 1;
-    if (w.type & xplmType_Float) w.v[0] = XPLMGetDataf(w.r);
-    else if (w.type & xplmType_Double) w.v[0] = XPLMGetDatad(w.r);
-    else if (w.type & xplmType_Int) w.v[0] = XPLMGetDatai(w.r);
-    else if (w.type & xplmType_FloatArray) { float a[4] = {0}; w.n = std::min(4, XPLMGetDatavf(w.r, a, 0, 4)); for (int k = 0; k < 4; ++k) w.v[k] = a[k]; }
-    else if (w.type & xplmType_IntArray) { int a[4] = {0}; w.n = std::min(4, XPLMGetDatavi(w.r, a, 0, 4)); for (int k = 0; k < 4; ++k) w.v[k] = a[k]; }
-    else w.n = 0;
+// Read / write a dataref by its own type (runway_friction: the weather screen's ground condition, 2026-11-06; read as an int it gave 0
+// whatever the screen said, so a wet ground was never seen as wet).
+double drGetNum(XPLMDataRef r) {
+    const XPLMDataTypeID t = XPLMGetDataRefTypes(r);
+    if (t & xplmType_Float) return XPLMGetDataf(r);
+    if (t & xplmType_Double) return XPLMGetDatad(r);
+    return XPLMGetDatai(r);
 }
-
-std::string wetFmt(const WetRef& w) {
-    std::string o;
-    char b[32];
-    for (int k = 0; k < std::max(1, w.n); ++k) { std::snprintf(b, sizeof b, "%s%g", k ? " " : "", w.v[k]); o += b; }
-    return o;
-}
-
-void wetDatarefScan() {
-    static int stage = 0;
-    static Clock::time_point due = Clock::now() + std::chrono::seconds(20);
-    if (Clock::now() < due) return;
-    due = Clock::now() + std::chrono::seconds(2);
-    if (stage == 0) {
-        stage = 1;
-        const int n = XPLMCountDataRefs();
-        if (n <= 0) { logf("wet ground: the SDK lists no datarefs"); stage = 2; return; }
-        std::vector<XPLMDataRef> refs((size_t)n);
-        XPLMGetDataRefsByIndex(0, n, refs.data());
-        for (XPLMDataRef r : refs) {
-            if (!r) continue;
-            XPLMDataRefInfo_t info;
-            std::memset(&info, 0, sizeof info);
-            info.structSize = sizeof info;
-            XPLMGetDataRefInfo(r, &info);
-            if (!info.name) continue;
-            std::string nm = info.name, lo = nm;
-            for (char& c : lo) c = (char)std::tolower((unsigned char)c);
-            bool topic = false;
-            for (const char* k : {"wet", "puddle", "rain", "water", "snow", "ice", "friction", "damp", "dry", "runway"}) if (lo.find(k) != std::string::npos) topic = true;
-            const bool area = lo.find("weather") != std::string::npos || lo.find("scenery") != std::string::npos || lo.find("graphics") != std::string::npos ||
-                              lo.find("private") != std::string::npos || lo.find("environment") != std::string::npos;
-            if (!topic || !area || lo.find("cockpit") != std::string::npos || lo.find("flightmodel") != std::string::npos || lo.find("aircraft") != std::string::npos) continue;
-            WetRef w; w.r = r; w.name = nm; w.type = info.type; wetReadVals(w);
-            if (w.n == 0) continue;
-            logf("wet ground: %s = %s%s", nm.c_str(), wetFmt(w).c_str(), info.writable ? " (writable)" : "");
-            g_wetRefs.push_back(w);
-            if (g_wetRefs.size() >= 150) break;
-        }
-        logf("wet ground: watching %zu dataref(s) of %d for changes (change the runway condition in X-Plane's weather screen to see which one it is)", g_wetRefs.size(), n);
-        return;
-    }
-    for (auto& w : g_wetRefs) {
-        WetRef now = w;
-        wetReadVals(now);
-        bool changed = false;
-        for (int k = 0; k < 4; ++k) if (std::fabs(now.v[k] - w.v[k]) > 1e-4 * std::max(1.0, std::fabs(w.v[k]))) changed = true;
-        if (!changed || w.changes > 12) continue;   // one that keeps changing by itself is not the setting: logged 12 times, then dropped
-        now.changes = w.changes + 1;
-        logf("wet ground: CHANGED %s: %s -> %s%s", w.name.c_str(), wetFmt(w).c_str(), wetFmt(now).c_str(), now.changes > 12 ? " (keeps changing, no longer logged)" : "");
-        w = now;
-    }
+void drSetNum(XPLMDataRef r, double v) {
+    const XPLMDataTypeID t = XPLMGetDataRefTypes(r);
+    if (t & xplmType_Float) XPLMSetDataf(r, (float)v);
+    else if (t & xplmType_Double) XPLMSetDatad(r, v);
+    else XPLMSetDatai(r, (int)std::lround(v));
 }
 
 void dryRunwayTick() {
@@ -521,13 +465,14 @@ void dryRunwayTick() {
     bool dry = wx::runwayShouldBeDry(*best, std::time(nullptr), g_cfg.dryRunwayMin, &why);
     auto it = g_recs.find(best->icao);
     if (dry && it != g_recs.end() && it->second.info.precip_rate > 0.0f) { dry = false; why = "WXPlane sends rain there (radar)"; }
-    const int fr = XPLMGetDatai(drFr);
-    // X-Plane's runway state: 0 dry, 1-3 wet, 4-6 puddly, 7-9 snowy, 10-12 icy, 13-15 snowy and icy (light / medium / heavy)
+    // X-Plane's ground condition (the weather screen's "runway condition", log 2026-11-06): 0 dry, 1-3 wet, 4-6 standing water,
+    // 7-9 snow (snow_cover 0.25 / 0.5 / 1), 10-12 ice, 13-15 snow and ice. It covers all paved surfaces, taxiways and aprons as well.
+    const int fr = (int)std::lround(drGetNum(drFr));
     static std::string lastLine;
     char b[420];
     if (dry && fr >= 1 && fr <= 6) {
-        XPLMSetDatai(drFr, 0);
-        const int after = XPLMGetDatai(drFr);
+        drSetNum(drFr, 0);
+        const int after = (int)std::lround(drGetNum(drFr));
         std::snprintf(b, sizeof b, "dry runway: %s (%.1f nm): %s - runway state %d -> %d%s", best->icao.c_str(), bd, why.c_str(), fr, after,
                       after != 0 ? " (X-Plane did not take it)" : "");
         logf("%s", b);
@@ -1859,7 +1804,6 @@ float flightLoop(float, float, int, void*) {
     }
     windshearTick();
     dryRunwayTick();
-    wetDatarefScan();
     if (g_eventDump && g_haveLast) { g_eventDump = false; logf("full weather picture at the aircraft for the event above:"); weatherWatch(); }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();
