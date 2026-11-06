@@ -3,7 +3,7 @@
 #pragma once
 
 namespace wxgl {
-constexpr unsigned int LINE_LOOP = 0x0002, LINE_STRIP = 0x0003, TRIANGLE_FAN = 0x0006;
+constexpr unsigned int LINE_LOOP = 0x0002, LINE_STRIP = 0x0003, TRIANGLES = 0x0004, TRIANGLE_FAN = 0x0006;
 bool load();   // true when all functions were found
 void begin(unsigned int mode);
 void end();

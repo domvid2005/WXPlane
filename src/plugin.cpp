@@ -631,6 +631,38 @@ std::string flRange(double lo, double hi) {
 }
 bool inBounds(const float* bd, float x, float y) { return x >= bd[0] && x <= bd[2] && y <= bd[1] && y >= bd[3]; }
 
+// Ear-clipping triangulation of a simple polygon (areas are often concave, so a triangle fan would spill outside them).
+// Returns vertex index triples; a closing point equal to the first is ignored.
+std::vector<int> triangulate(const std::vector<float>& xs, const std::vector<float>& ys) {
+    std::vector<int> tri, idx;
+    size_t n = xs.size();
+    if (n >= 2 && xs[0] == xs[n - 1] && ys[0] == ys[n - 1]) --n;
+    if (n < 3) return tri;
+    double area = 0;
+    for (size_t i = 0, j = n - 1; i < n; j = i++) area += (double)xs[j] * ys[i] - (double)xs[i] * ys[j];
+    for (size_t i = 0; i < n; ++i) idx.push_back(area > 0 ? (int)i : (int)(n - 1 - i));   // counter-clockwise
+    auto cross = [&](int a, int b, int c) { return ((double)xs[b] - xs[a]) * ((double)ys[c] - ys[a]) - ((double)ys[b] - ys[a]) * ((double)xs[c] - xs[a]); };
+    auto inside = [&](int p, int a, int b, int c) { return cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0; };
+    size_t guard = 0;
+    while (idx.size() > 3 && guard++ < 4 * n * n) {
+        bool clipped = false;
+        for (size_t k = 0; k < idx.size(); ++k) {
+            int a = idx[(k + idx.size() - 1) % idx.size()], b = idx[k], c = idx[(k + 1) % idx.size()];
+            if (cross(a, b, c) <= 0) continue;   // reflex corner
+            bool empty = true;
+            for (int q : idx) if (q != a && q != b && q != c && inside(q, a, b, c)) { empty = false; break; }
+            if (!empty) continue;
+            tri.push_back(a); tri.push_back(b); tri.push_back(c);
+            idx.erase(idx.begin() + (long)k);
+            clipped = true;
+            break;
+        }
+        if (!clipped) break;   // self-intersecting outline: what is left is not filled
+    }
+    if (idx.size() == 3) { tri.push_back(idx[0]); tri.push_back(idx[1]); tri.push_back(idx[2]); }
+    return tri;
+}
+
 void drawAreas(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
     if (!g_mapReports || !wxgl::load()) return;
     const std::time_t now = std::time(nullptr);
@@ -650,6 +682,15 @@ void drawAreas(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyl
             wxgl::color(c[0], c[1], c[2], 0.9f); wxgl::lineWidth(2);
             wxgl::begin(wxgl::LINE_LOOP); wxgl::vertex(xs[0] - r, ys[0]); wxgl::vertex(xs[0], ys[0] + r); wxgl::vertex(xs[0] + r, ys[0]); wxgl::vertex(xs[0], ys[0] - r); wxgl::end();
             continue;
+        }
+        if (!a.line) {   // 20 % fill
+            const std::vector<int> tri = triangulate(xs, ys);
+            if (!tri.empty()) {
+                wxgl::color(c[0], c[1], c[2], 0.2f);
+                wxgl::begin(wxgl::TRIANGLES);
+                for (int v : tri) wxgl::vertex(xs[(size_t)v], ys[(size_t)v]);
+                wxgl::end();
+            }
         }
         wxgl::color(c[0], c[1], c[2], a.line ? 0.55f : 0.9f);
         wxgl::lineWidth(a.product.find("SIGMET") != std::string::npos ? 2.5f : 1.5f);

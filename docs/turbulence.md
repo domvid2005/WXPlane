@@ -118,7 +118,7 @@ Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/tur
   - **"WXPlane: Pilot reports (turbulence)":** a triangle at each report that mentions turbulence. Green NEG, yellow LGT, orange
     LGT-MOD/MOD, red MOD-SEV and above; urgent (UUA) reports are larger. The label shows intensity, flight level, type and time.
     Labels are hidden when more than 80 reports are in view.
-  - **"WXPlane: SIGMETs and AIRMETs":** every current US SIGMET, international SIGMET and G-AIRMET, outlined by hazard.
+  - **"WXPlane: SIGMETs and AIRMETs":** every current US SIGMET, international SIGMET and G-AIRMET, outlined by hazard and filled at 20 % opacity (areas are triangulated by ear clipping, so concave shapes fill correctly).
     Convection red, turbulence and mountain wave orange, icing cyan, IFR purple, mountain obscuration brown, low-level wind shear
     yellow, surface wind green, freezing level light blue (lines), tropical cyclone magenta, volcanic ash grey. The label shows the
     product, ID, severity, hazard and altitudes.
