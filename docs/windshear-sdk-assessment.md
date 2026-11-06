@@ -42,3 +42,15 @@ Caveats:
 - A regular WXPlane update that replaces all records (the log says "one replacing update") also wipes the test record, so run the probe
   just after an update.
 - The ground is taken as flat at the height under the aircraft.
+
+## First probe run (log 2026-11-06 11:4x, KDAB area, 2,000 ft AGL)
+
+- **What happened:** the 1 nm record was stopped after 26 s. No change showed along the probe line: 229–234°/5–6 kt everywhere.
+- **Why it can't show:** X-Plane's wind read back at the aircraft equalled the region arrays exactly (1,000 ft 229/6 kt, 3,000 ft 247/6 kt
+  …). The station record's own surface wind was 220/6 kt, so with the region arrays rewritten every 20 s their profile appears to win over
+  the records' winds. That would also explain the earlier "records' upper layers ignored" finding.
+- **What changed:** the probe now pauses the region writes while it runs and logs the region arrays' lowest levels next to the probe line.
+  Let it run the full 4 minutes; it stops itself.
+- **What it may mean for normal weather:** if the region arrays also override each station's surface wind away from the aircraft, then
+  WXPlane's wind differences between stations don't reach the sim while `region_winds` is on. This is **suspected**; the next probe run
+  will show it.

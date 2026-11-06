@@ -459,6 +459,8 @@ struct ShearTest {
 } g_st;
 bool g_shearCmd = false;
 
+bool shearTestActive() { return g_st.active; }
+
 void shearLog(const char* fmt, ...) {
     char buf[700];
     va_list ap;
@@ -522,6 +524,7 @@ void shearTestToggle() {
     shearLog("test started: record r=%.1f nm at %.4f,%.4f (6 nm ahead, 30 deg right of track %.0f), ground %.0f ft, wind %03.0f/%.0f kt below %.0f ft MSL; aircraft %.0f ft AGL",
              g_st.radiusNm, g_st.lat, g_st.lon, trk, g_st.groundM / 0.3048, g_st.dirDeg, g_st.kt, topM / 0.3048, agl / 0.3048);
     shearLog("X-Plane's records have no vertical-wind field: downdrafts cannot be tested or applied through the weather API");
+    shearLog("writing the region wind/temperature arrays is paused for the test; let it run the full 4 minutes (it stops itself after 5)");
 }
 
 void shearTestTick() {
@@ -548,6 +551,16 @@ void shearTestTick() {
         line += b;
     }
     shearLog("t+%3.0fs wind 300 ft AGL along the probe line (record r=%.1f nm at 0):%s", t, g_st.radiusNm, line.c_str());
+    if (g_st.samples % 4 == 0) {   // the region arrays' lowest levels, to tell a record's wind from the region profile
+        static XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
+                           drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
+        float al[3] = {0}, sp[3] = {0}, di[3] = {0};
+        if (drA && drS && drD) {
+            XPLMGetDatavf(drA, al, 0, 3); XPLMGetDatavf(drS, sp, 0, 3); XPLMGetDatavf(drD, di, 0, 3);
+            shearLog("      region arrays (lowest 3): %.0fft %03.0f/%.0fkt  %.0fft %03.0f/%.0fkt  %.0fft %03.0f/%.0fkt", al[0] / 0.3048f, di[0], sp[0] / 0.514444f,
+                     al[1] / 0.3048f, di[1], sp[1] / 0.514444f, al[2] / 0.3048f, di[2], sp[2] / 0.514444f);
+        }
+    }
     ++g_st.samples;
 }
 
@@ -1280,8 +1293,13 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
 // the profile for the aircraft's position is written into the sim's own region wind arrays. Throttled, and only if writable.
 // Still needed (log 2026-11-04 13:26): with this off, X-Plane read 180 deg / 1 kt at every flight level from FL100 up, whatever the
 // records said; the winds aloft only reach the sim through its region arrays. region_winds = 0 turns it off.
+bool shearTestActive();
 void pushRegionWinds(const wx::XpWx& xin) {
     if (!g_cfg.regionWinds) return;
+    // Paused while the windshear probe runs (log 2026-11-06 11:4x): with the region arrays rewritten every 20 s, X-Plane's wind read
+    // back everywhere along the probe line equalled the region profile, so the test record could not show at all. The arrays keep
+    // their last values meanwhile.
+    if (shearTestActive()) return;
     static std::time_t last = 0;
     static bool reported = false;
     const std::time_t now = std::time(nullptr);
