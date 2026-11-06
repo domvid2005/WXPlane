@@ -749,13 +749,13 @@ void windshearTick() {
     if ((sendNow || simT >= nextSend) && g_pendingTodo.empty() && g_pendingGone.empty()) {
         nextSend = simT + 30.0;
         std::vector<wx::shear::ShearRecord> want = g_ws.records(simT + g_cfg.windshearLeadS, g_cfg.windshearGain);
-        std::vector<wx::shear::ShearRecord> near;
-        for (const auto& r : want) if (wx::distNm(lat, lon, r.lat, r.lon) < 60.0 && near.size() < 40) near.push_back(r);
+        std::vector<wx::shear::ShearRecord> inRange;   // not "near": a macro in the Windows headers
+        for (const auto& r : want) if (wx::distNm(lat, lon, r.lat, r.lon) < 60.0 && inRange.size() < 40) inRange.push_back(r);
         std::set<std::string> keep;
         int sets = 0, erases = 0;
         bool open = false;
         auto begin = [&]() { if (!open) { XPLMBeginWeatherUpdate(); open = true; } };
-        for (const auto& r : near) {
+        for (const auto& r : inRange) {
             keep.insert(r.key);
             auto it = g_wsSent.find(r.key);
             const bool moved = it != g_wsSent.end() && wx::distNm(it->second.lat, it->second.lon, r.lat, r.lon) > 0.3;
