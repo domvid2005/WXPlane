@@ -420,6 +420,33 @@ void eraseRec(const std::string& k) {
 // Wet-pavement diagnostics (2026-11-06): for the first three updates after start-up, the nearest airport's report next to the rain we sent
 // for it and the sim's own regional rain and runway state, so "the runway looks wet in dry weather" can be traced to WXPlane's rain, the
 // sim's own state, or scenery. Nothing is written to the runway state.
+// Which of our records carry rain (2026-11-06: "WXPlane is putting in these light rain spots"): a count by kind, and every one within
+// 60 nm of the aircraft with its centre, radius and rain rate, so the spots on X-Plane's radar map can be matched to records.
+void rainDiag() {
+    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
+    int nSt = 0, nFill = 0, nRadar = 0, nOther = 0;
+    std::vector<std::pair<double, std::string>> nearR;
+    for (const auto& kv : g_recs) {
+        const float p = kv.second.info.precip_rate;
+        if (!(p > 0.0f)) continue;
+        const std::string& k = kv.first;
+        if (!kv.second.icao.empty()) ++nSt;
+        else if (k.rfind("fill", 0) == 0) ++nFill;
+        else if (k.rfind("radar", 0) == 0) ++nRadar;
+        else ++nOther;
+        const double d = wx::distNm(lat, lon, kv.second.lat, kv.second.lon);
+        if (d < 60.0) {
+            char b[120];
+            std::snprintf(b, sizeof b, " %s@%.0fnm r%.1f p%.2f", k.c_str(), d, kv.second.info.radius_nm, p);
+            nearR.push_back({d, b});
+        }
+    }
+    std::sort(nearR.begin(), nearR.end());
+    std::string list;
+    for (size_t i = 0; i < nearR.size() && i < 25; ++i) list += nearR[i].second;
+    logf("records with rain: %d station, %d gap-fill, %d radar, %d other; within 60 nm:%s", nSt, nFill, nRadar, nOther, list.empty() ? " none" : list.c_str());
+}
+
 void surfaceDiag() {
     static int done = 0;
     if (done >= 3 || g_recs.empty()) return;
@@ -608,7 +635,7 @@ void flushPending() {
     if (g_pendingTodo.empty()) g_pendingReplace = false;
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued)", ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size());
-    if (g_pendingTodo.empty() && g_pendingGone.empty()) { logf("all weather records handed to X-Plane"); surfaceDiag(); }
+    if (g_pendingTodo.empty() && g_pendingGone.empty()) { logf("all weather records handed to X-Plane"); surfaceDiag(); rainDiag(); }
 }
 
 void eraseAll() {
@@ -1244,7 +1271,8 @@ void logCoveringRecords(double lat, double lon, const char* label) {
         buf[0] = 0;
         for (int j = 0; j < XPLM_NUM_CLOUD_LAYERS && n < 200; ++j)
             if (L[j].coverage > 0) n += std::snprintf(buf + n, sizeof buf - n, " [%d: t%.0f %.0f%% %.0f-%.0f m]", j, L[j].cloud_type, L[j].coverage * 100, L[j].alt_base, L[j].alt_top);
-        logf("    %s  %.1f nm of r=%.1f nm, QNH %.1f hPa:%s", hits[i].key->c_str(), hits[i].d, hits[i].r->info.radius_nm, hits[i].r->info.pressure_alt / 100.0f, buf);
+        logf("    %s  %.1f nm of r=%.1f nm, QNH %.1f hPa, rain %.2f:%s", hits[i].key->c_str(), hits[i].d, hits[i].r->info.radius_nm, hits[i].r->info.pressure_alt / 100.0f,
+             hits[i].r->info.precip_rate, buf);
     }
 }
 
