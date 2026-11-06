@@ -128,12 +128,12 @@ namespace {
 // (a missing level inside its profile), or held from the nearest level when that is within 6000 ft. No value beyond that, so a station
 // that only has the low-level product never contributes to FL390.
 struct StationProfile {
-    std::vector<AloftLevel> w, t;   // levels that carry a wind / a temperature, ascending
+    std::vector<AloftLevel> w, t, d;   // levels that carry a wind / a temperature / a dewpoint, ascending
 };
 
 StationProfile profileOf(const AloftStation& s) {
     StationProfile p;
-    for (const auto& L : s.levels) { if (L.hasWind) p.w.push_back(L); if (L.hasTemp) p.t.push_back(L); }
+    for (const auto& L : s.levels) { if (L.hasWind) p.w.push_back(L); if (L.hasTemp) p.t.push_back(L); if (L.hasDewp) p.d.push_back(L); }
     return p;
 }
 
@@ -181,7 +181,7 @@ static std::vector<AloftSample> sampleStations(const std::vector<AloftStation>& 
 
     std::vector<AloftSample> out;
     for (double alt : alts) {
-        double wU = 0, wV = 0, wSum = 0, tSum = 0, tW = 0;
+        double wU = 0, wV = 0, wSum = 0, tSum = 0, tW = 0, dSum = 0, dW = 0;
         for (size_t k = 0; k < near.size(); ++k) {
             const double w = 1.0 / std::max(25.0, near[k].d * near[k].d); // floor keeps one station from taking all weight
             double u = 0, v = 0, tc = 0;
@@ -191,6 +191,8 @@ static std::vector<AloftSample> sampleStations(const std::vector<AloftStation>& 
             // direction the wind blows FROM -> components of the vector it blows TOWARD; levels are interpolated as vectors, so a turn of the wind with height stays smooth
             if (valueAt<UV>(prof[k].w, alt, getUV, uv)) { u = uv.u; v = uv.v; wU += w * u; wV += w * v; wSum += w; }
             if (valueAt<double>(prof[k].t, alt, [](const AloftLevel& L) { return L.tempC; }, tc)) { tSum += w * tc; tW += w; }
+            double dc = 0;
+            if (valueAt<double>(prof[k].d, alt, [](const AloftLevel& L) { return L.dewpC; }, dc)) { dSum += w * dc; dW += w; }
         }
         AloftSample s;
         s.altFt = alt;
@@ -203,6 +205,7 @@ static std::vector<AloftSample> sampleStations(const std::vector<AloftStation>& 
             s.dirDeg = s.speedKt < 0.5 ? 0 : dir;
         }
         if (tW > 0) { s.hasTemp = true; s.tempC = tSum / tW; }
+        if (dW > 0) { s.hasDewp = true; s.dewpC = dSum / dW; }
         if (s.hasWind || s.hasTemp) out.push_back(s);
     }
     return out;
@@ -220,6 +223,21 @@ std::vector<AloftSample> sampleAloft(const std::vector<AloftStation>& stations, 
     for (const auto& q : out) if (q.hasWind) topFd = std::max(topFd, q.altFt);
     for (const auto& q : m)
         if (q.altFt > topFd + 1000.0 && q.altFt <= 70000.0) out.push_back(q);
+    // dewpoints exist only in the model: every sample gets the model's, interpolated at its altitude (within the model's levels)
+    std::vector<std::pair<double, double>> dp;
+    for (const auto& q : m) if (q.hasDewp) dp.push_back({q.altFt, q.dewpC});
+    std::sort(dp.begin(), dp.end());
+    if (dp.size() >= 2)
+        for (auto& q : out) {
+            if (q.hasDewp || q.altFt < dp.front().first || q.altFt > dp.back().first) continue;
+            for (size_t i = 1; i < dp.size(); ++i)
+                if (q.altFt <= dp[i].first) {
+                    const double f = (q.altFt - dp[i - 1].first) / std::max(1.0, dp[i].first - dp[i - 1].first);
+                    q.hasDewp = true; q.dewpC = dp[i - 1].second + (dp[i].second - dp[i - 1].second) * f;
+                    if (q.hasTemp) q.dewpC = std::min(q.dewpC, q.tempC);
+                    break;
+                }
+        }
     std::sort(out.begin(), out.end(), [](const AloftSample& a, const AloftSample& b) { return a.altFt < b.altFt; });
     return out;
 }
@@ -242,7 +260,7 @@ std::string openMeteoUrl(const std::vector<std::pair<double, double>>& pts, cons
     for (int l : levels) {
         std::snprintf(b, sizeof b, "%d", l);
         const std::string n = b;
-        vars += (vars.empty() ? "" : ",") + std::string("wind_speed_") + n + "hPa,wind_direction_" + n + "hPa,temperature_" + n + "hPa,geopotential_height_" + n + "hPa";
+        vars += (vars.empty() ? "" : ",") + std::string("wind_speed_") + n + "hPa,wind_direction_" + n + "hPa,temperature_" + n + "hPa,geopotential_height_" + n + "hPa,relative_humidity_" + n + "hPa";
     }
     if (highCloud) vars += ",cloud_cover_high";   // high cloud (cirrus): METARs from automatic stations cannot see above 12,000 ft
     return "https://api.open-meteo.com/v1/gfs?latitude=" + la + "&longitude=" + lo + "&hourly=" + vars +
@@ -289,6 +307,12 @@ std::vector<AloftStation> parseOpenMeteo(const std::string& body, const std::vec
             L.altFt = gotGh ? gh / 0.3048 : isaAltFtFromHpa(l);
             if (val("wind_speed_" + n + "hPa", sp) && val("wind_direction_" + n + "hPa", dr) && sp >= 0) { L.hasWind = true; L.speedKt = sp; L.dirDeg = dr; }
             if (val("temperature_" + n + "hPa", tc)) { L.hasTemp = true; L.tempC = tc; }
+            double rh = 0;
+            if (L.hasTemp && val("relative_humidity_" + n + "hPa", rh) && rh > 0.5 && rh <= 100.5) {
+                // dewpoint from temperature and relative humidity (Magnus formula, over water)
+                const double a = 17.62, bb = 243.12, g = std::log(std::min(100.0, rh) / 100.0) + a * tc / (bb + tc);
+                L.hasDewp = true; L.dewpC = std::min(tc, bb * g / (a - g));
+            }
             if (L.hasWind || L.hasTemp) st.levels.push_back(L);
         }
         { double hc = 0; if (val("cloud_cover_high", hc) && hc >= 0) st.highCloud = std::min(1.0, hc / 100.0); }

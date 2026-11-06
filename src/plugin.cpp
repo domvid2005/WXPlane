@@ -41,14 +41,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kShearTest };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kShearTest, kHumidity };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxHumidity = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -124,6 +124,7 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    if (g_idxHumidity >= 0) XPLMCheckMenuItem(g_menu, g_idxHumidity, g_cfg.humidityAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
 
 // Removes every record this plugin has set, handing control back to X-Plane's own weather.
@@ -732,6 +733,18 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
         for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i)
             info.temp_layers[i] = wx::profileTemp(x.tempProfile, g_levelsM[i]);
         info.temperature_alt = kUnset;
+    }
+    // Experiment (humidity_aloft, 2026-11-06): the dewpoints aloft were left for X-Plane to fill in, and X-Plane drew scattered light
+    // showers out of cumulus where no airport or radar had rain. With this on, the global model's humidity goes in at X-Plane's levels
+    // above the ground (below the lowest model level the dewpoints stay X-Plane's). The clouds themselves are not changed.
+    if (g_cfg.humidityAloft && g_haveLevels && x.dewpProfile.size() >= 2) {
+        const float lowest = x.dewpProfile.front().first;
+        for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i) {
+            if (g_levelsM[i] < lowest) continue;
+            const float d = wx::profileTemp(x.dewpProfile, g_levelsM[i]);
+            const float t = info.temp_layers[i] > -273.0f ? info.temp_layers[i] : 1000.0f;
+            info.dewp_layers[i] = std::min(d, t);
+        }
     }
     info.troposphere_alt = 0.0f;   // derive from existing data
     info.troposphere_temp = kUnset;
@@ -1401,6 +1414,15 @@ void pushRegionWinds(const wx::XpWx& xin) {
                 tc[k] = ct[k];
             }
             XPLMSetDatavf(drT, tc, 0, XPLM_NUM_TEMPERATURE_LAYERS);
+            static XPLMDataRef drDp = XPLMFindDataRef("sim/weather/region/dewpoint_deg_c");
+            if (g_cfg.humidityAloft && drDp && XPLMCanWriteDataRef(drDp) && x.dewpProfile.size() >= 2) {
+                float dp[XPLM_NUM_TEMPERATURE_LAYERS];
+                if (XPLMGetDatavf(drDp, dp, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS) {
+                    for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k)
+                        if (lv[k] >= x.dewpProfile.front().first) dp[k] = std::min(wx::profileTemp(x.dewpProfile, lv[k]), tc[k]);
+                    XPLMSetDatavf(drDp, dp, 0, XPLM_NUM_TEMPERATURE_LAYERS);
+                }
+            }
             static std::time_t lastRampLog = 0;
             if (maxGap > 5.0f && now - lastRampLog > 60) {
                 lastRampLog = now;
@@ -1424,6 +1446,31 @@ void regionTick() {
     pushRegionWinds(x);
 }
 
+// X-Plane's own rain around the aircraft (2026-11-06, pop-up showers): a 7 x 7 grid 5 nm apart, read back 500 ft above the ground,
+// next to how many of WXPlane's records carry rain within 20 nm. Rain where WXPlane sent none is X-Plane's own.
+void simRainGrid(double lat, double lon, double groundM) {
+    int raining = 0, n = 0;
+    float mx = 0;
+    std::string where;
+    for (int j = -3; j <= 3; ++j)
+        for (int i = -3; i <= 3; ++i) {
+            const double la = lat + j * 5.0 / 60.0, lo = lon + i * 5.0 / 60.0 / std::max(0.2, std::cos(lat * 3.14159265 / 180.0));
+            XPLMWeatherInfo_t q;
+            std::memset(&q, 0, sizeof q);
+            q.structSize = sizeof q;
+            XPLMGetWeatherAtLocation(la, lo, groundM + 150.0, &q);
+            ++n;
+            if (q.precip_rate > 0.01f) {
+                ++raining; mx = std::max(mx, q.precip_rate);
+                if (where.size() < 200) { char b[48]; std::snprintf(b, sizeof b, " (%+d,%+d nm %.2f)", i * 5, -j * 5, q.precip_rate); where += b; }
+            }
+        }
+    int ours = 0;
+    for (const auto& kv : g_recs) if (kv.second.info.precip_rate > 0.0f && wx::distNm(lat, lon, kv.second.lat, kv.second.lon) < 20.0) ++ours;
+    logf("  X-Plane rain around the aircraft (7x7 points 5 nm apart, 500 ft AGL): %d of %d raining, max %.2f%s | WXPlane records with rain within 20 nm: %d | humidity aloft %s",
+         raining, n, mx, where.c_str(), ours, g_cfg.humidityAloft ? "ON" : "off");
+}
+
 void weatherWatch() {
     if (!g_haveLast || g_lastRes.stations.empty() || !g_drElev) return;
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), el = XPLMGetDatad(g_drElev);
@@ -1433,6 +1480,10 @@ void weatherWatch() {
     XPLMWeatherInfo_t info;
     std::memset(&info, 0, sizeof info);
     info.structSize = sizeof info;
+    {
+        static XPLMDataRef drAglW = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+        simRainGrid(lat, lon, el - (drAglW ? XPLMGetDataf(drAglW) : 0.0f));
+    }
     int det = XPLMGetWeatherAtLocation(lat, lon, el + 2.0, &info);
     float cov = 0, base = 0, xcov = 0, xbase = 0;
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
@@ -2037,6 +2088,11 @@ void menuHandler(void*, void* item) {
         case kSettings:
             showSettings();
             break;
+        case kHumidity:
+            g_cfg.humidityAloft = !g_cfg.humidityAloft;
+            logf("humidity aloft from the global model %s (experiment against X-Plane's pop-up showers)", g_cfg.humidityAloft ? "ON" : "OFF");
+            if (g_cfg.enabled) g_manualRefresh = true;
+            break;
         case kShearTest:
             g_shearCmd = true;   // the weather API may only be used from the pre-flight-model loop: done there
             break;
@@ -2093,6 +2149,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     XPLMAppendMenuItem(g_menu, "Storm Settings (turbulence)...", (void*)(intptr_t)kSettings, 0);
     XPLMAppendMenuItem(g_menu, "Windshear Test: probe X-Plane (start / stop)", (void*)(intptr_t)kShearTest, 0);
+    g_idxHumidity = XPLMAppendMenuItem(g_menu, "Experiment: Humidity Aloft from GFS (fewer pop-up showers?)", (void*)(intptr_t)kHumidity, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);

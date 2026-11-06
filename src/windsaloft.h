@@ -11,6 +11,8 @@ struct AloftLevel {
     double dirDeg = 0, speedKt = 0; // true direction; speed 0 for "light and variable"
     bool hasTemp = false;
     double tempC = 0;
+    bool hasDewp = false;   // dewpoint, from the global model's relative humidity (FD products have none)
+    double dewpC = 0;
 };
 
 struct AloftStation {
@@ -47,6 +49,8 @@ struct AloftSample {
     double dirDeg = 0, speedKt = 0;
     bool hasTemp = false;
     double tempC = 0;
+    bool hasDewp = false;
+    double dewpC = 0;
 };
 std::vector<AloftSample> sampleAloft(const std::vector<AloftStation>& stations, double lat, double lon,
                                      double maxRangeNm, int maxStations = 4);

@@ -117,6 +117,15 @@ void buildAloftProfile(XpWx& x, const std::vector<AloftSample>& smp, double elev
     std::vector<std::pair<float, float>> tq;
     for (const auto& q : tp) { if (!tq.empty() && q.first - tq.back().first < 30.0f) continue; tq.push_back(q); }
     x.tempProfile = tq.size() >= 2 ? tq : std::vector<std::pair<float, float>>();
+    // Dewpoints aloft (global model only), kept apart from the temperatures; used only when humidity_aloft is on
+    x.dewpProfile.clear();
+    for (const auto& a : smp) {
+        if (!a.hasDewp) continue;
+        const float altM = (float)(a.altFt * kFtToM), d = (float)a.dewpC;
+        if (!std::isfinite(altM) || !std::isfinite(d) || d < -120.0f || d > 35.0f || altM <= elevM + 300.0) continue;
+        if (!x.dewpProfile.empty() && altM - x.dewpProfile.back().first < 30.0f) continue;
+        x.dewpProfile.emplace_back(altM, d);
+    }
 
     // Winds: the source points (surface report, then forecast levels more than 300 m above the ground), ascending
     std::vector<XpWind> src;
