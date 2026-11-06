@@ -449,7 +449,8 @@ Menu **Enable Realistic Turbulence** (on by default) and **Max Turbulence...** (
   and X-Plane's own values are put back when the feature is turned off.
 - **Stale data is not used:** a GTGN analysis older than 45 minutes, or an ECMWF step more than 4 hours from now, is ignored.
   With no current data, nothing is added.
-- **Pilot reports, SIGMETs and AIRMETs** (NOAA AWC) raise the turbulence where GTGN does not cover it. A report is converted
+- **Pilot reports** (NOAA AWC) raise the turbulence where GTGN does not cover it; SIGMETs and AIRMETs are shown on the map only
+  (broad forecast areas would overstate it). A report is converted
   for the reporting aircraft's size: "extreme" from a C172 is less air than "moderate-to-severe" from an A320; an unknown type
   counts as the lightest class. `turb_reports = 0` turns this off.
 - **On X-Plane's map:** two layers with their own toggles in the map's layer list: "WXPlane: Pilot reports (turbulence)" and

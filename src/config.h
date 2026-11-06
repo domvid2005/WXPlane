@@ -98,7 +98,7 @@ struct Config {
     // WXPlane sends: the real-data (EDR) turbulence, the storm turbulence and the gust turbulence at airports.
     double maxTurbulence = 1.0;
     bool realisticTurbulence = true;
-    bool turbReports = true;          // pilot reports and turbulence SIGMETs/AIRMETs raise the turbulence outside GTGN coverage  // menu: Enable Realistic Turbulence (NOAA GTGN in the US, ECMWF estimate elsewhere)
+    bool turbReports = true;          // pilot reports raise the turbulence outside GTGN coverage (SIGMETs/AIRMETs are map-only)  // menu: Enable Realistic Turbulence (NOAA GTGN in the US, ECMWF estimate elsewhere)
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoreCoverage = 0.95; // coverage of storm cells that are surrounded by other storm cells (35+ dBZ); rim cells keep storm_coverage_max, so only the outline breaks up
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud

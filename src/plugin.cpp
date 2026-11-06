@@ -487,7 +487,7 @@ void turbulenceTick() {
     const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
     const double altFt = t.elev ? XPLMGetDatad(t.elev) / 0.3048 : 0;
     const bool on = g_cfg.enabled && g_cfg.realisticTurbulence && !(lat == 0 && lon == 0);
-    // Pilot reports, SIGMETs and AIRMETs are kept current whenever the weather is on (for the map layers and the floor).
+    // Pilot reports, SIGMETs and AIRMETs are kept current whenever the weather is on (for the map layers; reports also for the floor).
     g_turbFetch.update(lat, lon, altFt, on, g_cfg.enabled && !(lat == 0 && lon == 0));
     g_mapReports = g_turbFetch.reports();
     if (!on) { turbRestore(g_cfg.realisticTurbulence ? "weather off" : "realistic turbulence off"); return; }
@@ -507,7 +507,7 @@ void turbulenceTick() {
     const double simT = t.simT ? XPLMGetDataf(t.simT) : 0.0;
     const std::shared_ptr<const wx::hz::Snapshot> rep = g_cfg.turbReports ? g_mapReports : nullptr;
     if (!in.gtgn && !in.ecA && !rep) return;   // nothing has arrived yet: X-Plane's values stay as they are
-    // Reports and turbulence SIGMETs/AIRMETs raise the gridded value where the gridded data does not already contain them:
+    // Pilot reports raise the gridded value where the gridded data does not already contain them (SIGMETs/AIRMETs: map only):
     // GTGN assimilates pilot reports, so the floor is weighted by (1 - GTGN coverage).
     auto withReports = [&](const wx::turb::Sample& sm, double altQ, std::string* why) {
         double e = std::strcmp(sm.source, "none") != 0 ? sm.edr : 0.0;
@@ -555,7 +555,7 @@ void turbulenceTick() {
     const wx::turb::Sample here = wx::turb::sampleAt(in, lat, lon, altFt, wall, simT);
     std::string hereWhy;
     const double hereEdr = withReports(here, altFt, &hereWhy);
-    const std::string hereSource = hereWhy.empty() ? std::string(here.source) : "report/SIGMET/AIRMET floor";
+    const std::string hereSource = hereWhy.empty() ? std::string(here.source) : "pilot report floor";
     if (now >= t.nextLog || hereSource != t.lastSource) {
         t.nextLog = now + std::chrono::seconds(60);
         if (hereSource != t.lastSource && !t.lastSource.empty()) turbLog("source changed: %s -> %s", t.lastSource.c_str(), hereSource.c_str());

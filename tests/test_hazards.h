@@ -66,12 +66,9 @@ void run() {
     CHECK(floorAt(s, 44.3853, -74.2062, 27000, now + 3 * 3600).edr == 0);       // 3 h later
     NEAR(floorAt(s, 38.286, -76.4033, 13000, now).edr, 0.30 * 0.85, 1e-9);     // MOD from a CRJ7
     CHECK(floorAt(s, 34.6959, -83.2977, 22000, now).edr == 0);                  // NEG raises nothing
-    // SIGMET and AIRMET floors
-    NEAR(floorAt(s, 33.0, 120.0, 30000, now).edr, 0.30, 1e-9);
-    CHECK(floorAt(s, 33.0, 120.0, 10000, now).edr == 0);                        // below FL130
-    CHECK(floorAt(s, 33.0, 120.0, 30000, 1794007800 + 60).edr == 0);            // expired
-    NEAR(floorAt(s, 47.0, -122.0, 8000, now).edr, 0.18, 1e-9);                  // Tango TURB-LO, SFC-130
-    CHECK(floorAt(s, 47.0, -122.0, 20000, now).edr == 0);
-    CHECK(floorAt(s, 37.0, -75.5, 20000, now).edr == 0);                        // a convective SIGMET is not a turbulence floor here
+    // SIGMETs and AIRMETs are display-only: no floor inside them
+    CHECK(floorAt(s, 33.0, 120.0, 30000, now).edr == 0);     // inside a SEV TURB international SIGMET
+    CHECK(floorAt(s, 47.0, -122.0, 8000, now).edr == 0);     // inside a G-AIRMET Tango TURB-LO
+    CHECK(floorAt(s, 37.0, -75.5, 20000, now).edr == 0);     // inside a convective SIGMET
 }
 } // namespace th

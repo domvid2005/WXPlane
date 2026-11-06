@@ -3,8 +3,8 @@
 //  - US SIGMETs:           /api/data/airsigmet?format=json          (convective and non-convective)
 //  - International SIGMETs /api/data/isigmet?format=json             (worldwide, incl. TURB and MTW)
 //  - US G-AIRMETs:         /api/data/gairmet?format=json             (Sierra, Tango, Zulu; several forecast hours)
-// They are drawn on X-Plane's map (two layers with their own toggles) and turn into a turbulence floor where the
-// gridded turbulence data does not already include them (outside NOAA GTGN coverage).
+// They are drawn on X-Plane's map (two layers with their own toggles). Pilot reports also become a turbulence floor where the
+// gridded turbulence data does not already include them (outside NOAA GTGN coverage); SIGMETs and AIRMETs are display-only.
 #pragma once
 #include <ctime>
 #include <string>
@@ -66,11 +66,9 @@ struct Floor {
     double edr = 0;
     std::string why;                   // e.g. "PIREP MOD FL290 A321 12 nm, 20 min ago"
 };
-// Turbulence floor at a point from reports and turbulence SIGMETs/AIRMETs (strongest one wins).
+// Turbulence floor at a point from pilot reports (strongest one wins). SIGMETs and AIRMETs are shown on the map only.
 //  - PIREPs (converted for the reporter's size, see reporterClass): full within 10 nm and 30 min, fading to nothing at 50 nm and 90 min; in the reported layer (or +-3,000 ft of the
 //    flight level) with a 2,000 ft taper.
-//  - Turbulence SIGMETs (TURB, MTW; usually SEV): 0.30, inside the area and its altitudes, while valid.
-//  - G-AIRMET Tango (TURB-LO/HI, MOD): 0.18.
 Floor floorAt(const Snapshot& s, double lat, double lon, double altFt, std::time_t now);
 
 } // namespace hz

@@ -105,12 +105,12 @@ Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/tur
   The category centres for a medium aircraft are: LGT 0.15, LGT-MOD 0.22, MOD 0.30, MOD-SEV 0.40, SEV 0.50 and EXTRM 0.60. So
   "extreme" from a C172 (0.36) is less than "moderate-to-severe" from an A320 (0.40). The resulting EDR goes to X-Plane like any
   other, and X-Plane's flight model makes the user's own aircraft respond to it.
-- **The floor:** the turbulence is raised to the floor and never lowered by it. A NEG report raises nothing.
+- **The floor (pilot reports only):** the turbulence is raised to the floor and never lowered by it. A NEG report raises nothing.
   - **PIREPs:** full strength within 10 nm and 30 minutes, fading to nothing at 50 nm and 90 minutes. They apply within the reported
     layer, or ±3,000 ft of the flight level when there is no layer, with a 2,000 ft taper.
-  - **Turbulence SIGMETs (TURB, MTW):** 0.30 inside the area and its altitudes while valid. A SIGMET covers a broad forecast area,
-    so it is not treated as severe everywhere inside it.
-  - **G-AIRMET Tango (TURB-LO, TURB-HI, moderate):** 0.18.
+  - **SIGMETs and AIRMETs:** shown on the map only, since 2026-11-06. An earlier build raised turbulence to 0.30 inside turbulence
+    SIGMETs and to 0.18 inside G-AIRMET Tango. Those are broad forecast areas drawn wide on purpose, and turbulence inside them is
+    patchy, so a uniform floor overstated it over most of the area. Pilot reports are observations, so only they count.
   - **Weight:** each floor is weighted by (1 − GTGN coverage). GTGN already assimilates pilot reports, so this mainly acts outside
     the US.
   - **Off switch:** `turb_reports = 0` turns the floor off. The map layers stay.

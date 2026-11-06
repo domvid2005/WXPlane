@@ -259,20 +259,8 @@ Floor floorAt(const Snapshot& s, double lat, double lon, double altFt, std::time
             f.why = b;
         }
     }
-    for (const auto& a : s.areas) {
-        if (!a.isTurbulence()) continue;
-        if ((a.validFrom && now < a.validFrom) || (a.validTo && now > a.validTo)) continue;
-        double lo = a.baseFt >= 0 ? a.baseFt : 0, hi = a.topFt >= 0 ? a.topFt : 60000;
-        if (altFt < lo - 500 || altFt > hi + 500) continue;
-        if (!a.contains(lat, lon)) continue;
-        double v = a.product.find("SIGMET") != std::string::npos ? 0.30 : (a.severity == "SEV" ? 0.30 : 0.18);
-        if (v > f.edr) {
-            f.edr = v;
-            std::snprintf(b, sizeof b, "%s %s %s %s, %s-%s", a.product.c_str(), a.id.c_str(), a.severity.c_str(), a.hazard.c_str(),
-                          a.baseFt >= 0 ? std::to_string((int)(a.baseFt / 100)).c_str() : "SFC", a.topFt >= 0 ? std::to_string((int)(a.topFt / 100)).c_str() : "?");
-            f.why = b;
-        }
-    }
+    // SIGMETs and AIRMETs are display-only (owner's decision, 2026-11-06): they are broad forecast areas drawn wide on purpose,
+    // and a uniform floor over the whole shape overstated the turbulence in most of it. Only pilot reports (observations) count.
     return f;
 }
 
