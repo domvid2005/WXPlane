@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <set>
 
 #include "geo.h"
 
@@ -247,38 +248,45 @@ int Engine::dropFar(double lat, double lon, double maxNm, double simT) {
 }
 
 std::vector<ShearRecord> Engine::records(double t, double gain) const {
+    // Fixed cells, not records that move with the field (log 2026-11-06 13:48): a moved record is a new record, and X-Plane fades every
+    // new record in over ~2 minutes, so a spreading gust front or a growing microburst ring never reached full strength. The cells sit on
+    // a fixed 1.2 nm lattice; only their wind changes as the fields move and evolve, which X-Plane blends in place. Each cell carries the
+    // model's horizontal perturbation at 500 ft above the ground (the strongest part of an outflow), where it is 3 kt or more.
     std::vector<ShearRecord> out;
+    const double step = 1.2;                           // nm
+    const double dLat = step / 60.0;
+    std::set<std::pair<long, long>> done;
     for (const auto& f : fields_) {
-        const double I = intensity(f, t);
-        if (I < 0.05) continue;
-        double cLat, cLon;
+        if (intensity(f, t) < 0.05) continue;
+        double cLat, cLon, reach;
         position(f, t, cLat, cLon);
-        const float kt = (float)std::min(60.0, f.peakKt * I * gain);
-        if (f.type == kMicroburst) {
-            const double R = outflowRadiusNm(f, t);
-            for (int k = 0; k < 6; ++k) {   // a ring of 1 nm records blowing outward (X-Plane keeps a 1 nm record to about +-0.75 nm)
-                ShearRecord r;
-                const double b = k * 60.0;
-                dest(cLat, cLon, b, R, r.lat, r.lon);
-                r.radiusNm = 0.9f; r.towardDeg = (float)b; r.kt = kt; r.topAglFt = 2500; r.fieldId = f.id;
-                r.key = "WS" + std::to_string(f.id) + "m" + std::to_string(k);
-                out.push_back(r);
-            }
-        } else {
-            const double D = outflowRadiusNm(f, t);
-            double fLat, fLon;   // the middle of the front line
-            dest(cLat, cLon, f.outDirDeg, D, fLat, fLon);
-            double bLat, bLon;   // records stand 1.5 nm behind the front, in the outflow
-            dest(fLat, fLon, f.outDirDeg + 180.0, 1.5, bLat, bLon);
-            static const double kAlong[4] = {-5.25, -1.75, 1.75, 5.25};
-            for (int k = 0; k < 4; ++k) {
-                ShearRecord r;
-                dest(bLat, bLon, f.outDirDeg + 90.0, kAlong[k], r.lat, r.lon);
-                r.radiusNm = 2.5f; r.towardDeg = (float)f.outDirDeg; r.kt = kt; r.topAglFt = 3000; r.fieldId = f.id;
-                r.key = "WS" + std::to_string(f.id) + "g" + std::to_string(k);
-                out.push_back(r);
-            }
+        if (f.type == kMicroburst) reach = outflowRadiusNm(f, t) + 3.0;
+        else {
+            double fLat, fLon;
+            dest(cLat, cLon, f.outDirDeg, outflowRadiusNm(f, t), fLat, fLon);
+            dest(fLat, fLon, f.outDirDeg + 180.0, 3.0, cLat, cLon);   // the outflow lies behind the front
+            reach = 10.0;
         }
+        const double cosRef = std::max(0.2, std::cos(rad(std::round(cLat))));   // whole-degree reference: the lattice never shifts
+        const double dLon = step / 60.0 / cosRef;
+        const long j0 = (long)std::floor((cLat - reach / 60.0) / dLat), j1 = (long)std::ceil((cLat + reach / 60.0) / dLat);
+        const long i0 = (long)std::floor((cLon - reach / 60.0 / cosRef) / dLon), i1 = (long)std::ceil((cLon + reach / 60.0 / cosRef) / dLon);
+        for (long j = j0; j <= j1; ++j)
+            for (long i = i0; i <= i1; ++i) {
+                if (!done.insert({i, j}).second) continue;
+                const double la = j * dLat, lo = i * dLon;
+                if (distNm(cLat, cLon, la, lo) > reach) { done.erase({i, j}); continue; }
+                const Vec3 p = perturbation(la, lo, 500.0, t);   // all fields together, so overlapping ones add up once
+                const double v = std::sqrt(p.east * p.east + p.north * p.north);
+                if (v < 3.0) continue;
+                ShearRecord r;
+                r.lat = la; r.lon = lo; r.radiusNm = 1.0f;
+                r.towardDeg = (float)norm360(deg(std::atan2(p.east, p.north)));
+                r.kt = (float)std::min(60.0, v * gain);
+                r.topAglFt = 3000; r.fieldId = f.id;
+                r.key = "WSc" + std::to_string(i) + ":" + std::to_string(j);
+                out.push_back(r);
+            }
     }
     return out;
 }

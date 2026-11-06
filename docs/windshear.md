@@ -10,8 +10,8 @@ Log lines start with `[WXPlane Windshear]`.
 |---|---|---|---|
 | Vertical wind gradients: low-level jet, inversion, directional shear with height | from the data | yes | The station and winds-aloft profile, already sent. The record grid now has a 1,500 ft level and the region array 1,000/2,000/3,000/4,500 ft, so a jet near 2,000 ft is not smeared. Nothing synthetic is added. |
 | Fronts, wind shifts and gusts between airports | from the data | yes | Station records with their own winds and gusts; X-Plane blends between them. No synthetic field (it would double-count). |
-| Gust fronts (convective outflow boundaries) | yes | yes | A row of four 2.5 nm records, 1.5 nm behind the moving front, adding the outflow to the ambient wind below 3,000 ft AGL. |
-| Microburst outflow | yes | yes, coarse | A ring of six 0.9 nm records blowing outward around the centre, below 2,500 ft AGL. Crossing it gives headwind, then tailwind; off-centre a crosswind. |
+| Gust fronts (convective outflow boundaries) | yes | yes | Fixed 1.2 nm wind cells behind the moving front, each adding the outflow at its spot to the ambient wind below 3,000 ft AGL. |
+| Microburst outflow | yes | yes, coarse | Fixed 1.2 nm wind cells around the centre, blowing outward with the model's outflow profile, below 3,000 ft AGL. Crossing it gives headwind, then tailwind; off-centre a crosswind. |
 | Microburst / convective downdraft | yes (logged) | **no** | X-Plane's weather records have no vertical-wind field. Applying it would mean pushing the aircraft, which WXPlane never does. |
 | Sea-breeze, terrain-driven boundaries | no | — | No reliable data to place them. |
 
@@ -51,14 +51,17 @@ Log lines start with `[WXPlane Windshear]`.
 
 ## X-Plane delivery (from the probe, 2026-11-06)
 
-X-Plane starts fading a record in after 30–70 s and reaches full strength after ~2 min. It delivers 60–80 % of the wind, and a record
-acts over ~0.75 of its radius. So records are sent:
-- for the state `windshear_lead_s` (120 s) ahead;
-- `windshear_gain` (1.4) times stronger;
-- updated at most every 30 s, and only when they moved 0.3 nm or changed by 2 kt / 5°.
-
-They are re-sent with any of WXPlane's replacing updates. They are removed when windshear is turned off, when the plugin is disabled, or
-when a field dies.
+- **What the probe measured:** X-Plane starts fading a record in after 30–70 s and reaches full strength after ~2 min. It delivers 60–80 %
+  of the wind, and a record acts over ~0.75 of its radius.
+- **Fixed cells:** the records are wind cells on a fixed 1.2 nm lattice, each 1 nm in radius. Each carries the model's horizontal outflow
+  at 500 ft AGL at its spot, wherever that is at least 3 kt.
+- **Why fixed:** the first in-sim test (13:48) used records that moved with the field. A moved record is a new one, and each new one
+  restarted X-Plane's 2-minute fade, so the gust front reached the aircraft at about a third of its strength. Fixed cells only change
+  their wind, which X-Plane updates in place.
+- **Timing and strength:** cells are sent for the state `windshear_lead_s` (120 s) ahead, `windshear_gain` (1.4) times stronger.
+- **Updates:** every 30 s, only for cells whose wind changed by 2 kt or 5°. The 80 cells nearest the aircraft within 40 nm are sent.
+- **Re-sending and removal:** cells are re-sent with any of WXPlane's replacing updates. They are removed when windshear is turned off,
+  when the plugin is disabled, or when they drop below 3 kt.
 
 ## Test event (menu: Windshear Test: event ahead now)
 
@@ -72,8 +75,9 @@ It works with the windshear toggle on or off. Fly it below 3,000 ft AGL.
 
 Encounter log:
 - "ENTERS" when the model adds more than 3 kt;
-- every 10 s, the model's headwind change next to X-Plane's own wind, GS, IAS and VS;
-- "EXITS", with the total headwind change and the strongest (unapplied) downdraft.
+- every 4 s, the model's headwind change next to the headwind X-Plane actually added (its wind against the wind at entry), with GS,
+  IAS and VS;
+- "EXITS", with both totals and the strongest (unapplied) downdraft.
 
 ## Categories (spec §19)
 

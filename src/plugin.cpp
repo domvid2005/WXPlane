@@ -750,7 +750,9 @@ void windshearTick() {
         nextSend = simT + 30.0;
         std::vector<wx::shear::ShearRecord> want = g_ws.records(simT + g_cfg.windshearLeadS, g_cfg.windshearGain);
         std::vector<wx::shear::ShearRecord> inRange;   // not "near": a macro in the Windows headers
-        for (const auto& r : want) if (wx::distNm(lat, lon, r.lat, r.lon) < 60.0 && inRange.size() < 40) inRange.push_back(r);
+        std::sort(want.begin(), want.end(), [&](const wx::shear::ShearRecord& a, const wx::shear::ShearRecord& b) {
+            return wx::distNm(lat, lon, a.lat, a.lon) < wx::distNm(lat, lon, b.lat, b.lon); });
+        for (const auto& r : want) if (wx::distNm(lat, lon, r.lat, r.lon) < 40.0 && inRange.size() < 80) inRange.push_back(r);
         std::set<std::string> keep;
         int sets = 0, erases = 0;
         bool open = false;
@@ -785,7 +787,7 @@ void windshearTick() {
     }
     // 3) the aircraft in a field: entry, exit and the winds every 10 s
     if (simT >= nextExp) {
-        nextExp = simT + 2.0;
+        nextExp = simT + 1.0;
         static XPLMDataRef drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl"), drEl = XPLMFindDataRef("sim/flightmodel/position/elevation"),
                            drTrk = XPLMFindDataRef("sim/flightmodel/position/hpath"), drGs = XPLMFindDataRef("sim/flightmodel/position/groundspeed"),
                            drIas = XPLMFindDataRef("sim/flightmodel/position/indicated_airspeed"), drVs = XPLMFindDataRef("sim/flightmodel/position/vh_ind_fpm");
@@ -796,6 +798,7 @@ void windshearTick() {
         const double mag = std::sqrt(p.east * p.east + p.north * p.north);
         static bool inside = false;
         static double maxHead = -1e9, minHead = 1e9, maxDown = 0, enterT = 0;
+        static double ambE = 0, ambN = 0, xpMaxHead = -1e9, xpMinHead = 1e9;   // X-Plane's wind just before the field, and its headwind change inside
         static double nextLog = 0;
         const bool now = mag > 3.0 || p.up < -300.0;
         if (now || inside) {
@@ -804,6 +807,10 @@ void windshearTick() {
             w.structSize = sizeof w;
             XPLMGetWeatherAtLocation(lat, lon, drEl ? XPLMGetDatad(drEl) : 0.0, &w);
             const double gs = drGs ? XPLMGetDataf(drGs) / 0.514444 : 0, ias = drIas ? XPLMGetDataf(drIas) : 0, vs = drVs ? XPLMGetDataf(drVs) : 0;
+            const double wr = w.wind_dir_alt * 3.14159265 / 180.0, wkt = w.wind_spd_alt / 0.514444;
+            const double xe = -wkt * std::sin(wr), xn = -wkt * std::cos(wr);   // X-Plane's wind as a vector (toward)
+            if (now && !inside) { ambE = xe; ambN = xn; xpMaxHead = -1e9; xpMinHead = 1e9; }
+            const double xpHead = -((xe - ambE) * std::sin(tr) + (xn - ambN) * std::cos(tr));   // headwind X-Plane added since the entry
             if (now && !inside) {
                 inside = true; enterT = simT; maxHead = minHead = head; maxDown = p.up; nextLog = simT;
                 wsLog("aircraft ENTERS windshear at %.4f,%.4f, %.0f ft AGL: model adds %.0f kt (headwind %+.0f), vertical %.0f fpm (not applied) | X-Plane wind here %03.0f/%.0f kt, GS %.0f kt, IAS %.0f kt",
@@ -811,15 +818,16 @@ void windshearTick() {
             }
             if (inside) {
                 maxHead = std::max(maxHead, head); minHead = std::min(minHead, head); maxDown = std::min(maxDown, p.up);
+                xpMaxHead = std::max(xpMaxHead, xpHead); xpMinHead = std::min(xpMinHead, xpHead);
                 if (simT >= nextLog) {
-                    nextLog = simT + 10.0;
-                    wsLog("  in windshear %+.0f s: model headwind %+.0f kt, vertical %.0f fpm (not applied) | X-Plane wind %03.0f/%.0f kt, GS %.0f, IAS %.0f, VS %+.0f, %.0f ft AGL",
-                          simT - enterT, head, p.up, w.wind_dir_alt, w.wind_spd_alt / 0.514444f, gs, ias, vs, agl);
+                    nextLog = simT + 4.0;
+                    wsLog("  in windshear %+.0f s: model headwind %+.0f kt | X-Plane headwind %+.0f kt (wind %03.0f/%.0f) | vertical %.0f fpm (model only) | GS %.0f, IAS %.0f, VS %+.0f, %.0f ft AGL",
+                          simT - enterT, head, xpHead, w.wind_dir_alt, w.wind_spd_alt / 0.514444f, p.up, gs, ias, vs, agl);
                 }
                 if (!now) {
                     inside = false;
-                    wsLog("aircraft EXITS windshear after %.0f s: model headwind went %+.0f .. %+.0f kt (change %.0f kt), strongest modelled downdraft %.0f fpm (not applied)",
-                          simT - enterT, minHead, maxHead, maxHead - minHead, maxDown);
+                    wsLog("aircraft EXITS windshear after %.0f s: model headwind %+.0f .. %+.0f kt (change %.0f kt); X-Plane headwind %+.0f .. %+.0f kt (change %.0f kt); strongest modelled downdraft %.0f fpm (not applied)",
+                          simT - enterT, minHead, maxHead, maxHead - minHead, xpMinHead, xpMaxHead, xpMaxHead - xpMinHead, maxDown);
                 }
             }
         }

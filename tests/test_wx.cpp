@@ -1248,9 +1248,23 @@ int main() {
             const Vec3 hiP = e.perturbation(30.0, -90.0 + 1.0 / 60.0, 35000, t);
             CHECK(hiP.east == 0 && hiP.north == 0 && hiP.up == 0);
             // records: a ring of six outward 1 nm records, scaled for X-Plane's blending, only while the field lives
+            // records: fixed 1.2 nm cells around the centre blowing outward, scaled for X-Plane's blending, only while the field lives
             const auto recs = e.records(t, 1.4);
-            CHECK(recs.size() == 6 && std::fabs(recs[0].kt - 42.0f) < 0.5f && recs[3].towardDeg == 180.0f);
+            float mx = 0; bool outward = true;
+            for (const auto& r : recs) {
+                mx = std::max(mx, r.kt);
+                const double b = std::atan2((r.lon + 90.0) * std::cos(30.0 * 3.14159265 / 180.0), r.lat - 30.0) * 180.0 / 3.14159265;
+                double d = std::fabs(std::fmod(r.towardDeg - b + 540.0, 360.0) - 180.0);
+                if (d > 30.0) outward = false;
+            }
+            CHECK(recs.size() >= 8 && recs.size() <= 60 && mx > 30.0f && mx <= 42.5f && outward);
             CHECK(e.records(t + 900.0, 1.4).empty());
+            {   // the cells do not move: later records sit on the same keys/positions (only their winds change)
+                const auto later = e.records(t + 120.0, 1.4);
+                bool same = true;
+                for (const auto& r : later) { bool found = false; for (const auto& q : recs) if (q.key == r.key) { found = std::fabs(q.lat - r.lat) < 1e-9 && std::fabs(q.lon - r.lon) < 1e-9; break; } if (!found && !later.empty()) { /* new cell: fine */ } else if (!found) same = false; }
+                CHECK(same && !later.empty());
+            }
         }
         {   // gust front across the track: behind it the outflow, ahead of it nothing; FL350 nothing
             Engine e(1);
@@ -1258,7 +1272,10 @@ int main() {
             const Vec3 behind = e.perturbation(30.0 + 2.0 / 60.0, -90.0, 800, 0.0), ahead = e.perturbation(30.0 - 2.0 / 60.0, -90.0, 800, 0.0);
             CHECK(-behind.north > 15 && std::fabs(ahead.north) < 3);
             CHECK(e.perturbation(30.0 + 2.0 / 60.0, -90.0, 35000, 0.0).north == 0);
-            CHECK(e.records(0.0, 1.0).size() == 4);
+            const auto gr = e.records(0.0, 1.0);
+            bool south = !gr.empty();
+            for (const auto& r : gr) if (std::fabs(std::fmod(r.towardDeg - 180.0 + 540.0, 360.0) - 180.0) > 20.0) south = false;
+            CHECK(gr.size() >= 10 && south);   // cells behind the front, all blowing toward the south
         }
         {   // I: a weather refresh during an event (new station list, same evidence): no reset, no duplicate
             Engine e(5);

@@ -715,13 +715,13 @@ int main() {
         g_menuHandler(nullptr, (void*)(intptr_t)12 /*kWsForce*/);
         g_cb(1, 1, 89001, nullptr);
         CHECK(g_logAll.find("TEST: microburst") != std::string::npos);
-        CHECK(g_logAll.find("records: 6 sent/updated") != std::string::npos);
+        CHECK(g_logAll.find("[WXPlane Windshear] records: ") != std::string::npos && g_logAll.find("records: 0 sent") == std::string::npos);
         g_menuHandler(nullptr, (void*)(intptr_t)12);
         g_cb(1, 1, 89002, nullptr);
         CHECK(g_logAll.find("TEST: gust front") != std::string::npos);
         g_menuHandler(nullptr, (void*)(intptr_t)11);
         g_cb(1, 1, 89003, nullptr);
-        CHECK(g_logAll.find("realistic windshear disabled") != std::string::npos && g_erases >= er0 + 6);
+        CHECK(g_logAll.find("realistic windshear disabled") != std::string::npos && g_erases >= er0 + 8);
     }
     {   // windshear capability probe: the menu only sets a flag; start and stop happen in the flight loop, the record is erased at stop
         const int er0 = g_erases;
