@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")  # static CRT, matches vcpkg x64-windows-static
-project(WXPlane LANGUAGES CXX)
+project(WXPlane LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,17 +24,36 @@ endif()
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 
+# --- GRIB2 decoders for the turbulence data, built from source and linked statically ----------------------------
+# OpenJPEG decodes JPEG2000-packed GRIB2 (NOAA GTGN, template 5.40); libaec decodes CCSDS-packed GRIB2 (ECMWF, 5.42).
+include(FetchContent)
+set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)          # the static CRT setting above also applies to the dependencies
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+set(BUILD_CODEC OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(openjpeg GIT_REPOSITORY https://github.com/uclouvain/openjpeg.git GIT_TAG v2.5.3 GIT_SHALLOW TRUE)
+FetchContent_Declare(libaec GIT_REPOSITORY https://github.com/MathisRosenhauer/libaec.git GIT_TAG v1.1.3 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(openjpeg libaec)
+add_library(wx_codecs INTERFACE)
+target_link_libraries(wx_codecs INTERFACE openjp2 aec_static)
+target_include_directories(wx_codecs INTERFACE
+  "${openjpeg_SOURCE_DIR}/src/lib/openjp2" "${openjpeg_BINARY_DIR}/src/lib/openjp2")
+target_compile_definitions(wx_codecs INTERFACE OPJ_STATIC)
+
 set(WX_CORE_SOURCES
   src/json_mini.cpp src/metar.cpp src/sources.cpp src/wxmodel.cpp src/windsaloft.cpp src/config.cpp src/viewer.cpp
-  src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp src/windshear.cpp)
+  src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp src/windshear.cpp src/gribx.cpp src/turbulence.cpp)
 
 add_library(WXPlane MODULE
-  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/plugin.cpp)
+  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/plugin.cpp)
 
 target_include_directories(WXPlane PRIVATE "${XPLANE_SDK}/CHeaders/XPLM")
 target_compile_definitions(WXPlane PRIVATE
   XPLM200=1 XPLM210=1 XPLM300=1 XPLM301=1 XPLM303=1 XPLM400=1 XPLM410=1 XPLM420=1)
-target_link_libraries(WXPlane PRIVATE CURL::libcurl Threads::Threads)
+target_link_libraries(WXPlane PRIVATE CURL::libcurl Threads::Threads wx_codecs)
 
 # --- Output: <build>/package/WXPlane/<lin_x64|mac_x64|win_x64>/WXPlane.xpl ----------------------
 if(WIN32)
@@ -69,5 +88,7 @@ option(WX_BUILD_TESTS "Build the parser/model unit tests" ON)
 if(WX_BUILD_TESTS)
   enable_testing()
   add_executable(test_wx tests/test_wx.cpp ${WX_CORE_SOURCES})
+  target_link_libraries(test_wx PRIVATE wx_codecs)
+  target_compile_definitions(test_wx PRIVATE WX_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
   add_test(NAME parser_and_model COMMAND test_wx)
 endif()

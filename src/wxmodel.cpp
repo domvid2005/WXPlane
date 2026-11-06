@@ -176,6 +176,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         x.shearDeg = r.windVariable ? (r.windDir == 0 ? 180.0f : 60.0f) : 0.0f;
         x.turbulence = std::min(0.6f, (x.gustMs - x.windMs) / 10.0f);
         if (r.thunder) x.turbulence = std::max(x.turbulence, 0.5f);
+        x.turbulence *= (float)cfg.maxTurbulence;
         float hs = 0.0246f * x.windMs * x.windMs; // fully-developed sea, Pierson-Moskowitz
         x.waveHeightM = std::min(hs, 8.0f);
         x.waveDir = r.windDir;

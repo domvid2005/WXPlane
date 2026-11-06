@@ -23,7 +23,10 @@ Requires **X-Plane 12.3 or newer** (it uses the `XPLMWeather` plugin API, SDK 4.
 Which layers count: the rough-top records apply to every layer with at least `rough_min_coverage` (0.65) coverage, so broken (BKN, 0.70) decks get them as well as overcast ones. Set it to 0.85 for overcast only.
 
 Rough overcast tops (experimental, OFF by default): with `top_bumps = 1`, WXPlane scatters up to `bump_count` (10) small records over thick overcast decks (`bump_fill_count` (1) per gap-fill tile, at most `bump_max` (200) per update). Each record is the parent layer unchanged - same slot, type, coverage and base - with only the top raised, by at most 20% of the deck thickness and `bump_height_m` (550 m), and never into the layer above. Each circle lies inside its parent record. Earlier builds (on by default) also changed type, coverage and base, which X-Plane blended into cloud walls. Upgrading to config version 19 switches `top_bumps` off once and leaves your other settings alone.
+| **Enable Realistic Windshear** | Gust fronts and microburst outflow near real convection (see below). On by default. |
+| **Enable Realistic Turbulence** | Turbulence from real data: NOAA GTGN in the US, an ECMWF-based estimate elsewhere (see below). On by default. |
 | *status lines* | Last update time, METAR/ATIS/fog counts, number of NOAA winds-aloft stations, nearest station. |
+| **Max Turbulence...** | Last item. A slider from 0 (no turbulence from WXPlane at all) to 1.0 (full realism, as the data says). It scales all of WXPlane's turbulence: the real-data turbulence, the storm turbulence and the gust turbulence at airports. Saved when you release it (`max_turbulence`). |
 
 Settings are saved to `Output/preferences/WXPlane.cfg`.
 
@@ -63,12 +66,13 @@ Copy the `WXPlane` folder (containing `lin_x64`, `mac_x64`, `win_x64`) into `X-P
    ctest --test-dir build
    ```
    Output: `build/package/WXPlane/<platform>_x64/WXPlane.xpl`.
+   CMake downloads OpenJPEG 2.5.3 and libaec 1.1.3 from GitHub and links them statically (the GRIB2 decoders for the turbulence data).
 
 No compiler? Push this folder to a GitHub repo; `.github/workflows/build.yml` builds all three platforms and produces a ready-to-install `WXPlane` artifact.
 
 ## Config keys (`WXPlane.cfg`)
 
-`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `radar_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
+`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `max_turbulence` (1), `realistic_turbulence` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
 
 Advanced settings (start-up gating, `transition_s`, `update_transition_s`, `apply_per_tick`, `first_load_immediate`, station and gap-fill record radii, `low_cloud_type`, storm top handling, `rough_min_coverage`) are no longer written to `WXPlane.cfg`. They keep their built-in defaults; a line added by hand is still read.
 
@@ -112,7 +116,7 @@ No free global radar data feed offers raw values. With `radar_global = 1` WXPlan
 
 ## Tests
 
-`tests/test_wx.cpp` (parsers, model, radar), plus `tests/test_inflate.cpp`, `tests/test_png.cpp`, `tests/test_grib2.cpp` and `tests/harness.cpp` (the plugin against a mock X-Plane and mock network; needs the files written by `tests/gen_grib.py` and `tests/gen_mrms.py`).
+`tests/test_wx.cpp` (parsers, model, radar; `tests/test_turb.h`: GRIB2 JPEG2000/CCSDS/Lambert decoding and the turbulence model), plus `tests/test_inflate.cpp`, `tests/test_png.cpp`, `tests/test_grib2.cpp` and `tests/harness.cpp` (the plugin against a mock X-Plane and mock network; needs the files written by `tests/gen_grib.py` and `tests/gen_mrms.py`; `HARNESS_TURB=1` runs the turbulence system end to end on synthetic GTGN and ECMWF files).
 
 ## What is loaded, and how often
 
@@ -345,9 +349,10 @@ Each storm cell grows out of the deck of its nearest station, so neighbouring ce
 
 After the spike/pit smoothing, no two neighbouring storm cells (closer than 1.5 cells) may differ in top by more than this many metres per cell width. The excess is split between the taller and the lower cell, so a core eases down towards its neighbours instead of dropping off a wall; no cell moves more than 2.5 km from its measured top. Rim cells keep their own taper. `0` turns it off.
 
-### Storm settings window
+### Storm turbulence
 
-`Plugins > WXPlane > Storm Settings (turbulence)...` opens a small window with a slider for the storm turbulence, 0-200 % in 5 % steps (`radar_turbulence`, 100 % = scaled to the radar reflectivity as before). It is saved when you release the slider and the storms are rebuilt with the new value.
+The storm settings window and its 0-200 % storm slider (`radar_turbulence`) were replaced by **Max Turbulence...** at the bottom of the
+menu (config version 30, which sets it to 1.0 once). Storm turbulence is scaled to the radar reflectivity and then by Max turbulence.
 
 ### Storm coverage stays at 95 %
 
@@ -427,6 +432,25 @@ Menu **Enable Realistic Windshear** (on by default). Gust fronts and microburst 
 real convection (radar echoes, TS reports) with seeded, frame-rate-independent probabilities. They are sent to X-Plane as low-level wind
 records, ahead of time and scaled for X-Plane's fade-in and blending. Downdrafts are modelled and logged only: X-Plane's weather API has
 no vertical wind. Details, limits and calibration: `docs/windshear.md`.
+
+## Realistic turbulence (2026-11-06)
+
+Menu **Enable Realistic Turbulence** (on by default) and **Max Turbulence...** (0 to 1.0). Details, sources, calibration and limits:
+`docs/turbulence.md`.
+- **US:** NOAA GTGN, the 15-minute EDR nowcast on a 3 km grid with 1,000 ft levels. Only the levels within about 9,500 ft of the
+  aircraft are downloaded, by byte range (about 0.6 MB each), and cropped to about 200 km around it.
+- **Elsewhere:** ECMWF Open Data publishes no EDR, so WXPlane computes the Ellrod TI1 index (vertical wind shear x deformation) from
+  the IFS winds at 700-100 hPa, two forecast steps around now, and converts it to an EDR-equivalent category. It is logged as an
+  estimate, used only from FL100 to FL500, and never called severe.
+- **Near the edge of GTGN's grid** the two are blended over about 60 km.
+- **To X-Plane:** the EDR at each of the 13 layers of `sim/weather/region/turbulence` (smoothed over 20 s, at most 0.5 per 5 s) goes
+  through the response measured in the sim: X-Plane's scale is usable only from 0 to 3, and not linearly. Nothing else is written,
+  and X-Plane's own values are put back when the feature is turned off.
+- **Stale data is not used:** a GTGN analysis older than 45 minutes, or an ECMWF step more than 4 hours from now, is ignored.
+  With no current data, nothing is added.
+- **Log:** lines start with `[WXPlane Turbulence]`, every minute: source and valid time, EDR or index at the aircraft, the level
+  requested, the level X-Plane holds, and the aircraft's load-factor spread. `diag_verbosity = 2` adds every layer.
+- The response test used for the calibration has been removed.
 
 ## Dry runways when no recent rain (2026-11-06)
 

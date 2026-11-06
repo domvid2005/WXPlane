@@ -3,7 +3,7 @@
 
 namespace wx {
 
-constexpr int kConfigVersion = 29;   // bumped when defaults change; older config files get the new start-up defaults once
+constexpr int kConfigVersion = 30;   // bumped when defaults change; older config files get the new start-up defaults once
 
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
@@ -94,7 +94,10 @@ struct Config {
     double radarNaturalFineNm = 3.0;    // smallest record near the aircraft (grows with distance, and when the budget runs short)
     double radarMinDbz = 20;      // ignore weaker echoes
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
-    double radarTurbulence = 1.0; // 0 disables storm turbulence, 1 = scaled to reflectivity
+    // Max turbulence (menu, bottom): 0 = no turbulence from WXPlane at all, 1 = full realism. Scales every turbulence
+    // WXPlane sends: the real-data (EDR) turbulence, the storm turbulence and the gust turbulence at airports.
+    double maxTurbulence = 1.0;
+    bool realisticTurbulence = true;  // menu: Enable Realistic Turbulence (NOAA GTGN in the US, ECMWF estimate elsewhere)
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoreCoverage = 0.95; // coverage of storm cells that are surrounded by other storm cells (35+ dBZ); rim cells keep storm_coverage_max, so only the outline breaks up
     double stormCoverageMax = 0.95; // coverage of the densest storm cloud

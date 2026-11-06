@@ -1179,7 +1179,7 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     for (const auto& k : x.clouds) if (k.coverage > 0) ++x.cloudCount;
 
     // Turbulence and gusts below the storm top.
-    float turb = clampf((dbz - 30.0f) / 30.0f, 0.0f, 1.0f) * (float)cfg.radarTurbulence;
+    float turb = clampf((dbz - 30.0f) / 30.0f, 0.0f, 1.0f) * (float)cfg.maxTurbulence;
     if (turb > 0) {
         if (x.winds.empty() && x.hasWind) {
             XpWind w;

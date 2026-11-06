@@ -22,6 +22,7 @@ bool loadConfig(const std::string& path, Config& c) {
     if (!f) return false;
     std::string line;
     int version = 0;
+    bool sawRealistic = false;
     while (std::getline(f, line)) {
         line = trim(line);
         if (line.empty() || line[0] == '#' || line[0] == ';') continue;
@@ -70,7 +71,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_max_cells") c.radarMaxCells = (int)(d < 10 ? 10 : (d > 400 ? 400 : d));
         else if (k == "radar_min_dbz") c.radarMinDbz = d < 5 ? 5 : (d > 45 ? 45 : d);
         else if (k == "radar_rain_full_mmh") c.radarRainFullMmH = d < 5 ? 5 : d;
-        else if (k == "radar_turbulence") c.radarTurbulence = d < 0 ? 0 : (d > 2 ? 2 : d);
+        else if (k == "max_turbulence") c.maxTurbulence = d < 0 ? 0 : (d > 1 ? 1 : d);
+        else if (k == "realistic_turbulence") { c.realisticTurbulence = toBool(v); sawRealistic = true; }
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
         else if (k == "first_load_immediate") c.firstLoadImmediate = toBool(v);
@@ -136,6 +138,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
     if (version < 26) { Config d; c.regionWinds = d.regionWinds; }
+    if (version < 30) { c.maxTurbulence = 1.0; if (!sawRealistic) c.realisticTurbulence = true; }   // v30: the storm slider (0-200 %) became Max turbulence (0-1)
     if (version < 29) c.windshear = true;   // v29: windshear on by default (turned on once; turning it off afterwards sticks)
     if (version < 28 && std::fabs(c.windshearGain - 1.4) < 1e-6) { Config d; c.windshearGain = d.windshearGain; }   // v28: 1.4 left ~40 % of the outflow
     if (version < 27 && c.radarNaturalMax == 150) { Config d; c.radarNaturalMax = d.radarNaturalMax; }   // v27: 150 left widespread rain in 24 nm squares   // v26: one build saved region_winds = 0, which left the winds aloft out of the sim
@@ -216,7 +219,8 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "radar_max_cells = " << c.radarMaxCells << "\n"
       << "radar_min_dbz = " << c.radarMinDbz << "\n"
       << "radar_rain_full_mmh = " << c.radarRainFullMmH << "\n"
-      << "radar_turbulence = " << c.radarTurbulence << "\n"
+      << "max_turbulence = " << c.maxTurbulence << "\n"
+      << "realistic_turbulence = " << (c.realisticTurbulence ? 1 : 0) << "\n"
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"

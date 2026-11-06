@@ -20,6 +20,7 @@
 #include "stubs/XPLMUtilities.h"
 #include "stubs/XPLMWeather.h"
 #include "stubs/curl/curl.h"
+#include "../src/turbulence.h"
 
 extern "C" {
 int XPluginStart(char*, char*, char*);
@@ -52,8 +53,10 @@ void XPLMEnableMenuItem(XPLMMenuID, int, int) {}
 XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t* p) { g_cb = p->callbackFunc; return (void*)3; }
 void XPLMDestroyFlightLoop(XPLMFlightLoopID) {}
 void XPLMScheduleFlightLoop(XPLMFlightLoopID, float, int) {}
-XPLMDataRef XPLMFindDataRef(const char* n) { return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
-int XPLMGetDatavf(XPLMDataRef, float* out, int off, int n) {
+static float g_turbArr[13] = {0}; static int g_turbWrites = 0;
+XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/turbulence")) return (void*)79; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
+int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
+    if (r == (void*)79) { if (!out) return 13; for (int i = 0; i < n && off + i < 13; ++i) out[i] = g_turbArr[off + i]; return n; }
     static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};
     if (!out) return 13;
     for (int i = 0; i < n && off + i < 13; ++i) out[i] = lv[off + i];
@@ -134,7 +137,7 @@ float g_stubMagVar = -7.0f;   // west variation, X-Plane-style sign assumed
 float XPLMGetMagneticVariation(double, double) { return g_stubMagVar; }
 float XPLMDegTrueToDegMagnetic(float h) { return std::fmod(h - g_stubMagVar + 360.0f, 360.0f); }
 float XPLMDegMagneticToDegTrue(float h) { return std::fmod(h + g_stubMagVar + 360.0f, 360.0f); }
-void XPLMSetDatavf(XPLMDataRef, float*, int, int) {}
+void XPLMSetDatavf(XPLMDataRef r, float* v, int off, int n) { if (r == (void*)79) { for (int i = 0; i < n && off + i < 13; ++i) g_turbArr[off + i] = v[i]; ++g_turbWrites; } }
 void XPLMSetDatai(XPLMDataRef r, int v) { if (r == (void*)77) { g_realWx = v; ++g_realWxSets; } }
 XPLMMapLayerID XPLMCreateMapLayer(XPLMCreateMapLayer_t* p) { g_mapLabelCb = p->labelCallback; return (void*)77; }
 int XPLMDestroyMapLayer(XPLMMapLayerID) { g_mapDestroyed = true; return 1; }
@@ -144,8 +147,9 @@ void XPLMDrawMapLabel(XPLMMapLayerID, const char* t, float, float, XPLMMapOrient
 void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* y) { *x = (float)lo; *y = (float)la; }
 
 // ---------------- mock libcurl ----------------
-struct Easy { long status = 200; std::string url; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
-static int g_netRequests = 0, g_fdRequests = 0;
+struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
+static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
+static std::string g_gtgnFile, g_gtgnName, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
 static std::vector<std::string> g_urls;
 static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
 static std::string readFile(const char* p) { FILE* f = std::fopen(p, "rb"); std::string r; if (!f) return r; char b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) r.append(b, n); std::fclose(f); return r; }
@@ -207,6 +211,7 @@ CURLcode curl_easy_setopt(CURL* c, int opt, ...) {
     if (opt == CURLOPT_URL) e->url = va_arg(ap, const char*);
     else if (opt == CURLOPT_WRITEFUNCTION) e->wf = va_arg(ap, size_t (*)(char*, size_t, size_t, void*));
     else if (opt == CURLOPT_WRITEDATA) e->wd = va_arg(ap, void*);
+    else if (opt == CURLOPT_RANGE) e->range = va_arg(ap, const char*);
     va_end(ap);
     return 0;
 }
@@ -215,6 +220,19 @@ CURLcode curl_easy_perform(CURL* c) {
     ++g_netRequests;
     std::printf("  net: GET %s\n", e->url.c_str());
     g_urls.push_back(e->url);
+    if (!g_gtgnFile.empty() && (e->url.find("nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn") != std::string::npos || e->url.find("data.ecmwf.int") != std::string::npos)) {
+        const bool ec = e->url.find("data.ecmwf.int") != std::string::npos;
+        if (ec && e->url.size() > 6 && e->url.compare(e->url.size() - 6, 6, ".index") == 0) { e->status = 200; e->wf((char*)g_ecIndex.data(), 1, g_ecIndex.size(), e->wd); return 0; }
+        const std::string& f = ec ? g_ecFile : g_gtgnFile;
+        if ((!ec && e->url.find(g_gtgnName) == std::string::npos) || e->range.empty()) { e->status = 404; return 0; }
+        size_t a = std::strtoull(e->range.c_str(), nullptr, 10), b = std::strtoull(e->range.c_str() + e->range.find('-') + 1, nullptr, 10);
+        ++g_rangeRequests;
+        if (a >= f.size()) { e->status = 416; return 0; }
+        b = std::min(b, f.size() - 1);
+        e->status = 206;
+        e->wf((char*)f.data() + a, 1, b - a + 1, e->wd);
+        return 0;
+    }
     if (e->url.find("api.rainviewer.com") != std::string::npos) {
         static const char* idx = "{\"version\":\"2.0\",\"generated\":1,\"host\":\"https://tilecache.rainviewer.com\",\"radar\":{\"past\":[{\"time\":1,\"path\":\"/v2/radar/1\"},{\"time\":1761800000,\"path\":\"/v2/radar/2\"}]}}";
         e->status = 200;
@@ -283,7 +301,7 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 // HARNESS_RAMP=1: the first load is released evenly over transition_s instead of in one burst.
 static int runRamp() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
     XPluginStart(n, s, d);
@@ -427,14 +445,171 @@ static int runBumps() {
     return g_fail ? 1 : 0;
 }
 
+// ---------------- HARNESS_TURB: realistic turbulence end to end, with synthetic GTGN (JPEG2000, Lambert) and ECMWF (CCSDS) files ----
+extern "C" {
+#include <openjpeg.h>
+#include <libaec.h>
+}
+namespace gen {
+void p32(std::string& b, size_t at, uint32_t v) { b[at] = (char)(v >> 24); b[at + 1] = (char)((v >> 16) & 255); b[at + 2] = (char)((v >> 8) & 255); b[at + 3] = (char)(v & 255); }
+void p16(std::string& b, size_t at, uint32_t v) { b[at] = (char)((v >> 8) & 255); b[at + 1] = (char)(v & 255); }
+uint32_t sm(long v) { return v < 0 ? (0x80000000u | (uint32_t)(-v)) : (uint32_t)v; }
+void sec(std::string& m, int num, const std::string& body) { size_t at = m.size(); m.resize(at + 5); p32(m, at, (uint32_t)(5 + body.size())); m[at + 4] = (char)num; m += body; }
+std::string s1(std::time_t t) {
+    std::tm g{}; gmtime_r(&t, &g);
+    std::string b(16, '\0'); p16(b, 0, 7); b[4] = 2; b[6] = 0; p16(b, 7, (uint32_t)(g.tm_year + 1900)); b[9] = (char)(g.tm_mon + 1); b[10] = (char)g.tm_mday; b[11] = (char)g.tm_hour; b[12] = (char)g.tm_min;
+    return b;
+}
+std::string s4(int cat, int num, int ltype, long lval, int ft) {
+    std::string b(29, '\0'); b[4] = (char)cat; b[5] = (char)num; b[12] = 1; p32(b, 13, (uint32_t)ft); b[17] = (char)ltype; b[18] = 0; p32(b, 19, sm(lval)); b[23] = (char)255; return b;
+}
+std::string finish(std::string m) { m += "7777"; p32(m, 12, (uint32_t)m.size()); return m; }
+std::string head() { return std::string("GRIB\0\0\0\2\0\0\0\0\0\0\0\0", 16); }
+struct Sink { std::string out; };
+OPJ_SIZE_T wr(void* buf, OPJ_SIZE_T n, void* ud) { static_cast<Sink*>(ud)->out.append((char*)buf, n); return n; }
+OPJ_OFF_T sk(OPJ_OFF_T n, void* ud) { auto* s = static_cast<Sink*>(ud); s->out.append((size_t)n, '\0'); return n; }
+OPJ_BOOL sek(OPJ_OFF_T, void*) { return OPJ_FALSE; }
+std::string j2k(const std::vector<uint32_t>& X, int w, int h, int prec) {
+    opj_image_cmptparm_t cp; std::memset(&cp, 0, sizeof cp);
+    cp.dx = cp.dy = 1; cp.w = (OPJ_UINT32)w; cp.h = (OPJ_UINT32)h; cp.prec = (OPJ_UINT32)prec; cp.sgnd = 0;
+    opj_image_t* img = opj_image_create(1, &cp, OPJ_CLRSPC_GRAY);
+    img->x1 = (OPJ_UINT32)w; img->y1 = (OPJ_UINT32)h;
+    for (size_t k = 0; k < X.size(); ++k) img->comps[0].data[k] = (OPJ_INT32)X[k];
+    opj_cparameters_t prm; opj_set_default_encoder_parameters(&prm);
+    prm.tcp_numlayers = 1; prm.tcp_rates[0] = 0; prm.cp_disto_alloc = 1;
+    opj_codec_t* c = opj_create_compress(OPJ_CODEC_J2K);
+    opj_setup_encoder(c, &prm, img);
+    Sink sink;
+    opj_stream_t* st = opj_stream_create(1 << 16, OPJ_FALSE);
+    opj_stream_set_user_data(st, &sink, nullptr);
+    opj_stream_set_write_function(st, wr); opj_stream_set_skip_function(st, sk); opj_stream_set_seek_function(st, sek);
+    bool ok = opj_start_compress(c, img, st) && opj_encode(c, st) && opj_end_compress(c, st);
+    opj_stream_destroy(st); opj_destroy_codec(c); opj_image_destroy(img);
+    return ok ? sink.out : std::string();
+}
+// One GTGN-like message: EDR (0.19.30) on the HRRR Lambert grid at `ft` ft MSL, value = edr + a small west-east gradient, JPEG2000 packed.
+std::string gtgnMsg(std::time_t t, double ft, double edr) {
+    const int nx = 1799, ny = 1059;
+    std::vector<uint32_t> X((size_t)nx * ny);
+    for (int j = 0; j < ny; ++j) for (int i = 0; i < nx; ++i) X[(size_t)j * nx + i] = (uint32_t)std::lround((edr + 0.02 * i / nx) * 1000.0);
+    std::string m = head(); m[6] = 0;
+    sec(m, 1, s1(t));
+    std::string g(76, '\0'); p32(g, 1, (uint32_t)(nx * ny)); p16(g, 7, 30); g[9] = 6;
+    p32(g, 25, nx); p32(g, 29, ny); p32(g, 33, sm(21138123)); p32(g, 37, sm(237280472)); g[41] = 8; p32(g, 42, sm(38500000)); p32(g, 46, sm(262500000));
+    p32(g, 50, 3000000); p32(g, 54, 3000000); g[58] = 0; g[59] = 0x40; p32(g, 60, sm(38500000)); p32(g, 64, sm(38500000)); p32(g, 68, sm(-90000000)); p32(g, 72, 0);
+    sec(m, 3, g);
+    sec(m, 4, s4(19, 30, 102, std::lround(ft * 0.3048), 0));
+    std::string d(17, '\0'); p32(d, 0, (uint32_t)(nx * ny)); p16(d, 4, 40); float R = 0; uint32_t rb; std::memcpy(&rb, &R, 4); p32(d, 6, rb); p16(d, 10, 0); p16(d, 12, 3); d[14] = 10; d[15] = 0; d[16] = 0;
+    d += std::string(1, (char)255);
+    sec(m, 5, d);
+    sec(m, 6, std::string(1, (char)255));
+    sec(m, 7, j2k(X, nx, ny, 10));
+    return finish(m);
+}
+// One ECMWF-like message: u or v (0.2.2 / 0.2.3) at `hpa` on the global 0.25 degree grid, CCSDS packed like ECMWF Open Data.
+std::string ecMsg(std::time_t run, int step, bool isU, int hpa, int k) {
+    const int nx = 1440, ny = 721;
+    std::vector<uint32_t> X((size_t)nx * ny);
+    for (int j = 0; j < ny; ++j) for (int i = 0; i < nx; ++i) {
+        double lat = 90 - j * 0.25, lon = i * 0.25;
+        double u = 15 + 4 * k + 10 * std::sin(lon * 0.0349) * std::cos(lat * 0.0698), v = 6 * std::cos(lon * 0.0349) * std::sin(lat * 0.0698) * (1 + 0.2 * k);
+        X[(size_t)j * nx + i] = (uint32_t)std::lround(((isU ? u : v) + 100.0) * 10.0);
+    }
+    std::string m = head(); m[6] = 0;
+    sec(m, 1, s1(run));
+    std::string g(67, '\0'); p32(g, 1, (uint32_t)(nx * ny)); p16(g, 7, 0); g[9] = 6; p32(g, 25, nx); p32(g, 29, ny); p32(g, 33, 0); p32(g, 37, 0xFFFFFFFFu);
+    p32(g, 41, sm(90000000)); p32(g, 45, 0); g[49] = 48; p32(g, 50, sm(-90000000)); p32(g, 54, sm(359750000)); p32(g, 58, 250000); p32(g, 62, 250000); g[66] = 0;
+    sec(m, 3, g);
+    sec(m, 4, s4(2, isU ? 2 : 3, 100, hpa * 100L, step));
+    std::vector<unsigned char> raw, packed(X.size() * 2 + 4096);
+    for (uint32_t v : X) { raw.push_back((unsigned char)(v >> 8)); raw.push_back((unsigned char)(v & 255)); }
+    aec_stream a; std::memset(&a, 0, sizeof a);
+    a.next_in = raw.data(); a.avail_in = raw.size(); a.next_out = packed.data(); a.avail_out = packed.size();
+    a.bits_per_sample = 12; a.block_size = 32; a.rsi = 128; a.flags = AEC_DATA_3BYTE | AEC_DATA_MSB | AEC_DATA_PREPROCESS;
+    aec_buffer_encode(&a); packed.resize(a.total_out);
+    std::string d(20, '\0'); p32(d, 0, (uint32_t)X.size()); p16(d, 4, 42); float R = -1000.0f; uint32_t rb; std::memcpy(&rb, &R, 4); p32(d, 6, rb);
+    p16(d, 10, 0); p16(d, 12, 1); d[14] = 12; d[15] = 0; d[16] = (char)(AEC_DATA_3BYTE | AEC_DATA_MSB | AEC_DATA_PREPROCESS); d[17] = 32; p16(d, 18, 128);
+    sec(m, 5, d);
+    sec(m, 6, std::string(1, (char)255));
+    sec(m, 7, std::string((char*)packed.data(), packed.size()));
+    return finish(m);
+}
+} // namespace gen
+
+static int runTurb() {
+    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 1\nmax_turbulence = 1\ndiag_verbosity = 2\n", f); std::fclose(f); }
+    const std::time_t now = std::time(nullptr), t15 = (now / 900) * 900;
+    char nm[64]; std::tm g{}; gmtime_r(&t15, &g); std::strftime(nm, sizeof nm, "gtgn.t%H%Mz.3km.grib2", &g);
+    g_gtgnName = nm;
+    std::printf("[turb] building synthetic data (%s): GTGN levels 0-50,000 ft every 5,000 ft, EDR 0.02 + 0.03 per level\n", nm);
+    for (int k = 0; k <= 10; ++k) g_gtgnFile += gen::gtgnMsg(t15, k * 5000.0, 0.02 + 0.03 * k);
+    const std::time_t run = ((now - 6 * 3600) / 21600) * 21600;
+    int kk = 0;
+    for (int lev : {700, 600, 500, 400, 300, 250, 200, 150, 100}) {
+        for (int uv = 0; uv < 2; ++uv) {
+            std::string msg = gen::ecMsg(run, 6, uv == 0, lev, kk);
+            char line[300];
+            std::snprintf(line, sizeof line, "{\"domain\": \"g\", \"step\": \"6\", \"levelist\": \"%d\", \"levtype\": \"pl\", \"param\": \"%s\", \"_offset\": %zu, \"_length\": %zu}\n", lev, uv ? "v" : "u", g_ecFile.size(), msg.size());
+            g_ecIndex += line; g_ecFile += msg;
+        }
+        ++kk;
+    }
+    std::printf("[turb] GTGN file %zu bytes, ECMWF file %zu bytes\n", g_gtgnFile.size(), g_ecFile.size());
+    char n[256], s[256], d[256];
+    g_loadingFlag = 0;
+    g_lat = 37.65; g_lon = -97.43; g_elev = 33000 * 0.3048; g_agl = 9000;
+    CHECK(XPluginStart(n, s, d) == 1);
+    CHECK(XPluginEnable() == 1);
+    auto pumpUntil = [&](const char* text, int seconds) {
+        for (int i = 0; i < seconds * 20; ++i) { g_cb(1, 1, i, nullptr); if (g_logAll.find(text) != std::string::npos) return true; std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+        return false;
+    };
+    std::printf("[turb] 1) inside the US at 33,000 ft: GTGN\n");
+    CHECK(pumpUntil("realistic turbulence on", 60));
+    CHECK(g_logAll.find("EDR levels 0..50000 ft") != std::string::npos);
+    CHECK(g_logAll.find("packing 5.40") != std::string::npos);
+    CHECK(pumpUntil("| GTGN |", 20) || g_logAll.find("GTGN | data") != std::string::npos);
+    // layer 10 is 10,000 m = 32,808 ft: EDR between 0.20 (30,000) and 0.23 (35,000), + up to 0.02 west-east, x0.83..1.2 variation
+    const double lo = wx::turb::edrToXpLevel(0.20 * 0.8), hi = wx::turb::edrToXpLevel(0.25 * 1.21);
+    std::printf("[turb]   region turbulence written %d times: layer 10 = %.2f (expected %.2f..%.2f), layer 0 = %.2f\n", g_turbWrites, g_turbArr[10], lo, hi, g_turbArr[0]);
+    CHECK(g_turbWrites > 0 && g_turbArr[10] >= lo && g_turbArr[10] <= hi);
+    CHECK(g_turbArr[11] > g_turbArr[9]);   // more EDR higher up in the synthetic data
+    CHECK(g_turbArr[3] == 0 && g_turbArr[12] == 0);   // layers far from the aircraft have no levels downloaded: nothing invented
+    // only the needed levels were downloaded (+-9,500 ft around 33,000 and the ones just beyond), by byte range
+    const size_t gtgnBytes = g_gtgnFile.size();
+    std::printf("[turb]   range requests so far %d\n", g_rangeRequests);
+    CHECK(g_logAll.find("GTGN: " + g_gtgnName + " valid") != std::string::npos);
+    CHECK(g_logAll.find("ECMWF:") == std::string::npos);   // deep inside GTGN coverage: ECMWF not downloaded
+    (void)gtgnBytes;
+    std::printf("[turb] 2) over Germany: ECMWF estimate, the source changes\n");
+    g_lat = 50.0; g_lon = 10.0;
+    CHECK(pumpUntil("wind fields", 60));
+    CHECK(pumpUntil("ECMWF estimate |", 40));
+    CHECK(g_logAll.find("source changed: GTGN -> ") != std::string::npos);
+    CHECK(g_logAll.find("Ellrod TI1") != std::string::npos);
+    std::printf("[turb]   layer 10 = %.2f\n", g_turbArr[10]);
+    CHECK(g_turbArr[10] >= 0 && g_turbArr[10] <= 3);
+    std::printf("[turb] 3) the menu toggle puts X-Plane's values back\n");
+    g_menuHandler(nullptr, (void*)(intptr_t)10 /*kTurbulence*/);
+    CHECK(pumpUntil("realistic turbulence off: X-Plane's region turbulence put back", 5));
+    bool zero = true; for (float v : g_turbArr) if (v != 0) zero = false;
+    CHECK(zero);   // the values before were all 0
+    XPluginDisable();
+    XPluginStop();
+    std::printf(g_fail ? "HARNESS_TURB FAILED (%d)\n" : "HARNESS_TURB OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 int main() {
     initMockTimes();
     if (std::getenv("HARNESS_BUMPS")) { return runBumps(); }
     if (std::getenv("HARNESS_DEBOUNCE")) { return runDebounce(); }
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
+    if (std::getenv("HARNESS_TURB")) return runTurb();
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
@@ -506,7 +681,8 @@ int main() {
     CHECK(g_netRequests > reqBefore);
     CHECK(g_calls.size() - before < 4);   // identical data is NOT re-sent (re-sending makes the sim rebuild cloud layers)
     CHECK(g_fdRequests == 2); // winds aloft cached for 30 min, not re-downloaded on a manual refresh
-    std::printf("  menu status: '%s' / '%s'\n", g_menuNames[g_menuNames.size() - 2].c_str(), g_menuNames.back().c_str());
+    std::printf("  menu status: '%s' / '%s'\n", g_menuNames[g_menuNames.size() - 4].c_str(), g_menuNames[g_menuNames.size() - 3].c_str());
+    CHECK(g_menuNames.back() == "Max Turbulence...");   // the slider is the last item of the menu
 
     std::printf("[3] periodic: nothing should download for 5 minutes while stationary\n");
     reqBefore = g_netRequests;

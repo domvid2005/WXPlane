@@ -20,6 +20,7 @@ static bool nr(double a, double b, double t) { return std::fabs(a - b) <= t; }
 #define NEAR(a, b, t) CHECK(std::fabs((double)(a) - (double)(b)) <= (t))
 
 using namespace wx;
+#include "test_turb.h"
 
 static void utc(std::time_t t, std::tm* out) {
 #ifdef _WIN32
@@ -807,7 +808,7 @@ int main() {
         CHECK(w2.clouds[2].type == 2.0f && w2.clouds[2].coverage < 0.8f && w2.precip < 0.1f && w2.visM >= 8000 && w2.turbulence == 0);
         XpWx w3 = base; cell.topM = 99000; cell.dbz = 45; cell.topKnown = true; applyStorm(w3, cell, sc, 400, 38);
         CHECK(w3.clouds[2].topM <= tropopauseKm(38) * 1000 + 2500 + 1);   // absurd tops are clamped
-        XpWx w4 = base; sc.radarTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);
+        XpWx w4 = base; sc.maxTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);
         CHECK(w4.turbulence == 0);
 
         // RainViewer-style tiles (z=6): one tile around 35N 97W with a dark blob
@@ -1346,6 +1347,8 @@ int main() {
             Engine nanE(1); CHECK(nanE.step(NAN, many, eD).size() == 1 && nanE.fields().empty());
         }
     }
+
+    tt::run();
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

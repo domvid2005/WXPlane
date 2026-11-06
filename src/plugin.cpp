@@ -40,6 +40,7 @@
 #include "http.h"
 #include "sources.h"
 #include "radar.h"
+#include "turbfetch.h"
 #include "viewer.h"
 #include "wxmodel.h"
 
@@ -47,14 +48,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kWindshear, kTurbTest };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kWindshear, kTurbulence };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxWindshear = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxWindshear = -1, g_idxTurbulence = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -131,6 +132,7 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxWindshear >= 0) XPLMCheckMenuItem(g_menu, g_idxWindshear, g_cfg.windshear ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    if (g_idxTurbulence >= 0) XPLMCheckMenuItem(g_menu, g_idxTurbulence, g_cfg.realisticTurbulence ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
 
 // Removes every record this plugin has set, handing control back to X-Plane's own weather.
@@ -425,205 +427,140 @@ void eraseRec(const std::string& k) {
     g_recs.erase(it);
 }
 
-// ---- Turbulence verification (2026-11-06) ---------------------------------------------------------------------------------------------
-// Before a real-data turbulence model is built, two things are measured (menu: Turbulence Test):
-//  1. X-Plane's response: sim/weather/region/turbulence is stepped through 0, 1, 2, 3, 5, 7, 10 (50 s each, every element), while the
-//     aircraft's vertical load factor, its pitch/roll/yaw rates and X-Plane's own turbulence at the aircraft are sampled every frame.
-//     Each step logs the response every 10 s and a summary; the array is put back afterwards. Nothing else is written.
-//  2. The data: on a worker thread, the newest NOAA GTGN file (NOMADS) and ECMWF Open Data IFS file are located, their indexes read,
-//     and the first GRIB2 message of each fetched with a byte range, to log their grid and packing templates (what a decoder must handle).
-bool g_turbCmd = false;
+// ---- Realistic turbulence (docs/turbulence.md) ---------------------------------------------------------------------------------------
+// The worker (turbfetch.cpp) keeps NOAA GTGN (US) and ECMWF Open Data (elsewhere) current; here, once a second, the EDR of the air at the
+// aircraft's position is taken at each altitude of X-Plane's region turbulence array (the 13 wind layers), smoothed over ~20 s, scaled
+// by Max turbulence, mapped to X-Plane's 0-3 response through the measured calibration, and written every 5 s (at most 0.5 per write).
+// Only sim/weather/region/turbulence is written. When the feature is turned off, X-Plane's own values from before are put back.
 double awGet(XPLMDataRef r);
-std::mutex g_turbMx;
-std::vector<std::string> g_turbLines;   // from the data thread, logged by the loop
-void turbPost(const std::string& s) { std::lock_guard<std::mutex> l(g_turbMx); g_turbLines.push_back(s); }
-
-std::string gribTemplates(const std::string& b, size_t start) {
-    // GRIB2: section 0 (16 bytes), then sections with a 4-byte length and a 1-byte number
-    size_t p = b.find("GRIB", start);
-    if (p == std::string::npos || p + 16 > b.size()) return "no GRIB header";
-    auto u32 = [&](size_t o) { return ((unsigned)(unsigned char)b[o] << 24) | ((unsigned)(unsigned char)b[o + 1] << 16) | ((unsigned)(unsigned char)b[o + 2] << 8) | (unsigned)(unsigned char)b[o + 3]; };
-    auto u16 = [&](size_t o) { return ((unsigned)(unsigned char)b[o] << 8) | (unsigned)(unsigned char)b[o + 1]; };
-    const int ed = (unsigned char)b[p + 7];
-    size_t q = p + 16;
-    char out[300]; int g3 = -1, t5 = -1, nx = 0, ny = 0, cat = -1, num = -1, bits = -1; unsigned npts = 0;
-    while (q + 5 <= b.size()) {
-        if (b.compare(q, 4, "7777") == 0) break;
-        const unsigned len = u32(q); const int sec = (unsigned char)b[q + 4];
-        if (len < 5) break;
-        if (sec == 3 && q + 34 <= b.size()) { g3 = (int)u16(q + 12); npts = u32(q + 6); if (g3 == 0 || g3 == 30) { nx = (int)u32(q + 30); ny = (int)u32(q + 34); } }
-        if (sec == 4 && q + 11 <= b.size()) { cat = (unsigned char)b[q + 9]; num = (unsigned char)b[q + 10]; }
-        if (sec == 5 && q + 21 <= b.size()) { t5 = (int)u16(q + 9); bits = (unsigned char)b[q + 19]; }
-        if (sec == 7) break;
-        q += len;
-    }
-    std::snprintf(out, sizeof out, "GRIB edition %d, grid template 3.%d (%dx%d, %u points), parameter %d.%d, packing template 5.%d (%d bits)%s",
-                  ed, g3, nx, ny, npts, cat, num, t5, bits,
-                  t5 == 40 ? " = JPEG2000" : t5 == 42 ? " = CCSDS (AEC)" : t5 == 0 ? " = simple" : t5 == 3 ? " = complex + spatial differencing" : t5 == 41 ? " = PNG" : "");
-    return out;
-}
-
-void turbDataProbe() {
-    std::thread([] {
-        std::time_t now = std::time(nullptr);
-        std::tm g{};
-#ifdef _WIN32
-        gmtime_s(&g, &now);
-#else
-        gmtime_r(&now, &g);
-#endif
-        char day[16];
-        std::strftime(day, sizeof day, "%Y%m%d", &g);
-        // 1) NOAA GTGN: the day's directory, the newest file, its index, its first message
-        {
-            const std::string dir = std::string("https://nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn/prod/gtgn.") + day + "/";
-            std::string body, err; long st = 0;
-            if (!wx::httpGet(dir, body, st, err, 20, 4u << 20)) { turbPost("GTGN: directory " + dir + " failed: " + err); }
-            else {
-                std::string last;
-                for (size_t p = body.find("gtgn.t"); p != std::string::npos; p = body.find("gtgn.t", p + 1)) {
-                    const size_t e = body.find(".grib2", p);
-                    if (e == std::string::npos || e - p > 40) continue;
-                    const std::string f = body.substr(p, e + 6 - p);
-                    if (f > last) last = f;
-                }
-                int files = 0; for (size_t p = body.find(".grib2\""); p != std::string::npos; p = body.find(".grib2\"", p + 1)) ++files;
-                turbPost("GTGN: " + dir + " lists " + std::to_string(files) + " grib2 link(s); newest " + (last.empty() ? "none" : last));
-                if (!last.empty()) {
-                    std::string idx;
-                    if (wx::httpGet(dir + last + ".idx", idx, st, err, 20, 2u << 20)) {
-                        int n = 0; for (char c : idx) if (c == '\n') ++n;
-                        std::string first = idx.substr(0, idx.find('\n'));
-                        turbPost("GTGN: index " + std::to_string(n) + " record(s); first: " + first);
-                    } else turbPost("GTGN: no index (" + err + "): a byte-range download per level is not possible, the whole ~31 MB file would be needed");
-                    std::string head;
-                    if (wx::httpGetRange(dir + last, "0-1048575", head, st, err, 30, 2u << 20)) turbPost("GTGN: first message: " + gribTemplates(head, 0));
-                    else turbPost("GTGN: byte-range download failed: " + err);
-                }
-            }
-        }
-        // 2) ECMWF Open Data, IFS 0.25 deg: today's 00z run, step 6 h (released a few hours after the run)
-        {
-            const std::string base = std::string("https://data.ecmwf.int/forecasts/") + day + "/00z/ifs/0p25/oper/" + day + "000000-6h-oper-fc";
-            std::string idx, err; long st = 0;
-            if (!wx::httpGet(base + ".index", idx, st, err, 30, 8u << 20)) turbPost("ECMWF: index " + base + ".index failed: " + err);
-            else {
-                int n = 0; std::string uline;
-                std::istringstream in(idx); std::string line;
-                std::set<std::string> params, levels;
-                while (std::getline(in, line)) {
-                    ++n;
-                    auto field = [&](const char* k) { const size_t p = line.find(std::string("\"") + k + "\": \""); if (p == std::string::npos) return std::string(); const size_t s = p + std::strlen(k) + 5; return line.substr(s, line.find('"', s) - s); };
-                    const std::string pr = field("param"), lv = field("levelist");
-                    if (!pr.empty()) params.insert(pr);
-                    if (!lv.empty()) levels.insert(lv);
-                    if (pr == "u" && lv == "250") uline = line;
-                }
-                std::string ps, ls; for (const auto& x : params) ps += x + " "; for (const auto& x : levels) ls += x + " ";
-                turbPost("ECMWF: index " + std::to_string(n) + " field(s); parameters: " + ps.substr(0, 300));
-                turbPost("ECMWF: pressure levels: " + ls.substr(0, 200));
-                if (!uline.empty()) {
-                    auto num = [&](const char* k) { const size_t p = uline.find(std::string("\"") + k + "\": "); return p == std::string::npos ? -1LL : std::atoll(uline.c_str() + p + std::strlen(k) + 4); };
-                    const long long off = num("_offset"), len = num("_length");
-                    turbPost("ECMWF: u at 250 hPa: offset " + std::to_string(off) + ", " + std::to_string(len) + " bytes");
-                    std::string msg;
-                    if (off >= 0 && len > 0 && wx::httpGetRange(base + ".grib2", std::to_string(off) + "-" + std::to_string(off + len - 1), msg, st, err, 60, 16u << 20))
-                        turbPost("ECMWF: u 250 hPa message: " + gribTemplates(msg, 0));
-                    else turbPost("ECMWF: byte-range download failed: " + err);
-                } else turbPost("ECMWF: no u at 250 hPa in the index");
-            }
-        }
-        turbPost("data check done");
-    }).detach();
-}
-
-struct TurbTest {
-    bool active = false;
-    XPLMDataRef arr = nullptr, gN = nullptr, P = nullptr, Q = nullptr, R = nullptr, acT = nullptr, agl = nullptr, ias = nullptr;
-    int n = 0, step = -1;
-    std::vector<float> saved;
-    Clock::time_point stepStart, nextLog;
-    // per 10 s window and per step (second half only, after X-Plane has had time to apply it)
-    double sg = 0, sg2 = 0, sp2 = 0, sq2 = 0, sr2 = 0, sAc = 0; int cnt = 0;
-    double hg = 0, hg2 = 0, hq2 = 0, hAc = 0; int hcnt = 0;
-    double firstResp = -1;
-} g_tt;
-const float kTurbSteps[] = {0, 1, 2, 3, 5, 7, 10};
+wx::turb::Fetcher g_turbFetch;
+struct TurbState {
+    XPLMDataRef arr = nullptr, alts = nullptr, gN = nullptr, simT = nullptr, elev = nullptr;
+    int n = 0;
+    bool init = false, writing = false, everData = false, loggedNoArr = false;
+    std::vector<float> saved, sent;
+    std::vector<double> edrS;
+    Clock::time_point nextSample, nextWrite, nextLog;
+    double sg = 0, sg2 = 0; int cnt = 0;
+    std::string lastSource;
+} g_ts;
 
 void turbLog(const char* fmt, ...) {
-    char buf[700]; va_list ap; va_start(ap, fmt); std::vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
+    char buf[900]; va_list ap; va_start(ap, fmt); std::vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
     XPLMDebugString((std::string("[WXPlane Turbulence] ") + buf + "\n").c_str());
 }
 
-void turbSet(float v) {
-    std::vector<float> a((size_t)g_tt.n, v);
-    XPLMSetDatavf(g_tt.arr, a.data(), 0, g_tt.n);
+std::string utcHM(std::time_t t) {
+    std::tm g{};
+#ifdef _WIN32
+    gmtime_s(&g, &t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    char b[16]; std::strftime(b, sizeof b, "%H:%MZ", &g); return b;
 }
 
-void turbTestTick() {
-    { std::lock_guard<std::mutex> l(g_turbMx); for (const auto& s : g_turbLines) turbLog("%s", s.c_str()); g_turbLines.clear(); }
-    TurbTest& t = g_tt;
-    if (g_turbCmd) {
-        g_turbCmd = false;
-        if (t.active) {
-            XPLMSetDatavf(t.arr, t.saved.data(), 0, t.n);
-            t.active = false;
-            turbLog("test stopped; region turbulence put back");
-            return;
-        }
+void turbRestore(const char* why) {
+    TurbState& t = g_ts;
+    if (!t.writing) return;
+    if (t.arr && (int)t.saved.size() == t.n) XPLMSetDatavf(t.arr, t.saved.data(), 0, t.n);
+    t.writing = false;
+    turbLog("%s: X-Plane's region turbulence put back", why);
+}
+
+void turbulenceTick() {
+    for (const auto& s : g_turbFetch.takeLog()) turbLog("%s", s.c_str());
+    TurbState& t = g_ts;
+    if (!t.init) {
+        t.init = true;
         t.arr = XPLMFindDataRef("sim/weather/region/turbulence");
+        t.alts = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m");
         t.gN = XPLMFindDataRef("sim/flightmodel/forces/g_nrml");
-        t.P = XPLMFindDataRef("sim/flightmodel/position/P"); t.Q = XPLMFindDataRef("sim/flightmodel/position/Q"); t.R = XPLMFindDataRef("sim/flightmodel/position/R");
-        t.acT = XPLMFindDataRef("sim/weather/aircraft/turbulence");
-        t.agl = XPLMFindDataRef("sim/flightmodel/position/y_agl"); t.ias = XPLMFindDataRef("sim/flightmodel/position/indicated_airspeed");
-        turbDataProbe();
-        if (!t.arr || !XPLMCanWriteDataRef(t.arr)) { turbLog("sim/weather/region/turbulence %s: response test not possible (data check still runs)", t.arr ? "is read-only" : "not found"); return; }
-        t.n = XPLMGetDatavf(t.arr, nullptr, 0, 0);
-        if (t.n <= 0 || t.n > 64) { turbLog("sim/weather/region/turbulence has %d element(s): response test not possible", t.n); return; }
-        t.saved.assign((size_t)t.n, 0);
-        XPLMGetDatavf(t.arr, t.saved.data(), 0, t.n);
-        std::string sv; char b[16]; for (float v : t.saved) { std::snprintf(b, sizeof b, " %.2f", v); sv += b; }
-        turbLog("response test started: sim/weather/region/turbulence has %d element(s), now:%s; aircraft turbulence dataref %s. Steps 0,1,2,3,5,7,10 x 50 s; fly straight and level, autopilot on",
-                t.n, sv.c_str(), t.acT ? "found" : "missing");
-        t.active = true; t.step = -1;
-        t.stepStart = Clock::now() - std::chrono::seconds(100);
+        t.simT = XPLMFindDataRef("sim/time/total_running_time_sec");
+        t.elev = XPLMFindDataRef("sim/flightmodel/position/elevation");
+        if (t.arr) t.n = XPLMGetDatavf(t.arr, nullptr, 0, 0);
+        if (t.n < 0 || t.n > 64) t.n = 0;
     }
-    if (!t.active) return;
-    const auto now = Clock::now();
-    const double inStep = std::chrono::duration<double>(now - t.stepStart).count();
-    if (inStep >= 50.0) {
-        if (t.step >= 0) {
-            const double m = t.hcnt ? t.hg / t.hcnt : 0, sd = t.hcnt ? std::sqrt(std::max(0.0, t.hg2 / t.hcnt - m * m)) : 0;
-            turbLog("step %g done: last 25 s - load factor sd %.3f g, pitch-rate rms %.2f deg/s, X-Plane turbulence at the aircraft %.2f; first response after %.0f s",
-                    kTurbSteps[t.step], sd, t.hcnt ? std::sqrt(t.hq2 / t.hcnt) : 0, t.hcnt ? t.hAc / t.hcnt : 0, t.firstResp);
-        }
-        ++t.step;
-        if (t.step >= (int)(sizeof kTurbSteps / sizeof kTurbSteps[0])) {
-            XPLMSetDatavf(t.arr, t.saved.data(), 0, t.n);
-            t.active = false;
-            turbLog("response test complete; region turbulence put back");
-            return;
-        }
-        turbSet(kTurbSteps[t.step]);
-        t.stepStart = now; t.nextLog = now + std::chrono::seconds(10);
-        t.sg = t.sg2 = t.sp2 = t.sq2 = t.sr2 = t.sAc = 0; t.cnt = 0; t.hg = t.hg2 = t.hq2 = t.hAc = 0; t.hcnt = 0; t.firstResp = -1;
-        float back = 0; XPLMGetDatavf(t.arr, &back, 0, 1);
-        turbLog("step %g: region turbulence set to %g (reads back %.2f), aircraft %.0f ft AGL, IAS %.0f kt", kTurbSteps[t.step], kTurbSteps[t.step], back,
-                t.agl ? XPLMGetDataf(t.agl) / 0.3048 : 0.0, t.ias ? XPLMGetDataf(t.ias) : 0.0);
+    const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
+    const double altFt = t.elev ? XPLMGetDatad(t.elev) / 0.3048 : 0;
+    const bool on = g_cfg.enabled && g_cfg.realisticTurbulence && !(lat == 0 && lon == 0);
+    g_turbFetch.update(lat, lon, altFt, on);
+    if (!on) { turbRestore(g_cfg.realisticTurbulence ? "weather off" : "realistic turbulence off"); return; }
+    if (!t.arr || !XPLMCanWriteDataRef(t.arr) || t.n <= 0) {
+        if (!t.loggedNoArr) { t.loggedNoArr = true; turbLog("sim/weather/region/turbulence %s: realistic turbulence not possible", t.arr ? "is not writable" : "not found"); }
         return;
     }
-    // sample every frame
-    const double g = t.gN ? XPLMGetDataf(t.gN) : 1.0, p = t.P ? XPLMGetDataf(t.P) : 0, q = t.Q ? XPLMGetDataf(t.Q) : 0, r = t.R ? XPLMGetDataf(t.R) : 0;
-    const double ac = t.acT ? awGet(t.acT) : -1;
-    t.sg += g; t.sg2 += g * g; t.sp2 += p * p; t.sq2 += q * q; t.sr2 += r * r; t.sAc += ac; ++t.cnt;
-    if (inStep >= 25.0) { t.hg += g; t.hg2 += g * g; t.hq2 += q * q; t.hAc += ac; ++t.hcnt; }
-    if (t.firstResp < 0 && t.step > 0 && ac >= 0 && std::fabs(ac - kTurbSteps[t.step - 1] * 0.1) > 0.02) t.firstResp = inStep;
-    if (now >= t.nextLog && t.cnt > 1) {
-        t.nextLog = now + std::chrono::seconds(10);
-        const double m = t.sg / t.cnt, sd = std::sqrt(std::max(0.0, t.sg2 / t.cnt - m * m));
-        turbLog("  step %g +%.0f s: load factor %.3f +- %.3f g, rate rms p %.2f q %.2f r %.2f deg/s, X-Plane turbulence at the aircraft %.2f (%d samples)",
-                kTurbSteps[t.step], inStep, m, sd, std::sqrt(t.sp2 / t.cnt), std::sqrt(t.sq2 / t.cnt), std::sqrt(t.sr2 / t.cnt), t.sAc / t.cnt, t.cnt);
-        t.sg = t.sg2 = t.sp2 = t.sq2 = t.sr2 = t.sAc = 0; t.cnt = 0;
+    if (t.gN) { const double g = XPLMGetDataf(t.gN); t.sg += g; t.sg2 += g * g; ++t.cnt; }
+    const auto now = Clock::now();
+    if (now < t.nextSample) return;
+    t.nextSample = now + std::chrono::seconds(1);
+
+    std::vector<float> altM((size_t)t.n, 0.0f);
+    if (t.alts && XPLMGetDatavf(t.alts, altM.data(), 0, t.n) != t.n) for (int k = 0; k < t.n; ++k) altM[k] = (float)(k * 1000.0);
+    const wx::turb::Inputs in = g_turbFetch.inputs();
+    const std::time_t wall = std::time(nullptr);
+    const double simT = t.simT ? XPLMGetDataf(t.simT) : 0.0;
+    if (!in.gtgn && !in.ecA) return;   // nothing has arrived yet: X-Plane's values stay as they are
+    if ((int)t.edrS.size() != t.n) { t.edrS.assign((size_t)t.n, 0.0); t.sent.assign((size_t)t.n, 0.0f); }
+    const double scale = std::max(0.0, std::min(1.0, g_cfg.maxTurbulence)), a = 1.0 - std::exp(-1.0 / 20.0);
+    for (int k = 0; k < t.n; ++k) {
+        const wx::turb::Sample s = wx::turb::sampleAt(in, lat, lon, altM[k] / 0.3048, wall, simT);
+        const double e = s.edr * scale;
+        t.edrS[k] = t.everData ? t.edrS[k] + (e - t.edrS[k]) * a : e;
+    }
+    if (!t.everData) {
+        t.everData = true;
+        for (int k = 0; k < t.n; ++k) t.sent[k] = (float)wx::turb::edrToXpLevel(t.edrS[k]);   // start where the data is, then follow it gently
+    }
+    if (now >= t.nextWrite) {
+        t.nextWrite = now + std::chrono::seconds(5);
+        if (!t.writing) {
+            t.saved.assign((size_t)t.n, 0.0f);
+            XPLMGetDatavf(t.arr, t.saved.data(), 0, t.n);
+            t.writing = true;
+            t.nextLog = now;
+            turbLog("realistic turbulence on: writing sim/weather/region/turbulence (%d layers) every 5 s; max turbulence %.2f", t.n, scale);
+        }
+        for (int k = 0; k < t.n; ++k) {
+            const double target = wx::turb::edrToXpLevel(t.edrS[k]);
+            t.sent[k] += (float)std::max(-0.5, std::min(0.5, target - t.sent[k]));
+        }
+        XPLMSetDatavf(t.arr, t.sent.data(), 0, t.n);
+    }
+    // Log every minute, and when the source changes: what the data says at the aircraft and what X-Plane does with it.
+    const wx::turb::Sample here = wx::turb::sampleAt(in, lat, lon, altFt, wall, simT);
+    if (now >= t.nextLog || here.source != t.lastSource) {
+        t.nextLog = now + std::chrono::seconds(60);
+        if (here.source != t.lastSource && !t.lastSource.empty()) turbLog("source changed: %s -> %s", t.lastSource.c_str(), here.source);
+        t.lastSource = here.source;
+        // requested level at the aircraft's altitude (between the two layers around it) and what X-Plane holds there
+        std::vector<float> back((size_t)t.n, 0.0f);
+        XPLMGetDatavf(t.arr, back.data(), 0, t.n);
+        double req = t.sent[0], held = back[0], edrHere = t.edrS[0];
+        const double am = altFt * 0.3048;
+        for (int k = 0; k + 1 < t.n; ++k)
+            if (am >= altM[k] && am <= altM[k + 1] && altM[k + 1] > altM[k]) {
+                const double f = (am - altM[k]) / (altM[k + 1] - altM[k]);
+                req = t.sent[k] + (t.sent[k + 1] - t.sent[k]) * f; held = back[k] + (back[k + 1] - back[k]) * f; edrHere = t.edrS[k] + (t.edrS[k + 1] - t.edrS[k]) * f;
+            }
+        if (am > altM[t.n - 1]) { req = t.sent[t.n - 1]; held = back[t.n - 1]; edrHere = t.edrS[t.n - 1]; }
+        std::string data;
+        char b[300];
+        if (in.gtgn) { std::snprintf(b, sizeof b, "GTGN %s (%ld min old)%s", utcHM(in.gtgn->valid).c_str(), (long)(wall - in.gtgn->valid) / 60, wall - in.gtgn->valid > wx::turb::kGtgnMaxAgeS ? " STALE, not used" : ""); data += b; }
+        if (in.ecA) { std::snprintf(b, sizeof b, "%sECMWF %s%s", data.empty() ? "" : ", ", in.ecA->run.c_str(), in.ecB ? (" / " + in.ecB->run.substr(in.ecB->run.find('+'))).c_str() : ""); data += b; }
+        std::string parts;
+        if (here.gtgnEdr >= 0) { std::snprintf(b, sizeof b, " GTGN EDR %.3f", here.gtgnEdr); parts += b; }
+        if (here.ecTi >= 0) { std::snprintf(b, sizeof b, " ECMWF Ellrod TI1 %.1f (EDR-equivalent %.2f, estimate)", here.ecTi, here.ecEdr); parts += b; }
+        const double m = t.cnt ? t.sg / t.cnt : 1.0, sd = t.cnt > 1 ? std::sqrt(std::max(0.0, t.sg2 / t.cnt - m * m)) : 0.0;
+        turbLog("%s | data: %s | aircraft %.0f ft MSL:%s%s; coverage %.2f, variation x%.2f -> EDR %.3f (x max %.2f, smoothed %.3f) -> X-Plane level %.2f requested, %.2f held | load factor sd %.3f g over %d samples",
+                here.source, data.c_str(), altFt, parts.empty() ? " no value at this altitude" : parts.c_str(), "", here.coverage, here.noise, here.edr, scale,
+                edrHere, req, held, sd, t.cnt);
+        if (g_cfg.diagVerbosity >= 2) {
+            std::string L;
+            for (int k = 0; k < t.n; ++k) { std::snprintf(b, sizeof b, " %.0f:%.2f/%.2f", altM[k] / 0.3048, t.edrS[k], t.sent[k]); L += b; }
+            turbLog("  layers (ft: EDR/level):%s", L.c_str());
+        }
+        t.sg = t.sg2 = 0; t.cnt = 0;
     }
 }
 
@@ -2054,7 +1991,7 @@ float flightLoop(float, float, int, void*) {
     }
     windshearTick();
     dryRunwayTick();
-    turbTestTick();
+    turbulenceTick();
     if (g_eventDump && g_haveLast) { g_eventDump = false; logf("full weather picture at the aircraft for the event above:"); weatherWatch(); }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();
@@ -2249,7 +2186,7 @@ void drawWin(XPLMWindowID w, void*) {
 
 int clickWin(XPLMWindowID, int, int, XPLMMouseStatus, void*) { return 1; }
 
-// ---- Storm settings window: a slider for the storm turbulence (0-200 %) -------------------------------------------------------------
+// ---- Max turbulence window: one slider, 0 (no turbulence from WXPlane) to 1.0 (full realism) -------------------------------------------------------------
 void keyWin(XPLMWindowID, char, XPLMKeyFlags, char, void*, int);
 XPLMCursorStatus cursorWin(XPLMWindowID, int, int, void*);
 int wheelWin(XPLMWindowID, int, int, int, int, void*);
@@ -2264,18 +2201,18 @@ void drawSettings(XPLMWindowID w, void*) {
     XPLMGetFontDimensions(xplmFont_Proportional, &cw, &ch, nullptr);
     float white[3] = {0.9f, 0.9f, 0.9f}, grey[3] = {0.7f, 0.7f, 0.7f};
     char buf[160];
-    std::snprintf(buf, sizeof buf, "Storm turbulence: %d %%", (int)std::lround(g_cfg.radarTurbulence * 100.0));
+    std::snprintf(buf, sizeof buf, "Max turbulence: %.2f", g_cfg.maxTurbulence);
     XPLMDrawString(white, l + 14, t - 14 - ch, buf, nullptr, xplmFont_Proportional);
     g_sliderL = l + 18; g_sliderR = r - 18;
     const int ty = t - 52;
     XPLMDrawTranslucentDarkBox(g_sliderL, ty + 3, g_sliderR, ty - 3);
-    const double f = std::max(0.0, std::min(1.0, g_cfg.radarTurbulence / 2.0));
+    const double f = std::max(0.0, std::min(1.0, g_cfg.maxTurbulence));
     const int tx = g_sliderL + (int)std::lround(f * (g_sliderR - g_sliderL));
     XPLMDrawTranslucentDarkBox(tx - 5, ty + 10, tx + 5, ty - 10);
     XPLMDrawTranslucentDarkBox(tx - 3, ty + 8, tx + 3, ty - 8);
-    XPLMDrawString(grey, g_sliderL, ty - 18 - ch, (char*)"0 % (calm)", nullptr, xplmFont_Proportional);
-    XPLMDrawString(grey, g_sliderR - 90, ty - 18 - ch, (char*)"200 % (severe)", nullptr, xplmFont_Proportional);
-    XPLMDrawString(grey, l + 14, b + 12, (char*)"100 % = scaled to the radar reflectivity. Applied when you release the slider.", nullptr, xplmFont_Proportional);
+    XPLMDrawString(grey, g_sliderL, ty - 18 - ch, (char*)"0 (none)", nullptr, xplmFont_Proportional);
+    XPLMDrawString(grey, g_sliderR - 110, ty - 18 - ch, (char*)"1.0 (full realism)", nullptr, xplmFont_Proportional);
+    XPLMDrawString(grey, l + 14, b + 12, (char*)"Scales all of WXPlane's turbulence: real data, storms, gusts. Saved on release.", nullptr, xplmFont_Proportional);
 }
 
 int clickSettings(XPLMWindowID w, int x, int y, XPLMMouseStatus st, void*) {
@@ -2286,12 +2223,12 @@ int clickSettings(XPLMWindowID w, int x, int y, XPLMMouseStatus st, void*) {
     if (g_setDrag && (st == xplm_MouseDown || st == xplm_MouseDrag) && g_sliderR > g_sliderL) {
         double f = (double)(x - g_sliderL) / (double)(g_sliderR - g_sliderL);
         f = std::max(0.0, std::min(1.0, f));
-        g_cfg.radarTurbulence = std::round(f * 2.0 * 20.0) / 20.0;   // steps of 5 %
+        g_cfg.maxTurbulence = std::round(f * 20.0) / 20.0;   // steps of 0.05
     }
     if (st == xplm_MouseUp && g_setDrag) {
         g_setDrag = false;
         wx::saveConfig(g_cfgPath, g_cfg);
-        if (g_cfg.enabled && g_cfg.radar) { if (g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
+        if (g_cfg.enabled && g_haveLast) g_reapplyRequested = true;   // storm and gust turbulence are rebuilt; the real-data part follows within seconds
     }
     return 1;
 }
@@ -2316,7 +2253,7 @@ void showSettings() {
         p.decorateAsFloatingWindow = xplm_WindowDecorationRoundRectangle;
         p.layer = xplm_WindowLayerFloatingWindows;
         g_setWin = XPLMCreateWindowEx(&p);
-        if (g_setWin) XPLMSetWindowTitle(g_setWin, "WXPlane - storm settings");
+        if (g_setWin) XPLMSetWindowTitle(g_setWin, "WXPlane - max turbulence");
     }
     if (g_setWin) { XPLMSetWindowIsVisible(g_setWin, 1); XPLMBringWindowToFront(g_setWin); }
 }
@@ -2382,8 +2319,8 @@ void menuHandler(void*, void* item) {
         case kSettings:
             showSettings();
             break;
-        case kTurbTest:
-            g_turbCmd = true;   // started in the pre-flight-model loop
+        case kTurbulence:
+            g_cfg.realisticTurbulence = !g_cfg.realisticTurbulence;   // applied (or X-Plane's values put back) by the loop
             break;
         case kWindshear:
             g_cfg.windshear = !g_cfg.windshear;
@@ -2440,14 +2377,15 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxAloft = XPLMAppendMenuItem(g_menu, "Use NOAA Winds/Temps Aloft", (void*)(intptr_t)kAloft, 0);
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
-    XPLMAppendMenuItem(g_menu, "Storm Settings (turbulence)...", (void*)(intptr_t)kSettings, 0);
     g_idxWindshear = XPLMAppendMenuItem(g_menu, "Enable Realistic Windshear", (void*)(intptr_t)kWindshear, 0);
-    XPLMAppendMenuItem(g_menu, "Turbulence Test: X-Plane response + data check (6 min)", (void*)(intptr_t)kTurbTest, 0);
+    g_idxTurbulence = XPLMAppendMenuItem(g_menu, "Enable Realistic Turbulence", (void*)(intptr_t)kTurbulence, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);
     XPLMEnableMenuItem(g_menu, g_idxStatus1, 0);
     XPLMEnableMenuItem(g_menu, g_idxStatus2, 0);
+    XPLMAppendMenuSeparator(g_menu);
+    XPLMAppendMenuItem(g_menu, "Max Turbulence...", (void*)(intptr_t)kSettings, 0);
     syncMenu();
     return 1;
 }
@@ -2466,6 +2404,7 @@ PLUGIN_API void XPluginStop(void) {
 PLUGIN_API int XPluginEnable(void) {
     wx::httpGlobalInit();
     g_fetcher.start();
+    g_turbFetch.start();
     g_enabledAt = Clock::now();
     g_loopStarted = false;
     g_visK = (float)g_cfg.visScale;
@@ -2498,6 +2437,8 @@ PLUGIN_API int XPluginEnable(void) {
 PLUGIN_API void XPluginDisable(void) {
     g_pluginEnabled = false;
     g_fetcher.stop();
+    g_turbFetch.stop();
+    turbRestore("plugin disabled");
     wx::httpGlobalCleanup();
     // Give weather back to X-Plane so our fog/cloud records don't outlive the plugin. The weather API may only be used from the
     // pre-flight-model callback, so the erase is done there on the next frame (the loop stays alive until XPluginStop); only if
