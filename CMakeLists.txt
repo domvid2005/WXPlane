@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")  # static CRT, matches vcpkg x64-windows-static
+if(CMAKE_HOST_APPLE)   # before project() and the dependencies, so OpenJPEG and libaec are built universal too
+  set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
+endif()
 project(WXPlane LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -62,8 +66,6 @@ if(WIN32)
   target_link_libraries(WXPlane PRIVATE "${XPLANE_SDK}/Libraries/Win/XPLM_64.lib")
 elseif(APPLE)
   set(WX_PLATFORM_DIR mac_x64)
-  set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
   target_compile_definitions(WXPlane PRIVATE APL=1)
   target_link_options(WXPlane PRIVATE -undefined dynamic_lookup)
 else()
