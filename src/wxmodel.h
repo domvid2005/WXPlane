@@ -20,6 +20,12 @@ struct Station {
     std::string atisLetter;
     std::string atisText;
     std::string filled;      // what was corrected from NOAA's decoded fields or filled in from neighbouring stations
+    // Recent precipitation (2026-11-06, dry runways), from this station's reports of the last ~70 minutes and its remarks:
+    long long obsTime = 0;   // unix time of the report (AWC obsTime)
+    double rainMinAgo = -1;  // minutes before this report that precipitation was last seen (0 = now); -1 = none in the history
+    double historyMin = 0;   // how many minutes back the history reaches (other reports, begin/end remarks)
+    bool frozenRecent = false;   // snow, ice pellets, hail or freezing precipitation in the history (runway left alone)
+    std::string rainWhy;     // what the history was read from
 };
 
 struct XpCloud {
@@ -93,6 +99,10 @@ int validateXp(XpWx& x, bool allowOverlap, std::string* note = nullptr);
 
 // True if this station's report calls for a fog layer under the given config.
 bool stationHasFog(const Station& st, const Config& cfg);
+
+// Dry runway (2026-11-06): true when the report is current (<= 90 min), nothing frozen is in its history, and no precipitation was seen
+// for at least dryMin minutes (counting the report's age), with a history long enough to know. `why` says which way and why.
+bool runwayShouldBeDry(const Station& s, std::time_t now, double dryMin, std::string* why);
 
 // One-line human-readable summary of what is applied for a station (used by the METAR/ATIS window).
 std::string describeXp(const XpWx& x, double elevM);

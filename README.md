@@ -427,3 +427,19 @@ Menu **Enable Realistic Windshear** (off by default) and **Windshear Test: event
 real convection (radar echoes, TS reports) with seeded, frame-rate-independent probabilities. They are sent to X-Plane as low-level wind
 records, ahead of time and scaled for X-Plane's fade-in and blending. Downdrafts are modelled and logged only: X-Plane's weather API has
 no vertical wind. Details, limits and calibration: `docs/windshear.md`.
+
+## Dry runways when no recent rain (2026-11-06)
+
+Menu **Dry Runways When No Recent Rain** (on by default; `dry_runways`, `dry_runway_min = 45`).
+- **History:** the METAR request now asks for the last 2 hours. Each station keeps its latest report; the older reports (up to 80 min
+  back), begin/end remarks (`RAB10E35`, `RAE50`), hourly amounts (`P0000`) and recent-weather groups (`RERA`) tell when precipitation
+  was last seen. Showers in the vicinity (`VCSH`) don't count.
+- **What it changes:** near the airport the aircraft is at or approaching (within 8 nm, below 3,000 ft AGL), X-Plane's runway state
+  (`sim/weather/region/runway_friction`) is set to dry, when all of these hold:
+  - that airport has had no precipitation for 45 minutes, counting the report's age;
+  - the report is no more than 90 minutes old;
+  - the history reaches back far enough;
+  - WXPlane sends no rain there;
+  - the runway is currently wet or puddly (1–6).
+- **What it never touches:** snow or ice (7–15), or anything after snow or freezing precipitation in the last hour.
+- **Log:** every decision is logged as "dry runway: …".

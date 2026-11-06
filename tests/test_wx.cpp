@@ -1140,6 +1140,53 @@ int main() {
         CHECK(buildXp(r, dc, now).precip > 0.0f);
     }
 
+    // ---- dry runways (2026-11-06): recent precipitation from report history and remarks ---------------------------------------------
+    {
+        NEAR(remarkPrecipEndedMinAgo("KAAA 061953Z AUTO 27005KT 10SM CLR 20/10 A3000 RMK AO2 RAB10E35 SLP155", 53), 18.0, 0.01);
+        NEAR(remarkPrecipEndedMinAgo("KAAA 061953Z AUTO 27005KT 10SM CLR 20/10 A3000 RMK AO2 RAB1912E1938 SLP155", 53), 15.0, 0.01);
+        NEAR(remarkPrecipEndedMinAgo("KAAA 061953Z AUTO 27005KT 10SM -RA OVC020 20/18 A3000 RMK AO2 RAB45 SLP155", 53), 0.0, 0.01);   // began, still going
+        NEAR(remarkPrecipEndedMinAgo("KAAA 061953Z AUTO 27005KT 10SM CLR 20/10 A3000 RMK AO2 TSB10E30 RAE25 SLP155", 53), 28.0, 0.01);
+        NEAR(remarkPrecipEndedMinAgo("KAAA 061905Z AUTO 27005KT 10SM CLR 20/10 A3000 RMK AO2 RAE50 SLP155", 5), 15.0, 0.01);          // ended in the previous hour
+        CHECK(remarkPrecipEndedMinAgo("KAAA 061953Z AUTO 27005KT 10SM CLR 20/10 A3000 RMK AO2 SLP155", 53) < 0);
+        bool fz = false; remarkPrecipEndedMinAgo("KAAA 061953Z AUTO 27005KT 10SM CLR M02/M05 A3000 RMK AO2 SNE20 SLP155", 53, &fz); CHECK(fz);
+        auto st = [](const char* raw, long long t) { Station s; s.icao = "KAAA"; s.lat = 30; s.lon = -90; s.rawMetar = raw; parseReport(raw, s.report); s.obsTime = t; return s; };
+        const long long T = 1793994780;   // 2026-11-06 19:53Z, the time of the reports below
+        {   // rain in the report 30 min earlier: not dry for a 45 min rule
+            std::vector<Station> v = {st("KAAA 061953Z 27005KT 10SM CLR 20/10 A3000", T), st("KAAA 061923Z 27005KT 5SM -RA OVC020 18/16 A3000", T - 1800)};
+            foldReportHistory(v);
+            CHECK(v.size() == 1 && v[0].obsTime == T && std::fabs(v[0].rainMinAgo - 30) < 0.01 && v[0].historyMin >= 30);
+            std::string why;
+            CHECK(!runwayShouldBeDry(v[0], (std::time_t)T, 45, &why) && why.find("30 min ago") != std::string::npos);
+            CHECK(runwayShouldBeDry(v[0], (std::time_t)(T + 20 * 60), 45, &why));   // 20 minutes later the report is 20 min old: 50 min dry
+        }
+        {   // an hour of clean reports: dry; the same with snow: left alone; rain now: not dry
+            std::vector<Station> v = {st("KAAA 061953Z 27005KT 10SM CLR 20/10 A3000", T), st("KAAA 061853Z 27005KT 10SM CLR 20/10 A3000", T - 3600)};
+            foldReportHistory(v);
+            CHECK(v[0].rainMinAgo < 0 && runwayShouldBeDry(v[0], (std::time_t)T, 45, nullptr));
+            std::vector<Station> sn = {st("KAAA 061953Z 27005KT 10SM CLR M01/M05 A3000", T), st("KAAA 061853Z 27005KT 2SM -SN OVC010 M01/M03 A3000", T - 3600)};
+            foldReportHistory(sn);
+            CHECK(sn[0].frozenRecent && !runwayShouldBeDry(sn[0], (std::time_t)T, 45, nullptr));
+            std::vector<Station> now = {st("KAAA 061953Z 27005KT 3SM RA OVC010 20/18 A3000", T)};
+            foldReportHistory(now);
+            CHECK(now[0].rainMinAgo == 0 && !runwayShouldBeDry(now[0], (std::time_t)T, 45, nullptr));
+        }
+        {   // no history to judge by (a single report, no AO2 remarks): not dried; an AO2 station's remarks cover an hour
+            std::vector<Station> one = {st("KAAA 061953Z 27005KT 10SM CLR 20/10 A3000", T)};
+            foldReportHistory(one);
+            std::string why;
+            CHECK(!runwayShouldBeDry(one[0], (std::time_t)T, 45, &why) && why.find("history") != std::string::npos);
+            std::vector<Station> ao2 = {st("KAAA 061953Z AUTO 27005KT 10SM CLR 20/10 A3000 RMK AO2 SLP155", T)};
+            foldReportHistory(ao2);
+            CHECK(runwayShouldBeDry(ao2[0], (std::time_t)T, 45, nullptr));
+            std::vector<Station> tr = {st("KAAA 061953Z AUTO 27005KT 10SM CLR 20/10 A3000 RMK AO2 SLP155 P0000", T)};   // a trace in the last hour
+            foldReportHistory(tr);
+            CHECK(!runwayShouldBeDry(tr[0], (std::time_t)T, 45, nullptr));
+            std::vector<Station> vc = {st("KAAA 061953Z 27005KT 10SM VCSH SCT030 20/10 A3000", T), st("KAAA 061853Z 27005KT 10SM CLR 20/10 A3000", T - 3600)};
+            foldReportHistory(vc);
+            CHECK(vc[0].rainMinAgo < 0);   // showers in the vicinity are not rain at the airport
+        }
+    }
+
     // ---- windshear model (2026-11-06): scenarios A-K of the specification --------------------------------------------------------------
     {
         using namespace wx::shear;

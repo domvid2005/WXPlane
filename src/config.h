@@ -77,6 +77,8 @@ struct Config {
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
     bool smoothPressure = true;
+    bool dryRunways = true;           // runway dry near an airport with no precipitation for dry_runway_min (menu: Dry Runways When No Recent Rain)
+    double dryRunwayMin = 45;         // minutes without precipitation before the runway is dried
     bool windshear = false;           // realistic windshear (menu: Enable Realistic Windshear), off for existing installations
     int windshearSeed = 1;            // fixed seed: the same weather gives the same windshear fields
     double windshearGain = 2.5;       // X-Plane delivered ~40 % of the cells' outflow in the first microburst test (2026-11-06): sent this much stronger

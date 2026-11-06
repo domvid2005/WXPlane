@@ -327,6 +327,24 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     return x;
 }
 
+bool runwayShouldBeDry(const Station& s, std::time_t now, double dryMin, std::string* why) {
+    char b[200];
+    const double age = reportAgeSeconds(s.report, now) / 60.0;
+    auto say = [&](const char* fmt, double a, double c) { if (why) { std::snprintf(b, sizeof b, fmt, a, c); *why = b; } };
+    if (age > 90.0) { say("report %.0f min old%.0s", age, 0); return false; }
+    if (s.frozenRecent) { say("snow, ice or freezing precipitation in the last hour%.0s%.0s", 0, 0); return false; }
+    if (s.rainMinAgo == 0) { say("precipitation now%.0s%.0s", 0, 0); return false; }
+    if (s.rainMinAgo > 0) {
+        const double since = s.rainMinAgo + age;
+        if (since < dryMin) { say("precipitation %.0f min ago (dry needs %.0f)", since, dryMin); return false; }
+        say("last precipitation %.0f min ago (dry needs %.0f)", since, dryMin);
+        return true;
+    }
+    if (s.historyMin + age < dryMin) { say("only %.0f min of history (dry needs %.0f)", s.historyMin + age, dryMin); return false; }
+    say("no precipitation in the last %.0f min (dry needs %.0f)", s.historyMin + age, dryMin);
+    return true;
+}
+
 int magneticToTrue(int dirMag, double varEastDeg, bool calmOrVariable) {
     if (calmOrVariable || !std::isfinite(varEastDeg)) return dirMag;
     int t = (int)std::lround(std::fmod(dirMag + varEastDeg + 720.0, 360.0));

@@ -43,14 +43,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kWindshear, kWsForce };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kWindshear, kWsForce, kDryRunways };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxWindshear = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxWindshear = -1, g_idxDry = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -126,6 +126,7 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
+    if (g_idxDry >= 0) XPLMCheckMenuItem(g_menu, g_idxDry, g_cfg.dryRunways ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxWindshear >= 0) XPLMCheckMenuItem(g_menu, g_idxWindshear, g_cfg.windshear ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
 
@@ -469,6 +470,52 @@ void surfaceDiag() {
          done, best ? best->icao.c_str() : "none", bd, raw.substr(0, 120).c_str(), best ? best->info.precip_rate : 0.0f,
          drRain ? std::to_string(XPLMGetDataf(drRain)).c_str() : "n/a", drFr ? std::to_string(XPLMGetDatai(drFr)).c_str() : "n/a",
          drPr ? std::to_string(XPLMGetDataf(drPr)).c_str() : "n/a");
+}
+
+// ---- Dry runways (2026-11-06) ---------------------------------------------------------------------------------------------------------
+// X-Plane can leave the pavement wet (its own weather before WXPlane took over, or rain that has long stopped). Near an airport whose
+// reports show no precipitation for dry_runway_min minutes (current report, older reports of the last ~70 min, begin/end remarks, hourly
+// amounts, recent-weather groups), the sim's runway state is set to dry - only when it is wet or puddly, never when it shows snow or ice,
+// and never where WXPlane itself sends rain. The runway state is region-wide in X-Plane, so it follows the airport the aircraft is at
+// or approaching (within 8 nm, below 3,000 ft AGL). Everything it sees and does is logged with the prefix "dry runway".
+void dryRunwayTick() {
+    static Clock::time_point next{};
+    if (!g_cfg.dryRunways || !g_haveLast || g_lastRes.stations.empty() || Clock::now() < next) return;
+    next = Clock::now() + std::chrono::seconds(10);
+    static XPLMDataRef drFr = XPLMFindDataRef("sim/weather/region/runway_friction"), drPatchy = XPLMFindDataRef("sim/weather/region/runway_is_patchy"),
+                       drRain = XPLMFindDataRef("sim/weather/region/rain_percent"), drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+    static bool reported = false;
+    if (!reported) {
+        reported = true;
+        logf("dry runway: runway_friction %s%s, runway_is_patchy %s, rain_percent %s", drFr ? "found" : "MISSING", drFr && XPLMCanWriteDataRef(drFr) ? " (writable)" : (drFr ? " (read-only)" : ""),
+             drPatchy ? "found" : "missing", drRain ? "found" : "missing");
+    }
+    if (!drFr || !XPLMCanWriteDataRef(drFr)) return;
+    const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), agl = drAgl ? XPLMGetDataf(drAgl) / 0.3048 : 0.0;
+    if (agl > 3000.0) return;
+    const wx::Station* best = nullptr; double bd = 1e9;
+    for (const auto& s : g_lastRes.stations) { const double d = wx::distNm(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = &s; } }
+    if (!best || bd > 8.0) return;
+    std::string why;
+    bool dry = wx::runwayShouldBeDry(*best, std::time(nullptr), g_cfg.dryRunwayMin, &why);
+    auto it = g_recs.find(best->icao);
+    if (dry && it != g_recs.end() && it->second.info.precip_rate > 0.0f) { dry = false; why = "WXPlane sends rain there (radar)"; }
+    const int fr = XPLMGetDatai(drFr);
+    // X-Plane's runway state: 0 dry, 1-3 wet, 4-6 puddly, 7-9 snowy, 10-12 icy, 13-15 snowy and icy (light / medium / heavy)
+    static std::string lastLine;
+    char b[420];
+    if (dry && fr >= 1 && fr <= 6) {
+        XPLMSetDatai(drFr, 0);
+        const int after = XPLMGetDatai(drFr);
+        std::snprintf(b, sizeof b, "dry runway: %s (%.1f nm): %s - runway state %d -> %d%s", best->icao.c_str(), bd, why.c_str(), fr, after,
+                      after != 0 ? " (X-Plane did not take it)" : "");
+        logf("%s", b);
+        lastLine.clear();
+        return;
+    }
+    std::snprintf(b, sizeof b, "dry runway: %s (%.1f nm): %s - runway state %d, %s%s", best->icao.c_str(), bd, why.c_str(), fr,
+                  !dry ? "left as it is" : (fr == 0 ? "already dry" : "snow/ice, left as it is"), best->rainWhy.empty() ? "" : (" [" + best->rainWhy + "]").c_str());
+    if (lastLine != best->icao + why.substr(0, 20) + std::to_string(fr)) { logf("%s", b); lastLine = best->icao + why.substr(0, 20) + std::to_string(fr); }
 }
 
 // ---- Realistic windshear (2026-11-06) ------------------------------------------------------------------------------------------------
@@ -1850,6 +1897,7 @@ float flightLoop(float, float, int, void*) {
         if (Clock::now() >= nextRegion) { nextRegion = Clock::now() + std::chrono::seconds(20); regionTick(); }
     }
     windshearTick();
+    dryRunwayTick();
     if (g_eventDump && g_haveLast) { g_eventDump = false; logf("full weather picture at the aircraft for the event above:"); weatherWatch(); }
     if (g_watchOn && Clock::now() >= g_watchAt) {
         weatherWatch();
@@ -2184,6 +2232,10 @@ void menuHandler(void*, void* item) {
         case kWsForce:
             g_wsCmd = 2;
             break;
+        case kDryRunways:
+            g_cfg.dryRunways = !g_cfg.dryRunways;
+            logf("dry runways when no recent rain: %s", g_cfg.dryRunways ? "ON" : "OFF");
+            break;
         case kRadar:
             g_cfg.radar = !g_cfg.radar;
             if (g_cfg.enabled) { if (g_cfg.radar && g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
@@ -2236,6 +2288,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     XPLMAppendMenuItem(g_menu, "Storm Settings (turbulence)...", (void*)(intptr_t)kSettings, 0);
+    g_idxDry = XPLMAppendMenuItem(g_menu, "Dry Runways When No Recent Rain", (void*)(intptr_t)kDryRunways, 0);
     g_idxWindshear = XPLMAppendMenuItem(g_menu, "Enable Realistic Windshear", (void*)(intptr_t)kWindshear, 0);
     XPLMAppendMenuItem(g_menu, "Windshear Test: event ahead now (microburst / gust front, alternating)", (void*)(intptr_t)kWsForce, 0);
     XPLMAppendMenuSeparator(g_menu);

@@ -1,6 +1,10 @@
 #include "sources.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <map>
+#include <sstream>
 #include <cmath>
 #include "geo.h"
 #include <cstdio>
@@ -17,7 +21,7 @@ std::string awcMetarUrl(double lat, double lon, double searchNm) {
     double minLon = std::max(-180.0, lon - dLon), maxLon = std::min(180.0, lon + dLon);
     char buf[256];
     std::snprintf(buf, sizeof buf,
-                  "https://aviationweather.gov/api/data/metar?bbox=%.3f,%.3f,%.3f,%.3f&format=json",
+                  "https://aviationweather.gov/api/data/metar?bbox=%.3f,%.3f,%.3f,%.3f&format=json&hours=2",
                   minLat, minLon, maxLat, maxLon);
     return buf;
 }
@@ -129,9 +133,140 @@ std::vector<Station> parseAwcMetarJson(const std::string& body, std::string* err
         s.lon = lon->asNum();
         const Json* el = o.get("elev");
         s.elevM = el ? el->asNum(0) : 0; // AWC reports station elevation in metres
+        const Json* ot = o.get("obsTime");
+        s.obsTime = ot ? (long long)ot->asNum(0) : 0;
         out.push_back(std::move(s));
     }
+    foldReportHistory(out);
     return out;
+}
+
+namespace {
+bool precipNow(const Report& r) {
+    if (r.precip > 0 || r.thunder || r.snow || r.freezing) return true;
+    const std::string& w = r.wxText;
+    for (const char* k : {"RA", "DZ", "SN", "SG", "PL", "GR", "GS", "UP", "IC", "SH"})
+        for (size_t p = w.find(k); p != std::string::npos; p = w.find(k, p + 1)) {
+            if (p >= 2 && w.compare(p - 2, 2, "VC") == 0) continue;   // in the vicinity, not at the airport
+            return true;
+        }
+    return false;
+}
+bool frozenWx(const Report& r) {
+    if (r.snow || r.freezing) return true;
+    const std::string& w = r.wxText;
+    return w.find("SN") != std::string::npos || w.find("PL") != std::string::npos || w.find("GR") != std::string::npos ||
+           w.find("GS") != std::string::npos || w.find("IC") != std::string::npos || w.find("FZ") != std::string::npos;
+}
+}  // namespace
+
+double remarkPrecipEndedMinAgo(const std::string& raw, int obsMinute, bool* frozen) {
+    const size_t rmk = raw.find(" RMK ");
+    if (rmk == std::string::npos) return -1;
+    std::istringstream in(raw.substr(rmk + 5));
+    std::string tok;
+    double best = -1;   // the most recent end (smallest minutes ago); 0 = still going on
+    auto minutesAgo = [&](const std::string& d) -> double {
+        int hh = -1, mm;
+        if (d.size() == 4) { hh = std::atoi(d.substr(0, 2).c_str()); mm = std::atoi(d.substr(2).c_str()); }
+        else mm = std::atoi(d.c_str());
+        (void)hh;   // hhmm: the hour is the previous or current one; the minutes decide like the 2-digit form
+        int ago = obsMinute - mm;
+        if (ago < 0) ago += 60;
+        return ago;
+    };
+    while (in >> tok) {
+        // a precipitation type followed by B/E times, e.g. RAB10E35, SHRAB0955E1010B25, TSB12E48, FZRAE05
+        size_t i = 0;   // the type: letters up to the first B/E that starts a time
+        while (i < tok.size() && std::isupper((unsigned char)tok[i]) &&
+               !((tok[i] == 'B' || tok[i] == 'E') && i + 1 < tok.size() && std::isdigit((unsigned char)tok[i + 1]))) ++i;
+        std::string type = tok.substr(0, i);
+        if (type.size() < 2 || i >= tok.size()) continue;
+        static const char* kTypes[] = {"RA", "DZ", "SN", "SG", "PL", "GR", "GS", "UP", "IC", "TS"};
+        bool isPrecip = false;
+        for (const char* k : kTypes) if (type.find(k) != std::string::npos) isPrecip = true;
+        if (!isPrecip) continue;
+        // walk B/E times; the last event decides
+        char last = 0; double lastAgo = -1;
+        size_t k = i;
+        while (k < tok.size() && (tok[k] == 'B' || tok[k] == 'E')) {
+            const char ev = tok[k++];
+            size_t d0 = k;
+            while (k < tok.size() && std::isdigit((unsigned char)tok[k])) ++k;
+            const std::string digits = tok.substr(d0, k - d0);
+            if (digits.size() != 2 && digits.size() != 4) break;
+            last = ev; lastAgo = minutesAgo(digits);
+            // another type may follow (RAB05E20SNB20): skip its letters up to its own B/E time
+            while (k < tok.size() && std::isupper((unsigned char)tok[k]) &&
+                   !((tok[k] == 'B' || tok[k] == 'E') && k + 1 < tok.size() && std::isdigit((unsigned char)tok[k + 1]))) ++k;
+        }
+        if (!last) continue;
+        if (frozen && (type.find("SN") != std::string::npos || type.find("PL") != std::string::npos || type.find("GR") != std::string::npos ||
+                       type.find("GS") != std::string::npos || type.find("IC") != std::string::npos || type.find("FZ") != std::string::npos))
+            *frozen = true;
+        const double ago = last == 'B' ? 0.0 : lastAgo;   // began (again) and not ended: still going on
+        if (type == "TS" && last == 'E') continue;          // thunder ending says nothing about rain
+        if (best < 0 || ago < best) best = ago;
+    }
+    return best;
+}
+
+void foldReportHistory(std::vector<Station>& st) {
+    std::map<std::string, std::vector<size_t>> by;
+    std::vector<std::string> order;   // first appearance, so the answer's order is kept
+    for (size_t i = 0; i < st.size(); ++i) { auto& v = by[st[i].icao]; if (v.empty()) order.push_back(st[i].icao); v.push_back(i); }
+    std::vector<Station> out;
+    for (const auto& id : order) {
+        std::vector<size_t>& ix = by[id];
+        std::sort(ix.begin(), ix.end(), [&](size_t a, size_t b) { return st[a].obsTime > st[b].obsTime; });
+        Station s = st[ix[0]];
+        const Report& r = s.report;
+        double ago = -1, hist = 0;
+        bool frozen = false;
+        std::string why;
+        auto seen = [&](double m) { if (ago < 0 || m < ago) ago = m; };
+        if (precipNow(r)) { seen(0); why = "precipitation in the report"; if (frozenWx(r)) frozen = true; }
+        for (size_t k = 1; k < ix.size(); ++k) {   // the older reports of the same station
+            const Station& o = st[ix[k]];
+            if (s.obsTime <= 0 || o.obsTime <= 0) continue;
+            const double m = (s.obsTime - o.obsTime) / 60.0;
+            if (m <= 0 || m > 80) continue;
+            hist = std::max(hist, m);
+            if (precipNow(o.report)) { seen(m); if (why.empty()) why = "precipitation in the report " + std::to_string((int)m) + " min earlier"; if (frozenWx(o.report)) frozen = true; }
+        }
+        bool fz = false;
+        const double rm = remarkPrecipEndedMinAgo(s.rawMetar, s.report.minute, &fz);
+        if (rm >= 0) { seen(rm); if (why.empty()) why = "remarks: ended " + std::to_string((int)rm) + " min before the report"; }
+        if (fz) frozen = true;
+        // US automated stations (AO2) report begin/end times since the previous routine report: an hour of history
+        if (s.rawMetar.find(" AO2") != std::string::npos) hist = std::max(hist, 60.0);
+        // hourly amount P0000 (trace) / Pxxxx, or a recent-weather group (RERA, RESHRA, RETS...): some time in the last hour
+        {
+            std::istringstream in(s.rawMetar);
+            std::string t;
+            bool inRmk = false;
+            while (in >> t) {
+                if (t == "RMK") { inRmk = true; continue; }
+                if (!inRmk && t.size() == 5 && t[0] == 'P') continue;   // only the remarks' hourly amount, not a body group
+                if (inRmk && !(t.size() == 5 && t[0] == 'P')) continue;
+                if (t.size() == 5 && t[0] == 'P' && std::all_of(t.begin() + 1, t.end(), [](char c) { return std::isdigit((unsigned char)c); }) && rm < 0) {
+                    seen(30); if (why.empty()) why = "hourly precipitation " + t + " (time unknown, taken as 30 min ago)";
+                }
+                if (t.size() >= 4 && t.compare(0, 2, "RE") == 0 && t != "RERA" && t.find_first_of("0123456789") == std::string::npos && t != "REMARK") {
+                    if (t.find("RA") != std::string::npos || t.find("DZ") != std::string::npos || t.find("SN") != std::string::npos || t.find("TS") != std::string::npos || t.find("SH") != std::string::npos) {
+                        seen(30); if (why.empty()) why = "recent weather " + t;
+                    }
+                } else if (t == "RERA") { seen(30); if (why.empty()) why = "recent weather RERA"; }
+            }
+        }
+        if (frozen || (r.hasTemp && r.tempC <= 0.0 && ago >= 0)) frozen = true;
+        s.rainMinAgo = ago;
+        s.historyMin = hist;
+        s.frozenRecent = frozen;
+        s.rainWhy = why;
+        out.push_back(std::move(s));
+    }
+    st.swap(out);
 }
 
 std::string checkStationElevations(std::vector<Station>& st) {

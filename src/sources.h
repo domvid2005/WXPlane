@@ -15,6 +15,12 @@ std::vector<Station> parseAwcMetarJson(const std::string& body, std::string* err
 // out-of-range values take the neighbours' median. Returns one log line per corrected station (empty when nothing changed).
 std::string checkStationElevations(std::vector<Station>& st);
 
+// The METAR request asks for the last ~70 minutes; this keeps the latest report per station and fills its recent-precipitation fields
+// from the older ones and from begin/end remarks (RAB10E35, TSE48, ...), hourly amounts (P0000) and recent-weather groups (RERA).
+void foldReportHistory(std::vector<Station>& st);
+// Minutes since precipitation ended according to one report's remarks; -1 if the remarks say nothing, 0 if it is still going on.
+double remarkPrecipEndedMinAgo(const std::string& raw, int obsMinute, bool* frozen = nullptr);
+
 // datis.clowd.io/api/<ICAO> -> concatenated ATIS text ("" if none). `letter` gets the information letter if present.
 bool parseDatisJson(const std::string& body, std::string& text);
 
