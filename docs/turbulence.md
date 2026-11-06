@@ -23,9 +23,10 @@ Log lines start with `[WXPlane Turbulence]`.
 | Size | ~0.6 MB per level (about 3–5 MB per 15 min in cruise) | ~11 MB per step (a step lasts 3 h) |
 | Used when | analysis ≤ 45 min old | step within 4 h of now; FL100 to FL500 only |
 
-- **GTGN files:** the day folder (`gtgn.YYYYMMDD/`, today and then yesterday) is listed, and the newest `.grib2` file in it is
-  used, preferring a 3 km one. The valid time comes from the file's own GRIB2 header. The first build guessed the names from NWS
-  SCN 26-62 (`gtgn.tHHMMz.3km.grib2`); NOMADS answered 404 to all of them. The log now names the newest files it sees.
+- **GTGN files:** NOMADS keeps them in hour folders, `gtgn.YYYYMMDD/HH/gtgn.tHHMMz.3km.grib2` (seen 2026-11-06), about 27 MB
+  each and posted 1–2 minutes after their time. There are no `.idx` files. The newest of the last 2 hours is tried by name. The
+  valid time comes from the GRIB2 header. The first builds used `gtgn.YYYYMMDD/gtgn.tHHMMz.3km.grib2` (from NWS SCN 26-62) and the
+  day-folder listing; both missed the hour folder.
 - **Crops:** GTGN levels are cropped to 141 x 141 points (about 210 km) around the aircraft, and ECMWF fields to ±12°. They are cropped
   again when the aircraft nears the edge, from the downloaded bytes.
 - **Choosing a source:** ECMWF is downloaded only when GTGN does not fully cover the aircraft (outside the US, near the edge of the

@@ -449,7 +449,7 @@ Menu **Enable Realistic Turbulence** (on by default) and **Max Turbulence...** (
   and X-Plane's own values are put back when the feature is turned off.
 - **Stale data is not used:** a GTGN analysis older than 45 minutes, or an ECMWF step more than 4 hours from now, is ignored.
   With no current data, nothing is added.
-- **GTGN files** are taken from the NOMADS day-folder listing (guessed names were refused).
+- **GTGN files** are in hour folders on NOMADS: `gtgn.YYYYMMDD/HH/gtgn.tHHMMz.3km.grib2`.
 - **Log:** lines start with `[WXPlane Turbulence]`, every minute: source and valid time, EDR or index at the aircraft, the level
   requested, the level X-Plane holds, and the aircraft's load-factor spread. `diag_verbosity = 2` adds every layer.
 - The response test used for the calibration has been removed.

@@ -149,7 +149,7 @@ void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* 
 // ---------------- mock libcurl ----------------
 struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
-static std::string g_gtgnFile, g_gtgnName, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
+static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
 static std::vector<std::string> g_urls;
 static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
 static std::string readFile(const char* p) { FILE* f = std::fopen(p, "rb"); std::string r; if (!f) return r; char b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) r.append(b, n); std::fclose(f); return r; }
@@ -228,7 +228,7 @@ CURLcode curl_easy_perform(CURL* c) {
             e->status = 200; e->wf((char*)l.data(), 1, l.size(), e->wd); return 0;
         }
         const std::string& f = ec ? g_ecFile : g_gtgnFile;
-        if ((!ec && e->url.find(g_gtgnName) == std::string::npos) || e->range.empty()) { e->status = 404; return 0; }
+        if ((!ec && e->url.find("/" + g_gtgnHour + "/" + g_gtgnName) == std::string::npos) || e->range.empty()) { e->status = 404; return 0; }
         size_t a = std::strtoull(e->range.c_str(), nullptr, 10), b = std::strtoull(e->range.c_str() + e->range.find('-') + 1, nullptr, 10);
         ++g_rangeRequests;
         if (a >= f.size()) { e->status = 416; return 0; }
@@ -547,6 +547,7 @@ static int runTurb() {
     const std::time_t now = std::time(nullptr), t15 = (now / 900) * 900;
     char nm[64]; std::tm g{}; gmtime_r(&t15, &g); std::strftime(nm, sizeof nm, "gtgn.t%H%Mz.3km.grib2", &g);
     g_gtgnName = nm;
+    { char h[8]; std::strftime(h, sizeof h, "%H", &g); g_gtgnHour = h; }
     std::printf("[turb] building synthetic data (%s): GTGN levels 0-50,000 ft every 5,000 ft, EDR 0.02 + 0.03 per level\n", nm);
     for (int k = 0; k <= 10; ++k) g_gtgnFile += gen::gtgnMsg(t15, k * 5000.0, 0.02 + 0.03 * k);
     const std::time_t run = ((now - 6 * 3600) / 21600) * 21600;
