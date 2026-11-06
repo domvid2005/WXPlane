@@ -1,6 +1,6 @@
 # Realistic turbulence (2026-11-06)
 
-Menu: **Enable Realistic Turbulence** (`realistic_turbulence`, on by default) and **Max Turbulence...** at the bottom of the menu
+Menu: **Enable Realistic Turbulence** (`realistic_turbulence`, on by default) and **Max Turbulence...** just below the toggles, above the status lines
 (`max_turbulence`, 0 to 1.0).
 Code:
 - `src/gribx.*`: GRIB2 decoding (JPEG2000, CCSDS, Lambert).

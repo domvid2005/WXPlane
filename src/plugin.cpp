@@ -2389,13 +2389,12 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     g_idxWindshear = XPLMAppendMenuItem(g_menu, "Enable Realistic Windshear", (void*)(intptr_t)kWindshear, 0);
     g_idxTurbulence = XPLMAppendMenuItem(g_menu, "Enable Realistic Turbulence", (void*)(intptr_t)kTurbulence, 0);
+    XPLMAppendMenuItem(g_menu, "Max Turbulence...", (void*)(intptr_t)kSettings, 0);   // below every toggle, above the status lines
     XPLMAppendMenuSeparator(g_menu);
     g_idxStatus1 = XPLMAppendMenuItem(g_menu, "Starting...", nullptr, 0);
     g_idxStatus2 = XPLMAppendMenuItem(g_menu, "", nullptr, 0);
     XPLMEnableMenuItem(g_menu, g_idxStatus1, 0);
     XPLMEnableMenuItem(g_menu, g_idxStatus2, 0);
-    XPLMAppendMenuSeparator(g_menu);
-    XPLMAppendMenuItem(g_menu, "Max Turbulence...", (void*)(intptr_t)kSettings, 0);
     syncMenu();
     return 1;
 }

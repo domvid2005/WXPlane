@@ -25,8 +25,8 @@ Which layers count: the rough-top records apply to every layer with at least `ro
 Rough overcast tops (experimental, OFF by default): with `top_bumps = 1`, WXPlane scatters up to `bump_count` (10) small records over thick overcast decks (`bump_fill_count` (1) per gap-fill tile, at most `bump_max` (200) per update). Each record is the parent layer unchanged - same slot, type, coverage and base - with only the top raised, by at most 20% of the deck thickness and `bump_height_m` (550 m), and never into the layer above. Each circle lies inside its parent record. Earlier builds (on by default) also changed type, coverage and base, which X-Plane blended into cloud walls. Upgrading to config version 19 switches `top_bumps` off once and leaves your other settings alone.
 | **Enable Realistic Windshear** | Gust fronts and microburst outflow near real convection (see below). On by default. |
 | **Enable Realistic Turbulence** | Turbulence from real data: NOAA GTGN in the US, an ECMWF-based estimate elsewhere (see below). On by default. |
+| **Max Turbulence...** | Below all the toggles, above the status lines. A slider from 0 (no turbulence from WXPlane at all) to 1.0 (full realism, as the data says). It scales all of WXPlane's turbulence: the real-data turbulence, the storm turbulence and the gust turbulence at airports. Saved when you release it (`max_turbulence`). |
 | *status lines* | Last update time, METAR/ATIS/fog counts, number of NOAA winds-aloft stations, nearest station. |
-| **Max Turbulence...** | Last item. A slider from 0 (no turbulence from WXPlane at all) to 1.0 (full realism, as the data says). It scales all of WXPlane's turbulence: the real-data turbulence, the storm turbulence and the gust turbulence at airports. Saved when you release it (`max_turbulence`). |
 
 Settings are saved to `Output/preferences/WXPlane.cfg`.
 
@@ -351,7 +351,7 @@ After the spike/pit smoothing, no two neighbouring storm cells (closer than 1.5 
 
 ### Storm turbulence
 
-The storm settings window and its 0-200 % storm slider (`radar_turbulence`) were replaced by **Max Turbulence...** at the bottom of the
+The storm settings window and its 0-200 % storm slider (`radar_turbulence`) were replaced by **Max Turbulence...** (below the toggles) in the
 menu (config version 30, which sets it to 1.0 once). Storm turbulence is scaled to the radar reflectivity and then by Max turbulence.
 
 ### Storm coverage stays at 95 %

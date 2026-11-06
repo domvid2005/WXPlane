@@ -688,8 +688,8 @@ int main() {
     CHECK(g_netRequests > reqBefore);
     CHECK(g_calls.size() - before < 4);   // identical data is NOT re-sent (re-sending makes the sim rebuild cloud layers)
     CHECK(g_fdRequests == 2); // winds aloft cached for 30 min, not re-downloaded on a manual refresh
-    std::printf("  menu status: '%s' / '%s'\n", g_menuNames[g_menuNames.size() - 4].c_str(), g_menuNames[g_menuNames.size() - 3].c_str());
-    CHECK(g_menuNames.back() == "Max Turbulence...");   // the slider is the last item of the menu
+    std::printf("  menu status: '%s' / '%s'\n", g_menuNames[g_menuNames.size() - 2].c_str(), g_menuNames.back().c_str());
+    CHECK(g_menuNames[g_menuNames.size() - 4] == "Max Turbulence..." && g_menuNames[g_menuNames.size() - 5] == "Enable Realistic Turbulence");   // after the toggles, above the status
 
     std::printf("[3] periodic: nothing should download for 5 minutes while stationary\n");
     reqBefore = g_netRequests;
