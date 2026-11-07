@@ -1032,6 +1032,7 @@ void flushPending() {
     while (budget > 0 && !g_pendingGone.empty()) { eraseRec(g_pendingGone.back()); g_pendingGone.pop_back(); --budget; ++erased; }
     size_t n = std::min(budget, g_pendingTodo.size());
     for (size_t i = 0; i < n; ++i) sendRec(g_pendingTodo[i]);
+    const auto tSets = Clock::now();
     sent = n;
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
     // A replacing update would wipe the windshear cells (it did the probe's record, log 2026-11-06 11:51): they go along with it.
@@ -1039,7 +1040,9 @@ void flushPending() {
     XPLMEndWeatherUpdate(g_pendingReplace ? 0 : 1 /*0: replaces all our previous records*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     if (g_pendingTodo.empty()) g_pendingReplace = false;
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-    if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued)", ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size());
+    const double msSets = std::chrono::duration<double, std::milli>(tSets - t0).count();
+    if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued): %.0f ms setting records, %.0f ms in X-Plane's end of update",
+                        ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size(), msSets, ms - msSets);
     if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
 }
 
@@ -1053,13 +1056,27 @@ void eraseAll() {
     logf("plugin weather records removed");
 }
 
+// XPLMFindNavAid searches X-Plane's whole navigation database, so each lookup is slow; with ~40 stations per update this ran
+// on the main thread every 5 minutes. The answer never changes for a station, so it is looked up once and kept.
+std::map<std::string, bool> g_airportKnownCache;
+double g_navLookupMs = 0;   // time spent in lookups during the current update (logged)
 bool airportKnown(const wx::Station& s) {
+    char key[64];
+    std::snprintf(key, sizeof key, "%s %.2f %.2f", s.icao.c_str(), s.lat, s.lon);
+    auto c = g_airportKnownCache.find(key);
+    if (c != g_airportKnownCache.end()) return c->second;
+    const auto t0 = Clock::now();
+    bool known = false;
     XPLMNavRef ref = XPLMFindNavAid(nullptr, s.icao.c_str(), nullptr, nullptr, nullptr, xplm_Nav_Airport);
-    if (ref == XPLM_NAV_NOT_FOUND) return false;
-    char id[32] = {0};
-    float la = 0, lo = 0;
-    XPLMGetNavAidInfo(ref, nullptr, &la, &lo, nullptr, nullptr, nullptr, id, nullptr, nullptr);
-    return s.icao == id && wx::distNm(la, lo, s.lat, s.lon) < 5.0;
+    if (ref != XPLM_NAV_NOT_FOUND) {
+        char id[32] = {0};
+        float la = 0, lo = 0;
+        XPLMGetNavAidInfo(ref, nullptr, &la, &lo, nullptr, nullptr, nullptr, id, nullptr, nullptr);
+        known = s.icao == id && wx::distNm(la, lo, s.lat, s.lon) < 5.0;
+    }
+    g_navLookupMs += std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    g_airportKnownCache[key] = known;
+    return known;
 }
 
 void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
@@ -1180,6 +1197,7 @@ void annotateMagneticVariation(wx::FetchResult& res) {
 
 void applyResult(const wx::FetchResult& res, bool fromFetch) {
     const auto applyT0 = Clock::now();   // this runs on the sim's main thread: logged when it takes long enough to cost a frame
+    g_navLookupMs = 0;
     std::time_t now = std::time(nullptr);
     int fogCount = 0, aloftCount = 0; int cirrusCount = 0;
     g_haveLevels = false;
@@ -1331,6 +1349,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         r.info.age = info.age; // keep the real age for the call itself
         todo.push_back({s.icao, r});
     }
+    const auto tPh1 = Clock::now();   // phase timings (stations | gap fill | storms | natural picture | the rest), logged with the total
     // Gap fill: the station circles do not overlap, so between them X-Plane would fall back to its own weather. Location records
     // on fixed grids cover everything around the aircraft: a fine grid close by and a coarse one further out (up to the METAR
     // search radius). Each record holds a smooth inverse-distance blend of the nearest stations (the closest one dominates), so
@@ -1421,6 +1440,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         addGrid(g_cfg.fillCellNm, -1.0, nearR, "n");
         if (farR > nearR) addGrid(g_cfg.fillFarCellNm, nearR, farR, "f");
     }
+    const auto tPh2 = Clock::now();
     // Radar storm cells: the weather of the nearest station with the storm applied on top, as location records.
     int stormCount = 0;
     if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
@@ -1491,6 +1511,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             todo.push_back({key, r});
         }
     }
+    const auto tPh3 = Clock::now();
     // Natural picture: the dry records around and between the rain (the stations' blended weather, like a gap-fill tile, in the size of
     // their square). They take the place of the gap-fill tiles there, so the rain ends where the radar's does, not on the 12 nm tile grid.
     int dryCount = 0;
@@ -1524,6 +1545,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             todo.push_back({key, r});
         }
     }
+    const auto tPh4 = Clock::now();
     // Cloud ribbons (2026-11-03 screenshots): X-Plane blends each of the 3 cloud slots between neighbouring records, base and top included.
     // An empty slot was sent at 0-0 m, so between a record with a deck at 700-2100 m and one without it the blend made a thin sheet that
     // sloped down to the ground; seen from above, where its coverage still showed, that was a long thin ribbon or a ring in clear air.
@@ -1642,7 +1664,9 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     setStatus(l1, l2);
     {
         const double ms = std::chrono::duration<double, std::milli>(Clock::now() - applyT0).count();
-        if (ms > 15.0) logf("building this update took %.0f ms on the sim's main thread", ms);
+        auto d = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+        if (ms > 15.0) logf("building this update took %.0f ms on the sim's main thread: stations %.0f (airport lookups %.0f), gap fill %.0f, storms %.0f, natural picture %.0f, rest %.0f",
+                            ms, d(applyT0, tPh1), g_navLookupMs, d(tPh1, tPh2), d(tPh2, tPh3), d(tPh3, tPh4), d(tPh4, Clock::now()));
     }
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
     logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer; %d station(s) inside a storm took its cloud",
