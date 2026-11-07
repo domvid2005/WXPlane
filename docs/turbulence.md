@@ -125,9 +125,9 @@ Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/tur
   - **Drawing:** lines use OpenGL 1.x through X-Plane's drawing callback. The functions are looked up at run time, so the plugin
     links no OpenGL library.
 - **Low-level wind shear reports:** a pilot report with LLWS (or a `/WS` group) within 15 nm and 90 minutes, reported no
-  higher than 4,000 ft above the local ground, makes the windshear cells near it 1.5 times stronger (capped at 60 kt). It
-  strengthens fields that formed from convection; on its own it does not create one. Logged as "low-level wind shear pilot report
-  nearby".
+  higher than 4,000 ft above the local ground, adds 0.025 to the hourly odds of a gust front and of a microburst at the windshear
+  sources near it (for example 10 %/h becomes 12.5 %/h). Their strength is unchanged. It only applies where convection already makes
+  a source; on its own it creates nothing. Logged as "low-level wind shear pilot report nearby".
 - **Log:** a line per refresh (`reports: …`) and, when a floor sets the turbulence, `floor EDR x from PIREP MOD A320 (medium,
   x1.00) FL330, 3 nm, 0 min ago`.
 

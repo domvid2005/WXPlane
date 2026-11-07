@@ -1014,6 +1014,24 @@ void windshearTick() {
         // only the atmosphere around the aircraft is simulated (within 100 nm); a field formed there keeps existing when the aircraft leaves
         std::vector<wx::shear::Source> src;
         for (const auto& s : wx::shear::assess(env)) if (wx::distNm(lat, lon, s.lat, s.lon) < 100.0) src.push_back(s);
+        if (g_mapReports) {   // a low-level wind shear pilot report near a source: its hourly odds +0.025 (owner's rule, 2026-11-06)
+            static XPLMDataRef drEl0 = XPLMFindDataRef("sim/flightmodel/position/elevation"), drAgl0 = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+            const double groundFt = (drEl0 && drAgl0) ? (XPLMGetDatad(drEl0) - XPLMGetDataf(drAgl0)) / 0.3048 : 0.0;
+            const std::time_t wall = std::time(nullptr);
+            static std::string lastBoost;
+            int raised = 0; const wx::hz::Pirep* by = nullptr;
+            for (auto& s : src) {
+                const wx::hz::Pirep* p = wx::hz::llwsNear(*g_mapReports, s.lat, s.lon, groundFt, wall);
+                if (!p) continue;
+                s.pHourGustFront = std::min(1.0, s.pHourGustFront + 0.025);
+                s.pHourMicroburst = std::min(1.0, s.pHourMicroburst + 0.025);
+                s.why += "; LLWS pilot report nearby: odds +0.025/h";
+                ++raised; by = p;
+            }
+            const std::string key = by ? by->raw : std::string();
+            if (by && key != lastBoost) wsLog("low-level wind shear pilot report nearby (%s): hourly odds of a gust front and of a microburst +0.025 at %d source(s)", by->raw.c_str(), raised);
+            lastBoost = key;
+        }
         int hi = 0, md = 0, lo = 0; std::string top; float topDbz = -1;
         for (const auto& s : src) {
             if (s.confidence == wx::shear::kHigh) ++hi; else if (s.confidence == wx::shear::kMedium) ++md; else ++lo;
@@ -1032,22 +1050,6 @@ void windshearTick() {
     if ((sendNow || simT >= nextSend) && g_pendingTodo.empty() && g_pendingGone.empty()) {
         nextSend = simT + 30.0;
         std::vector<wx::shear::ShearRecord> want = g_ws.records(simT + g_cfg.windshearLeadS, g_cfg.windshearGain);
-        if (g_mapReports) {   // a low-level wind shear pilot report nearby: those cells 1.5 times stronger
-            static XPLMDataRef drEl0 = XPLMFindDataRef("sim/flightmodel/position/elevation"), drAgl0 = XPLMFindDataRef("sim/flightmodel/position/y_agl");
-            const double groundFt = (drEl0 && drAgl0) ? (XPLMGetDatad(drEl0) - XPLMGetDataf(drAgl0)) / 0.3048 : 0.0;
-            const std::time_t wall = std::time(nullptr);
-            static std::string lastBoost;
-            int boosted = 0; const wx::hz::Pirep* by = nullptr;
-            for (auto& r : want) {
-                const wx::hz::Pirep* p = wx::hz::llwsNear(*g_mapReports, r.lat, r.lon, groundFt, wall);
-                if (!p) continue;
-                r.kt = std::min(60.0f, r.kt * 1.5f);
-                ++boosted; by = p;
-            }
-            const std::string key = by ? by->raw : std::string();
-            if (by && key != lastBoost) wsLog("low-level wind shear pilot report nearby (%s): %d windshear cell(s) made 1.5x stronger", by->raw.c_str(), boosted);
-            lastBoost = key;
-        }
         std::vector<wx::shear::ShearRecord> inRange;   // not "near": a macro in the Windows headers
         std::sort(want.begin(), want.end(), [&](const wx::shear::ShearRecord& a, const wx::shear::ShearRecord& b) {
             return wx::distNm(lat, lon, a.lat, a.lon) < wx::distNm(lat, lon, b.lat, b.lon); });

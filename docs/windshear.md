@@ -28,6 +28,8 @@ Log lines start with `[WXPlane Windshear]`.
   - high: ≥45 dBZ together with reported TS, or ≥40 dBZ with TS and gusts ≥25 kt;
   - medium: one kind of evidence;
   - low: the dry-microburst proxy.
+- **Low-level wind shear pilot report** (LLWS or `/WS`, within 15 nm and 90 min, low): +0.025 on both hourly odds of the sources
+  near it, e.g. a microburst 0.7 %/h becomes 3.2 %/h. Strength is unchanged.
 - **No evidence, no source:** calm or clear weather forms nothing. The 0.05 %/h background in the specification is not used, because
   there is nothing to place such an event on.
 - **Range:** only sources within 100 nm of the aircraft are simulated. A field that has formed keeps existing when the aircraft leaves.
