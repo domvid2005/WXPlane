@@ -64,18 +64,19 @@ Log lines start with `[WXPlane Turbulence]`.
 5. **Calibration:**
    - **Assumption:** the load-factor spread a typical transport should feel is σg = 0.65 × (EDR − 0.07). Air below EDR 0.07
      (smooth to very light) adds nothing. The ~1-minute peak (about 3σ) is then ~0.35 g at EDR 0.25 and ~0.85 g at EDR 0.5.
-   - **Measured:** the X-Plane level that gives that σg (2026-11-06):
+   - **Measured:** the X-Plane level that gives that σg (2026-11-06), in three steps:
 
-| Level | 0 | 0.6 (first flight, 11,000 ft) | 1 | 2 | 3 | 5, 7, 10 |
-|---|---|---|---|---|---|---|
-| load-factor sd measured | 0.01–0.02 g | 0.14 g | 0.045 g (test; applied late) | 0.21 g | 0.39 g | 0.40–0.42 g |
-| used | 0 | — | 0.23 g | 0.32 g | 0.39 g | (saturated: 3 is the top) |
+| Measurement | Held level | Load-factor sd | Per level |
+|---|---|---|---|
+| response test, 250 kt, 3,000 ft | 2 / 3 / 5–10 | 0.21 / 0.39 / 0.40–0.42 g | saturates at 3 |
+| first flight, climbing through 11,000 ft | 0.6 | 0.14 g | 0.23 g |
+| ToLiss A319 climbing FL165–FL205, GTGN EDR 0.30–0.38 | 0.56–0.75 | 0.24–0.31 g | ~0.40 g |
 
-   - **Why the first version was too strong:** it mapped EDR 0.05 (an ECMWF "smooth" estimate) to level 0.67, and the first flight
-     found that already bumpy (0.14 g). The test's level-1 point was low because X-Plane applied that step late. The flight point is
-     now used below level 1, and smooth air maps to 0.
-
-   Resulting mapping: EDR ≤ 0.07 → 0, 0.10 → 0.1, 0.20 → 0.4, 0.30 → 0.65, 0.45 → 1.2, 0.60 → 2.35, 0.67 and above → 3.0.
+   - **The A319 point:** it was about 1.6 times the target for moderate air, and it felt too strong. The response grows with
+     airspeed, so the fastest measurement is used. That keeps slower flight on the gentle side: 0.40 g at level 1, and the earlier
+     shape above it scaled by the same factor (0.56 g at 2, 0.68 g at 3).
+   - **Resulting mapping:** EDR ≤ 0.07 → 0, 0.10 → 0.05, 0.20 → 0.21, 0.30 → 0.37, 0.45 → 0.62, 0.60 → 0.86. Level 1 is only reached
+     around EDR 0.7 (severe).
 
    X-Plane's response depends on the aircraft, as a real aircraft's does. The calibration targets the air, not one aircraft.
 6. **Writing:** only `sim/weather/region/turbulence` is written, every 5 s. Its earlier values are saved first and put back when the

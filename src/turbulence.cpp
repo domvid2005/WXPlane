@@ -33,11 +33,14 @@ double targetSigmaG(double edr) {
 }
 
 double xpLevelForSigma(double s) {
-    // Measured 2026-11-06: in the response test (250 kt, 3,000 ft) level 2 gave 0.21 g and level 3 0.39 g, and levels above 3
-    // no more (3 is the top of the usable scale). In the first flight with this system (climbing through 11,000 ft) a held
-    // level of 0.6 already gave 0.14 g, far more than the test's level 1 (0.045 g, which X-Plane applied late). Below 1 the
-    // flight point is used: 0.23 g per level.
-    static const double t[][2] = {{0.0, 0.0}, {0.23, 1.0}, {0.32, 2.0}, {0.39, 3.0}};
+    // Measured 2026-11-06, in three steps:
+    //  - response test (250 kt, 3,000 ft): level 2 gave 0.21 g, level 3 0.39 g, and levels above 3 no more;
+    //  - first flight (climbing through 11,000 ft): a held 0.6 gave 0.14 g (0.23 g per level);
+    //  - ToLiss A319 climbing through FL165-FL205 in GTGN EDR 0.30-0.38: held levels 0.56-0.75 gave 0.24-0.31 g, about
+    //    0.40 g per level, roughly 1.6x the target for moderate air, and it felt too strong.
+    // The response grows with airspeed, so the strongest (fastest) measurement is used, which keeps slower flight on the gentle
+    // side: 0.40 g at level 1, and the earlier shape above it scaled by the same factor.
+    static const double t[][2] = {{0.0, 0.0}, {0.40, 1.0}, {0.56, 2.0}, {0.68, 3.0}};
     return pwl(t, 4, s);
 }
 

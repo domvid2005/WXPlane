@@ -128,14 +128,14 @@ void run() {
     // --- calibration: monotonic, 0 at calm, the measured points, saturation at 3
     {
         CHECK(edrToXpLevel(0) == 0);
-        NEAR(xpLevelForSigma(0.32), 2.0, 1e-9); NEAR(xpLevelForSigma(0.23), 1.0, 1e-9); NEAR(xpLevelForSigma(1.0), 3.0, 1e-9);
+        NEAR(xpLevelForSigma(0.56), 2.0, 1e-9); NEAR(xpLevelForSigma(0.40), 1.0, 1e-9); NEAR(xpLevelForSigma(1.0), 3.0, 1e-9);
         bool mono = true; double prev = -1;
         for (double e = 0; e <= 1.0; e += 0.01) { double l = edrToXpLevel(e); if (l < prev - 1e-12) mono = false; prev = l; }
         CHECK(mono);
         CHECK(edrToXpLevel(0.02) == 0 && edrToXpLevel(0.07) == 0);     // smooth air (and the ECMWF 0.05 of the first flight): nothing
-        CHECK(edrToXpLevel(0.15) > 0.1 && edrToXpLevel(0.15) < 0.35);  // light
-        CHECK(edrToXpLevel(0.30) > 0.5 && edrToXpLevel(0.30) < 0.8);   // moderate
-        CHECK(edrToXpLevel(0.60) > 2.0);                               // severe
+        CHECK(edrToXpLevel(0.15) > 0.08 && edrToXpLevel(0.15) < 0.2); // light
+        CHECK(edrToXpLevel(0.35) > 0.4 && edrToXpLevel(0.35) < 0.5);   // moderate: the A319 climb of 2026-11-06 gets ~0.45, not ~0.75
+        CHECK(edrToXpLevel(0.60) > 0.8 && edrToXpLevel(0.60) < 0.95);  // severe
         CHECK(ellrodToEdrEquivalent(0) == 0 && nr(ellrodToEdrEquivalent(8), 0.22, 1e-9) && ellrodToEdrEquivalent(100) <= 0.40 && edrToXpLevel(ellrodToEdrEquivalent(1)) == 0);
         NEAR(isaAltFt(1013.25), 0, 1); NEAR(isaAltFt(250), 34000, 100); NEAR(isaAltFt(200), 38662, 100);
         NEAR(isaPressureHpa(isaAltFt(300)), 300, 0.01); NEAR(isaPressureHpa(isaAltFt(150)), 150, 0.01);
