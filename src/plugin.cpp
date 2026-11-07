@@ -1031,7 +1031,16 @@ void flushPending() {
     XPLMBeginWeatherUpdate();
     while (budget > 0 && !g_pendingGone.empty()) { eraseRec(g_pendingGone.back()); g_pendingGone.pop_back(); --budget; ++erased; }
     size_t n = std::min(budget, g_pendingTodo.size());
-    for (size_t i = 0; i < n; ++i) sendRec(g_pendingTodo[i]);
+    // Setting the records is what costs the frame (2026-11-06: 61 ms for 316 records, 0 ms in X-Plane's end of update), so an
+    // in-flight update is handed over a few milliseconds per tick (apply_frame_ms) as consecutive incremental updates. The start-up
+    // load and a replacing update still go as one (X-Plane is rebuilding anyway, and a replacing update cannot be split).
+    const bool sliced = g_cfg.applyFrameMs > 0 && !g_pendingStartup && !g_pendingReplace;
+    size_t done = 0;
+    for (; done < n; ++done) {
+        if (sliced && done > 0 && std::chrono::duration<double, std::milli>(Clock::now() - t0).count() >= g_cfg.applyFrameMs) break;
+        sendRec(g_pendingTodo[done]);
+    }
+    n = done;
     const auto tSets = Clock::now();
     sent = n;
     g_pendingTodo.erase(g_pendingTodo.begin(), g_pendingTodo.begin() + (long)n);
@@ -1044,6 +1053,35 @@ void flushPending() {
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued): %.0f ms setting records, %.0f ms in X-Plane's end of update",
                         ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size(), msSets, ms - msSets);
     if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
+}
+
+// Two records X-Plane would show the same way: differences below what anyone could see or feel. The 2026-11-06 refresh re-sent all
+// 316 records (tiny drifts from blending and smoothing), and setting them was the whole main-thread cost. The comparison is against
+// what was last sent, so a slow drift still goes out once it adds up.
+bool nearlySame(const XPLMWeatherInfo_t& a, const XPLMWeatherInfo_t& b) {
+    auto near = [](float x, float y, float tol) { return std::fabs(x - y) <= tol; };
+    auto rel = [](float x, float y, float r, float floor) { return std::fabs(x - y) <= std::max(floor, r * std::max(std::fabs(x), std::fabs(y))); };
+    if (!near(a.temperature_alt, b.temperature_alt, 0.3f) || !near(a.dewpoint_alt, b.dewpoint_alt, 0.3f)) return false;
+    if (!near(a.pressure_alt, b.pressure_alt, 30.0f) || !near(a.pressure_sl, b.pressure_sl, 30.0f)) return false;   // Pa
+    if (!rel(a.visibility, b.visibility, 0.03f, 50.0f) || !near(a.precip_rate, b.precip_rate, 0.02f)) return false;
+    if (!near(a.radius_nm, b.radius_nm, 0.05f) || !near(a.max_altitude_msl_ft, b.max_altitude_msl_ft, 1.0f)) return false;
+    if (!near(a.wave_height, b.wave_height, 0.1f) || a.wave_dir != b.wave_dir || !near(a.thermal_climb, b.thermal_climb, 0.05f)) return false;
+    if (!near(a.troposphere_alt, b.troposphere_alt, 50.0f) || !near(a.troposphere_temp, b.troposphere_temp, 0.5f)) return false;
+    for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i)
+        if (!near(a.temp_layers[i], b.temp_layers[i], 0.3f) || !near(a.dewp_layers[i], b.dewp_layers[i], 0.3f)) return false;
+    for (int i = 0; i < XPLM_NUM_WIND_LAYERS; ++i) {
+        const auto &x = a.wind_layers[i], &y = b.wind_layers[i];
+        if (!near(x.alt_msl, y.alt_msl, 1.0f) || !near(x.speed, y.speed, 0.3f) || !near(x.gust_speed, y.gust_speed, 0.5f)) return false;
+        float dd = std::fabs(std::fmod(x.direction - y.direction + 540.0f, 360.0f) - 180.0f);
+        if (std::max(x.speed, y.speed) > 1.0f && dd > 3.0f) return false;
+        if (!near(x.shear, y.shear, 2.0f) || !near(x.turbulence, y.turbulence, 0.02f)) return false;
+    }
+    for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
+        const auto &x = a.cloud_layers[i], &y = b.cloud_layers[i];
+        if (!near(x.cloud_type, y.cloud_type, 0.05f) || !near(x.coverage, y.coverage, 0.02f)) return false;
+        if (!near(x.alt_base, y.alt_base, 20.0f) || !near(x.alt_top, y.alt_top, 20.0f)) return false;
+    }
+    return true;
 }
 
 void eraseAll() {
@@ -1569,7 +1607,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             if (it != g_recs.end() && it->second.airport == t.rec.airport) {
                 XPLMWeatherInfo_t a = t.rec.info;
                 a.age = 0.0f;
-                if (std::memcmp(&it->second.info, &a, sizeof a) == 0) continue;
+                if (std::memcmp(&it->second.info, &a, sizeof a) == 0 || nearlySame(it->second.info, a)) continue;
             }
             changed.push_back(t);
         }

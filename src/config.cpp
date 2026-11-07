@@ -77,6 +77,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
         else if (k == "first_load_immediate") c.firstLoadImmediate = toBool(v);
+        else if (k == "apply_frame_ms") c.applyFrameMs = d < 0 ? 0 : (d > 100 ? 100 : d);
         else if (k == "apply_per_tick") c.applyPerTick = (int)(d < 1 ? 1 : (d > 1000 ? 1000 : d));
         else if (k == "fill_gaps") c.fillGaps = toBool(v);
         else if (k == "fill_range_nm") c.fillRangeNm = (int)(d < 10 ? 10 : (d > 150 ? 150 : d));

@@ -105,6 +105,7 @@ struct Config {
     double manualRefreshGapS = 60;   // menu refreshes closer together than this are coalesced into one
     bool manualRefreshImmediate = false; // Refresh Weather from the menu: true = the new weather appears at once but the sim freezes for a few seconds; false = it fades in
     bool firstLoadImmediate = true;  // the start-up updates (stations, then radar storms) skip X-Plane's slow fade-in, so the clouds do not dissolve in patches
+    double applyFrameMs = 6.0;    // in flight, records are handed over at most this long per tick (0 = all in one update)
     int applyPerTick = 500;       // most records handed to X-Plane in one update; every update makes the sim rebuild, so fewer is better
     int startupDelayS = 0;        // wait this long after the plugin loads before the first download
     bool fillGaps = true;            // fill the gaps between station circles so every point takes the nearest station's weather

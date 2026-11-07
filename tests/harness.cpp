@@ -93,8 +93,14 @@ void XPLMEndWeatherUpdate(int incr, int imm) { ++g_end; g_lastIncr = incr; g_las
 static int g_erases = 0;
 void XPLMEraseWeatherAtLocation(double, double) { ++g_erases; }
 void XPLMEraseWeatherAtAirport(const char*) { ++g_erases; }
-void XPLMSetWeatherAtLocation(double la, double lo, double el, XPLMWeatherInfo_t* i) { g_calls.push_back({"loc", false, *i, la, lo, el}); }
-void XPLMSetWeatherAtAirport(const char* id, XPLMWeatherInfo_t* i) { if (std::strcmp(id, "KICT") == 0) { g_lastSentVis = i->visibility; g_lastSentInfo = *i; } g_calls.push_back({id, true, *i, 0, 0, 0}); }
+static void slowSet() {   // HARNESS_SLOW_SET=1: each record costs 0.2 ms, like X-Plane on 2026-11-06 (61 ms for 316)
+    static const bool slow = std::getenv("HARNESS_SLOW_SET") != nullptr;
+    if (!slow) return;
+    auto t = std::chrono::steady_clock::now() + std::chrono::microseconds(200);
+    while (std::chrono::steady_clock::now() < t) {}
+}
+void XPLMSetWeatherAtLocation(double la, double lo, double el, XPLMWeatherInfo_t* i) { slowSet(); g_calls.push_back({"loc", false, *i, la, lo, el}); }
+void XPLMSetWeatherAtAirport(const char* id, XPLMWeatherInfo_t* i) { slowSet(); if (std::strcmp(id, "KICT") == 0) { g_lastSentVis = i->visibility; g_lastSentInfo = *i; } g_calls.push_back({id, true, *i, 0, 0, 0}); }
 
 
 // ---------------- mock window / drawing ----------------
