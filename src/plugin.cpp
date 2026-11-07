@@ -142,6 +142,7 @@ struct Rec {
     bool airport = false;
     std::string icao;
     double lat = 0, lon = 0, elev = 0;
+    bool kept = false;        // an airport that left range, left in place with its surroundings' weather (see applyResult)
 };
 std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by station
 
@@ -1596,10 +1597,46 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // no crash report before the first batch was through; an update that only removed location records went through). Such an update
     // now replaces all of WXPlane's weather in one go instead (a non-incremental update, the way the plugin's records are cleared when it
     // is switched off), so nothing is removed one record at a time.
+    // That replacing update came at almost every refresh in flight (airports keep leaving range) and each one made X-Plane rebuild
+    // all of its clouds: ~5 GB of VRAM held twice for a moment and 80-120 ms on the main thread (log and VRAM graph 2026-11-07).
+    // So an airport that leaves range is now left in place instead: its record is set once more with the blended weather of its
+    // surroundings (an ordinary one-record update, nothing removed) and then left alone; it is far behind the aircraft, and when it
+    // comes back into range it is updated like any other station. A replacing update is only used for a big jump (many airports gone
+    // at once, X-Plane rebuilds there anyway) or as a clean-up once more than kept_airports_max (200) have piled up.
     bool replaceAll = false;
-    if (!full)
-        for (const auto& kv : g_recs)
-            if (kv.second.airport && !seen.count(kv.first)) { replaceAll = true; break; }
+    const char* replaceWhy = "";
+    if (!full) {
+        std::vector<std::string> newlyGone;
+        size_t keptGone = 0;
+        for (auto& kv : g_recs) {
+            if (!kv.second.airport) continue;
+            if (seen.count(kv.first)) { kv.second.kept = false; continue; }   // in range again: an ordinary station
+            if (kv.second.kept) ++keptGone; else newlyGone.push_back(kv.first);
+        }
+        if (newlyGone.size() >= 15) { replaceAll = true; replaceWhy = "a big move (many airports left range at once)"; }
+        else if (keptGone + newlyGone.size() > (size_t)g_cfg.keptAirportsMax) { replaceAll = true; replaceWhy = "clean-up of the airports kept behind the aircraft"; }
+        else {
+            for (const auto& k : newlyGone) {
+                const Rec& old = g_recs[k];
+                wx::Station syn = wx::blendAt(res.stations, old.lat, old.lon);
+                wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog);
+                if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
+                wx::validateXp(x, false, nullptr);
+                XPLMWeatherInfo_t info;
+                fillInfo(info, x);
+                info.radius_nm = old.info.radius_nm;
+                Rec r = old;
+                r.info = info;
+                r.info.age = 0.0f;
+                r.kept = true;
+                todo.push_back({k, r});
+            }
+            for (const auto& kv : g_recs) if (kv.second.airport && !seen.count(kv.first)) seen[kv.first] = true;   // kept: never erased
+            if (!newlyGone.empty())
+                logf("%zu airport(s) left range: kept in place with their surroundings' weather (%zu kept behind the aircraft; clean-up above %d)",
+                     newlyGone.size(), keptGone + newlyGone.size(), g_cfg.keptAirportsMax);
+        }
+    }
     if (!full && !replaceAll) {   // only what changed goes to X-Plane
         std::vector<Todo> changed;
         for (auto& t : todo) {
@@ -1621,7 +1658,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // Everything is queued; flushPending() (every 0.25 s) hands it to X-Plane a few records at a time.
     if (full || replaceAll) g_recs.clear();
     g_pendingReplace = replaceAll;
-    if (replaceAll) logf("the station list changed (moved): all %zu records go to X-Plane as one replacing update, nothing removed one by one", todo.size());
+    if (replaceAll) logf("%s: all %zu records go to X-Plane as one replacing update, nothing removed one by one", replaceWhy, todo.size());
     g_heldLevel.clear();
     {   // every update: the outline records follow in their own update once the rest is in (30 s after this one, at the earliest)
         std::vector<Todo> main;

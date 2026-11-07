@@ -757,16 +757,26 @@ int main() {
         CHECK(lastSent * 2.5f < 402 * 1.4f && lastSent * 2.5f > 402 * 0.7f); // sim now lands near the report
     }
 
-    std::printf("[2c] a station drops out of the NOAA data -> one replacing update, no record removed one by one\n");
+    std::printf("[2c] a station drops out of the NOAA data -> kept in place with its surroundings' weather, nothing removed or replaced\n");
     {
         g_dropSln = true;
-        int er = g_erases; size_t callsBefore = g_calls.size();
+        int er = g_erases; size_t callsBefore = g_calls.size(); int endBefore2 = g_end;
         g_menuHandler(nullptr, (void*)(intptr_t)2);
         for (int i = 0; i < 300; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
         CHECK(g_erases == er);                                   // airport records are never erased one by one (X-Plane crashed doing that after a move)
-        CHECK(g_lastIncr == 0);                                  // a non-incremental update replaces all of our records
-        CHECK(g_calls.size() - callsBefore == 3);                // the 3 stations still reported, all in that one update
-        CHECK(g_logAll.find("one replacing update") != std::string::npos);
+        CHECK(g_lastIncr == 1);                // an ordinary incremental update: no replacing update (it cost ~5 GB of VRAM, 2026-11-07)
+        bool slnSent = false;
+        for (size_t k = callsBefore; k < g_calls.size(); ++k) if (g_calls[k].where == "KSLN") slnSent = true;
+        CHECK(slnSent);                                          // the dropped airport set once more (blended weather)
+        CHECK(g_logAll.find("1 airport(s) left range: kept in place") != std::string::npos);
+        std::printf("  dropped station: %zu record(s) in %d update(s)\n", g_calls.size() - callsBefore, g_end - endBefore2);
+        // the next refresh leaves it alone
+        size_t c2 = g_calls.size();
+        g_menuHandler(nullptr, (void*)(intptr_t)2);
+        for (int i = 0; i < 300; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        bool again = false;
+        for (size_t k = c2; k < g_calls.size(); ++k) if (g_calls[k].where == "KSLN") again = true;
+        CHECK(!again && g_erases == er);
     }
 
     std::printf("[5] disable from menu -> records erased, no further downloads\n");
