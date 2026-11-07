@@ -115,15 +115,19 @@ Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/tur
     the US.
   - **Off switch:** `turb_reports = 0` turns the floor off. The map layers stay.
 - **Map:** two layers in X-Plane's map, each with its own toggle in the map's layer list:
-  - **"WXPlane: Pilot reports (turbulence)":** a triangle at each report that mentions turbulence. Green NEG, yellow LGT, orange
-    LGT-MOD/MOD, red MOD-SEV and above; urgent (UUA) reports are larger. The label shows intensity, flight level, type and time.
-    Labels are hidden when more than 80 reports are in view.
+  - **"WXPlane: Pilot reports (turbulence)":** a triangle at each report that mentions turbulence or low-level wind shear, orange
+    for a routine report (UA) and red for an urgent one (UUA, also larger). The label shows UUA/LLWS when present, then the
+    intensity, flight level, type and time. Labels are hidden when more than 80 reports are in view.
   - **"WXPlane: SIGMETs and AIRMETs":** every current US SIGMET, international SIGMET and G-AIRMET, outlined by hazard and filled at 20 % opacity (areas are triangulated by ear clipping, so concave shapes fill correctly).
     Convection red, turbulence and mountain wave orange, icing cyan, IFR purple, mountain obscuration brown, low-level wind shear
     yellow, surface wind green, freezing level light blue (lines), tropical cyclone magenta, volcanic ash grey. The label shows the
-    product, ID, severity, hazard and altitudes.
+    product, ID, severity, hazard and altitudes, under a solid swatch in the area's colour. X-Plane's map labels cannot be coloured (`XPLMDrawMapLabel` takes no colour), so the swatch carries it.
   - **Drawing:** lines use OpenGL 1.x through X-Plane's drawing callback. The functions are looked up at run time, so the plugin
     links no OpenGL library.
+- **Low-level wind shear reports:** a pilot report with LLWS (or a `/WS` group) within 15 nm and 90 minutes, reported no
+  higher than 4,000 ft above the local ground, makes the windshear cells near it 1.5 times stronger (capped at 60 kt). It
+  strengthens fields that formed from convection; on its own it does not create one. Logged as "low-level wind shear pilot report
+  nearby".
 - **Log:** a line per refresh (`reports: …`) and, when a floor sets the turbulence, `floor EDR x from PIREP MOD A320 (medium,
   x1.00) FL330, 3 nm, 0 min ago`.
 

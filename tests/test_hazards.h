@@ -66,6 +66,18 @@ void run() {
     CHECK(floorAt(s, 44.3853, -74.2062, 27000, now + 3 * 3600).edr == 0);       // 3 h later
     NEAR(floorAt(s, 38.286, -76.4033, 13000, now).edr, 0.30 * 0.85, 1e-9);     // MOD from a CRJ7
     CHECK(floorAt(s, 34.6959, -83.2977, 22000, now).edr == 0);                  // NEG raises nothing
+    // low-level wind shear reports: LLWS remark, urgent flag; near a point below 4,000 ft above the ground
+    {
+        const char* kLlws = R"([{"obsTime":1794006000,"acType":"B738","lat":40.64,"lon":-73.78,"fltLvl":8,"tbBas1":null,"tbTop1":null,"tbInt1":"","tbInt2":"","pirepType":"PIREP","rawOb":"JFK UUA /OV JFK/TM 2300/FL008/TP B738/RM LLWS +/-15KT SFC-008 DURGC RWY22L"},
+{"obsTime":1794006000,"acType":"A320","lat":40.70,"lon":-73.80,"fltLvl":340,"tbBas1":null,"tbTop1":null,"tbInt1":"","tbInt2":"","pirepType":"PIREP","rawOb":"JFK UA /OV JFK/TM 2300/FL340/TP A320/RM LLWS"}])";
+        Snapshot w; w.pireps = parsePireps(kLlws, &err);
+        CHECK(w.pireps.size() == 2 && w.pireps[0].llws && w.pireps[0].urgent && w.pireps[1].llws && !w.pireps[1].urgent);
+        const Pirep* near1 = llwsNear(w, 40.70, -73.70, 13, now);
+        CHECK(near1 && near1->acType == "B738");                       // the low report, 5 nm away
+        CHECK(llwsNear(w, 41.10, -73.70, 13, now) == nullptr);           // 28 nm away
+        CHECK(llwsNear(w, 40.70, -73.70, 13, now + 2 * 3600) == nullptr); // 2 h later
+        CHECK(!ps[0].llws);
+    }
     // SIGMETs and AIRMETs are display-only: no floor inside them
     CHECK(floorAt(s, 33.0, 120.0, 30000, now).edr == 0);     // inside a SEV TURB international SIGMET
     CHECK(floorAt(s, 47.0, -122.0, 8000, now).edr == 0);     // inside a G-AIRMET Tango TURB-LO

@@ -133,6 +133,7 @@ std::vector<Pirep> parsePireps(const std::string& json, std::string* err) {
         p.kind = str(o, "pirepType");
         p.obsTime = timeOf(o, "obsTime");
         p.urgent = p.raw.find(" UUA ") != std::string::npos || p.raw.compare(0, 4, "UUA ") == 0;
+        p.llws = p.raw.find("LLWS") != std::string::npos || p.raw.find("/WS ") != std::string::npos || p.raw.find("/WS/") != std::string::npos;
         out.push_back(p);
     }
     return out;
@@ -229,6 +230,21 @@ bool Area::contains(double lat, double lon) const {
 
 bool Area::isTurbulence() const {
     return hazard == "TURB" || hazard == "MTW" || hazard == "TURB-LO" || hazard == "TURB-HI";
+}
+
+const Pirep* llwsNear(const Snapshot& s, double lat, double lon, double groundFt, std::time_t now) {
+    const Pirep* best = nullptr;
+    double bestD = 1e9;
+    for (const auto& p : s.pireps) {
+        if (!p.llws) continue;
+        const double age = (double)(now - p.obsTime);
+        if (age > 5400 || age < -600) continue;
+        const double alt = p.topFt >= 0 ? p.topFt : p.altFt;
+        if (alt > 0 && alt > groundFt + 4000) continue;
+        const double d = distNm(lat, lon, p.lat, p.lon);
+        if (d <= 15.0 && d < bestD) { bestD = d; best = &p; }
+    }
+    return best;
 }
 
 Floor floorAt(const Snapshot& s, double lat, double lon, double altFt, std::time_t now) {

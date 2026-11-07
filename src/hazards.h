@@ -21,6 +21,7 @@ struct Pirep {
     std::string tbType, acType, raw, kind;   // CHOP/CAT/..., aircraft, raw text, PIREP/AIREP
     std::time_t obsTime = 0;
     bool urgent = false;
+    bool llws = false;                 // the report mentions low-level wind shear (LLWS, or a /WS group)
 };
 
 struct Area {
@@ -70,6 +71,11 @@ struct Floor {
 //  - PIREPs (converted for the reporter's size, see reporterClass): full within 10 nm and 30 min, fading to nothing at 50 nm and 90 min; in the reported layer (or +-3,000 ft of the
 //    flight level) with a 2,000 ft taper.
 Floor floorAt(const Snapshot& s, double lat, double lon, double altFt, std::time_t now);
+
+// A low-level wind shear pilot report near a point: within 15 nm and 90 minutes, reported no higher than 4,000 ft above the
+// local ground (LLWS is a below-2,000-ft-AGL phenomenon; a report without a usable altitude counts as low). Windshear fields
+// there are made 1.5 times stronger (owner's rule, 2026-11-06).
+const Pirep* llwsNear(const Snapshot& s, double lat, double lon, double groundFt, std::time_t now);
 
 } // namespace hz
 } // namespace wx

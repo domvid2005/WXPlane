@@ -614,13 +614,6 @@ void hazardColor(const std::string& h, float* c) {
     else if (h == "VA") set(0.75f, 0.75f, 0.75f);
     else set(1.0f, 1.0f, 1.0f);
 }
-void pirepColor(const std::string& i, float* c) {
-    auto set = [&](float r, float g, float b) { c[0] = r; c[1] = g; c[2] = b; };
-    if (i == "NEG" || i == "SMTH") set(0.35f, 0.95f, 0.35f);
-    else if (i == "SMTH-LGT" || i == "LGT") set(1.0f, 0.95f, 0.3f);
-    else if (i == "LGT-MOD" || i == "MOD") set(1.0f, 0.6f, 0.1f);
-    else set(1.0f, 0.2f, 0.2f);
-}
 bool areaCurrent(const wx::hz::Area& a, std::time_t now) { return (!a.validTo || now <= a.validTo) && (!a.validFrom || now >= a.validFrom - 1800); }
 std::string flRange(double lo, double hi) {
     char b[40];
@@ -692,6 +685,16 @@ void drawAreas(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyl
                 wxgl::end();
             }
         }
+        {   // a solid swatch in the area's colour at the label (X-Plane's map labels cannot be coloured)
+            double sx = 0, sy = 0; for (size_t k = 0; k < xs.size(); ++k) { sx += xs[k]; sy += ys[k]; }
+            const float cx = (float)(sx / xs.size()), cy = (float)(sy / ys.size()), h = 5 * uiUnit;
+            if (inBounds(bd, cx, cy)) {
+                wxgl::color(c[0], c[1], c[2], 1.0f);
+                wxgl::begin(wxgl::TRIANGLE_FAN); wxgl::vertex(cx - h, cy - h); wxgl::vertex(cx + h, cy - h); wxgl::vertex(cx + h, cy + h); wxgl::vertex(cx - h, cy + h); wxgl::end();
+                wxgl::color(0, 0, 0, 0.8f); wxgl::lineWidth(1);
+                wxgl::begin(wxgl::LINE_LOOP); wxgl::vertex(cx - h, cy - h); wxgl::vertex(cx + h, cy - h); wxgl::vertex(cx + h, cy + h); wxgl::vertex(cx - h, cy + h); wxgl::end();
+            }
+        }
         wxgl::color(c[0], c[1], c[2], a.line ? 0.55f : 0.9f);
         wxgl::lineWidth(a.product.find("SIGMET") != std::string::npos ? 2.5f : 1.5f);
         wxgl::begin(a.line ? wxgl::LINE_STRIP : wxgl::LINE_LOOP);
@@ -700,7 +703,7 @@ void drawAreas(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyl
     }
 }
 
-void labelAreas(XPLMMapLayerID layer, const float* bd, float, float, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
+void labelAreas(XPLMMapLayerID layer, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
     if (!g_mapReports) return;
     const std::time_t now = std::time(nullptr);
     for (const auto& a : g_mapReports->areas) {
@@ -713,7 +716,7 @@ void labelAreas(XPLMMapLayerID layer, const float* bd, float, float, XPLMMapStyl
         if (prod == "CONVECTIVE SIGMET") prod = "CONV SIGMET";
         std::string t = prod + (a.id.empty() ? "" : " " + a.id) + " " + (a.severity.empty() ? "" : a.severity + " ") + a.hazard;
         if (a.baseFt >= 0 || a.topFt >= 0) t += " " + flRange(a.baseFt, a.topFt);
-        XPLMDrawMapLabel(layer, t.c_str(), x, y, xplm_MapOrientation_UI, 0);
+        XPLMDrawMapLabel(layer, t.c_str(), x, y - 11 * uiUnit, xplm_MapOrientation_UI, 0);   // just below the colour swatch
     }
 }
 
@@ -722,10 +725,11 @@ void drawPireps(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapSty
     XPLMSetGraphicsState(0, 0, 0, 0, 1, 0, 0);
     const float r = 5 * uiUnit;
     for (const auto& p : g_mapReports->pireps) {
-        if (p.intensity.empty()) continue;   // only reports that say something about turbulence
+        if (p.intensity.empty() && !p.llws) continue;   // only reports about turbulence or low-level wind shear
         float x, y; XPLMMapProject(proj, p.lat, p.lon, &x, &y);
         if (!inBounds(bd, x, y)) continue;
-        float c[3]; pirepColor(p.intensity, c);
+        float c[3] = {1.0f, 0.55f, 0.0f};                  // routine report (UA): orange
+        if (p.urgent) { c[0] = 1.0f; c[1] = 0.1f; c[2] = 0.1f; }   // urgent (UUA): red
         const float rr = p.urgent ? r * 1.5f : r;
         wxgl::color(c[0], c[1], c[2], 0.95f);
         wxgl::begin(wxgl::TRIANGLE_FAN);   // a triangle pointing up, the usual turbulence-report mark
@@ -740,7 +744,7 @@ void labelPireps(XPLMMapLayerID layer, const float* bd, float, float uiUnit, XPL
     if (!g_mapReports) return;
     std::vector<std::pair<std::pair<float, float>, const wx::hz::Pirep*>> vis;
     for (const auto& p : g_mapReports->pireps) {
-        if (p.intensity.empty()) continue;
+        if (p.intensity.empty() && !p.llws) continue;
         float x, y; XPLMMapProject(proj, p.lat, p.lon, &x, &y);
         if (inBounds(bd, x, y)) vis.push_back({{x, y}, &p});
     }
@@ -754,7 +758,7 @@ void labelPireps(XPLMMapLayerID layer, const float* bd, float, float uiUnit, XPL
         gmtime_r(&t, &g);
 #endif
         char b[120];
-        std::snprintf(b, sizeof b, "%s%s %s %s %02d%02dZ", p.urgent ? "UUA " : "", p.intensity.c_str(),
+        std::snprintf(b, sizeof b, "%s%s%s %s %s %02d%02dZ", p.urgent ? "UUA " : "", p.llws ? "LLWS " : "", p.intensity.c_str(),
                       p.altFt >= 0 ? ("FL" + std::to_string((int)std::lround(p.altFt / 100))).c_str() : "", p.acType.c_str(), g.tm_hour, g.tm_min);
         XPLMDrawMapLabel(layer, b, v.first.first, v.first.second - 9 * uiUnit, xplm_MapOrientation_UI, 0);
     }
@@ -1028,6 +1032,22 @@ void windshearTick() {
     if ((sendNow || simT >= nextSend) && g_pendingTodo.empty() && g_pendingGone.empty()) {
         nextSend = simT + 30.0;
         std::vector<wx::shear::ShearRecord> want = g_ws.records(simT + g_cfg.windshearLeadS, g_cfg.windshearGain);
+        if (g_mapReports) {   // a low-level wind shear pilot report nearby: those cells 1.5 times stronger
+            static XPLMDataRef drEl0 = XPLMFindDataRef("sim/flightmodel/position/elevation"), drAgl0 = XPLMFindDataRef("sim/flightmodel/position/y_agl");
+            const double groundFt = (drEl0 && drAgl0) ? (XPLMGetDatad(drEl0) - XPLMGetDataf(drAgl0)) / 0.3048 : 0.0;
+            const std::time_t wall = std::time(nullptr);
+            static std::string lastBoost;
+            int boosted = 0; const wx::hz::Pirep* by = nullptr;
+            for (auto& r : want) {
+                const wx::hz::Pirep* p = wx::hz::llwsNear(*g_mapReports, r.lat, r.lon, groundFt, wall);
+                if (!p) continue;
+                r.kt = std::min(60.0f, r.kt * 1.5f);
+                ++boosted; by = p;
+            }
+            const std::string key = by ? by->raw : std::string();
+            if (by && key != lastBoost) wsLog("low-level wind shear pilot report nearby (%s): %d windshear cell(s) made 1.5x stronger", by->raw.c_str(), boosted);
+            lastBoost = key;
+        }
         std::vector<wx::shear::ShearRecord> inRange;   // not "near": a macro in the Windows headers
         std::sort(want.begin(), want.end(), [&](const wx::shear::ShearRecord& a, const wx::shear::ShearRecord& b) {
             return wx::distNm(lat, lon, a.lat, a.lon) < wx::distNm(lat, lon, b.lat, b.lon); });
