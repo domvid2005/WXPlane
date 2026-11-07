@@ -692,10 +692,9 @@ void dryRunwayTick() {
     // weather has faded in, and it is held through the load. X-Plane sets its own start-up ground state while it loads (standing water
     // at Daytona Beach in dry weather), so for 90 s after the decision any wet or standing-water value X-Plane puts back is set to dry
     // again (checked every 2 s). After that X-Plane wets and dries the ground with the weather itself (it held standing water in rain at
-    // KORF on its own). A jump of more than 50 nm (a new flight, a reposition) is a new load.
+    // KORF on its own). A jump of more than 50 nm between two samples (a new flight, a reposition) is a new load.
     enum Phase { kIdle, kHold, kDone };
     static Phase phase = kIdle;
-    static double atLat = 0, atLon = 0;
     static Clock::time_point holdUntil{}, next{};
     static std::string icao, why;
     static bool dry = false;
@@ -729,19 +728,23 @@ void dryRunwayTick() {
         if (early.empty()) return;   // nothing came back: the decision waits for WXPlane's own weather
         src = &early;
     }
-    if (phase != kIdle && wx::distNm(lat, lon, atLat, atLon) > 50.0) phase = kIdle;
+    // A new load is a jump between two samples 2 s apart (a reposition or a new flight): 50 nm in 2 s cannot be flown. (Measuring from
+    // where the decision was made re-ran the check every 50 nm of flight, seen in the 2026-11-07 cruise log.)
+    static double prevLat = 0, prevLon = 0;
+    static bool havePrev = false;
+    if (havePrev && phase != kIdle && wx::distNm(lat, lon, prevLat, prevLon) > 50.0) phase = kIdle;
+    prevLat = lat; prevLon = lon; havePrev = true;
     if (phase == kDone) return;
     static XPLMDataRef drFr = XPLMFindDataRef("sim/weather/region/runway_friction"), drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
     if (!drFr || !XPLMCanWriteDataRef(drFr)) {
         if (phase == kIdle) logf("dry runway: sim/weather/region/runway_friction %s, nothing done", drFr ? "is read-only" : "not found");
-        phase = kDone; atLat = lat; atLon = lon;
+        phase = kDone;
         return;
     }
     // X-Plane's ground condition (the weather screen's "runway condition", log 2026-11-06): 0 dry, 1-3 wet, 4-6 standing water,
     // 7-9 snow (snow_cover 0.25 / 0.5 / 1), 10-12 ice, 13-15 snow and ice. It covers all paved surfaces, taxiways and aprons as well.
     const int fr = (int)std::lround(drGetNum(drFr));
     if (phase == kIdle) {
-        atLat = lat; atLon = lon;
         const double agl = drAgl ? XPLMGetDataf(drAgl) / 0.3048 : 0.0;
         const wx::Station* best = nullptr; double bd = 1e9;
         for (const auto& s : *src) { const double d = wx::distNm(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = &s; } }
@@ -1095,6 +1098,7 @@ void eraseAll() {
     logf("plugin weather records removed");
 }
 
+bool airportCached(const wx::Station& s);
 // XPLMFindNavAid searches X-Plane's whole navigation database, so each lookup is slow; with ~40 stations per update this ran
 // on the main thread every 5 minutes. The answer never changes for a station, so it is looked up once and kept.
 std::map<std::string, bool> g_airportKnownCache;
@@ -1116,6 +1120,11 @@ bool airportKnown(const wx::Station& s) {
     g_navLookupMs += std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     g_airportKnownCache[key] = known;
     return known;
+}
+bool airportCached(const wx::Station& s) {
+    char key[64];
+    std::snprintf(key, sizeof key, "%s %.2f %.2f", s.icao.c_str(), s.lat, s.lon);
+    return g_airportKnownCache.count(key) != 0;
 }
 
 void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
@@ -2227,8 +2236,30 @@ float flightLoop(float, float, int, void*) {
     }
 
     // 1) results from the worker thread
+    // In flight, a result whose airports are not all looked up yet waits a few ticks while they are looked up a few milliseconds per
+    // tick (each lookup searches X-Plane's navigation database; 8 new airports in one refresh took 30 ms in one frame, 2026-11-07).
+    static wx::FetchResult staged;
+    static bool haveStaged = false;
     wx::FetchResult res;
-    if (g_fetcher.take(res)) {
+    bool got = false;
+    if (haveStaged) {
+        const auto t0 = Clock::now();
+        size_t left = 0;
+        for (const auto& st : staged.stations) {
+            if (airportCached(st)) continue;
+            if (std::chrono::duration<double, std::milli>(Clock::now() - t0).count() >= 4.0) { ++left; continue; }
+            airportKnown(st);
+        }
+        if (left == 0) { res = staged; haveStaged = false; got = true; }
+    } else if (g_fetcher.take(res)) {
+        got = true;
+        if (!g_startupPhase && res.ok && !res.radarOnly && g_cfg.enabled) {
+            size_t unknown = 0;
+            for (const auto& st : res.stations) if (!airportCached(st)) ++unknown;
+            if (unknown > 0) { staged = res; haveStaged = true; got = false; }
+        }
+    }
+    if (got) {
         if (res.radarOnly) {
             // storm radar on its own: keep the last stations/winds, swap in the new storm cells, apply only what changed (non-immediate: X-Plane fades it in)
             if (!res.ok) logf("radar refresh failed: %s", res.error.c_str());
