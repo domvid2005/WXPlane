@@ -1059,27 +1059,27 @@ void flushPending() {
 // 316 records (tiny drifts from blending and smoothing), and setting them was the whole main-thread cost. The comparison is against
 // what was last sent, so a slow drift still goes out once it adds up.
 bool nearlySame(const XPLMWeatherInfo_t& a, const XPLMWeatherInfo_t& b) {
-    auto near = [](float x, float y, float tol) { return std::fabs(x - y) <= tol; };
+    auto within = [](float x, float y, float tol) { return std::fabs(x - y) <= tol; };
     auto rel = [](float x, float y, float r, float floor) { return std::fabs(x - y) <= std::max(floor, r * std::max(std::fabs(x), std::fabs(y))); };
-    if (!near(a.temperature_alt, b.temperature_alt, 0.3f) || !near(a.dewpoint_alt, b.dewpoint_alt, 0.3f)) return false;
-    if (!near(a.pressure_alt, b.pressure_alt, 30.0f) || !near(a.pressure_sl, b.pressure_sl, 30.0f)) return false;   // Pa
-    if (!rel(a.visibility, b.visibility, 0.03f, 50.0f) || !near(a.precip_rate, b.precip_rate, 0.02f)) return false;
-    if (!near(a.radius_nm, b.radius_nm, 0.05f) || !near(a.max_altitude_msl_ft, b.max_altitude_msl_ft, 1.0f)) return false;
-    if (!near(a.wave_height, b.wave_height, 0.1f) || a.wave_dir != b.wave_dir || !near(a.thermal_climb, b.thermal_climb, 0.05f)) return false;
-    if (!near(a.troposphere_alt, b.troposphere_alt, 50.0f) || !near(a.troposphere_temp, b.troposphere_temp, 0.5f)) return false;
+    if (!within(a.temperature_alt, b.temperature_alt, 0.3f) || !within(a.dewpoint_alt, b.dewpoint_alt, 0.3f)) return false;
+    if (!within(a.pressure_alt, b.pressure_alt, 30.0f) || !within(a.pressure_sl, b.pressure_sl, 30.0f)) return false;   // Pa
+    if (!rel(a.visibility, b.visibility, 0.03f, 50.0f) || !within(a.precip_rate, b.precip_rate, 0.02f)) return false;
+    if (!within(a.radius_nm, b.radius_nm, 0.05f) || !within(a.max_altitude_msl_ft, b.max_altitude_msl_ft, 1.0f)) return false;
+    if (!within(a.wave_height, b.wave_height, 0.1f) || a.wave_dir != b.wave_dir || !within(a.thermal_climb, b.thermal_climb, 0.05f)) return false;
+    if (!within(a.troposphere_alt, b.troposphere_alt, 50.0f) || !within(a.troposphere_temp, b.troposphere_temp, 0.5f)) return false;
     for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i)
-        if (!near(a.temp_layers[i], b.temp_layers[i], 0.3f) || !near(a.dewp_layers[i], b.dewp_layers[i], 0.3f)) return false;
+        if (!within(a.temp_layers[i], b.temp_layers[i], 0.3f) || !within(a.dewp_layers[i], b.dewp_layers[i], 0.3f)) return false;
     for (int i = 0; i < XPLM_NUM_WIND_LAYERS; ++i) {
         const auto &x = a.wind_layers[i], &y = b.wind_layers[i];
-        if (!near(x.alt_msl, y.alt_msl, 1.0f) || !near(x.speed, y.speed, 0.3f) || !near(x.gust_speed, y.gust_speed, 0.5f)) return false;
+        if (!within(x.alt_msl, y.alt_msl, 1.0f) || !within(x.speed, y.speed, 0.3f) || !within(x.gust_speed, y.gust_speed, 0.5f)) return false;
         float dd = std::fabs(std::fmod(x.direction - y.direction + 540.0f, 360.0f) - 180.0f);
         if (std::max(x.speed, y.speed) > 1.0f && dd > 3.0f) return false;
-        if (!near(x.shear, y.shear, 2.0f) || !near(x.turbulence, y.turbulence, 0.02f)) return false;
+        if (!within(x.shear, y.shear, 2.0f) || !within(x.turbulence, y.turbulence, 0.02f)) return false;
     }
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
         const auto &x = a.cloud_layers[i], &y = b.cloud_layers[i];
-        if (!near(x.cloud_type, y.cloud_type, 0.05f) || !near(x.coverage, y.coverage, 0.02f)) return false;
-        if (!near(x.alt_base, y.alt_base, 20.0f) || !near(x.alt_top, y.alt_top, 20.0f)) return false;
+        if (!within(x.cloud_type, y.cloud_type, 0.05f) || !within(x.coverage, y.coverage, 0.02f)) return false;
+        if (!within(x.alt_base, y.alt_base, 20.0f) || !within(x.alt_top, y.alt_top, 20.0f)) return false;
     }
     return true;
 }
