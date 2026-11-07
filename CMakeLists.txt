@@ -76,9 +76,10 @@ else()
 endif()
 
 set(WX_OUT "${CMAKE_BINARY_DIR}/package/WXPlane/${WX_PLATFORM_DIR}")
-# Third-party notices next to the platform folders (package/WXPlane/LICENSES.txt).
+# Third-party notices next to the plugin in its platform folder (each platform's artifact carries its own copy, and the merged
+# bundle then has one per folder without clashing).
 add_custom_command(TARGET WXPlane POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-  "${CMAKE_SOURCE_DIR}/LICENSES.txt" "${CMAKE_BINARY_DIR}/package/WXPlane/LICENSES.txt")
+  "${CMAKE_SOURCE_DIR}/LICENSES.txt" "${WX_OUT}/LICENSES.txt")
 set_target_properties(WXPlane PROPERTIES
   PREFIX "" OUTPUT_NAME "WXPlane" SUFFIX ".xpl"
   LIBRARY_OUTPUT_DIRECTORY "${WX_OUT}" RUNTIME_OUTPUT_DIRECTORY "${WX_OUT}")
