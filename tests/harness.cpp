@@ -551,12 +551,13 @@ static bool nr(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 static int runTurb() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 1\nmax_turbulence = 1\ndiag_verbosity = 2\n", f); std::fclose(f); }
-    const std::time_t now = std::time(nullptr), t15 = (now / 900) * 900;
+    const std::time_t now = std::time(nullptr), t15 = (now - 300) / 900 * 900;   // a file at least 5 minutes old (newer ones are skipped)
     char nm[64]; std::tm g{}; gmtime_r(&t15, &g); std::strftime(nm, sizeof nm, "gtgn.t%H%Mz.3km.grib2", &g);
     g_gtgnName = nm;
     { char h[8]; std::strftime(h, sizeof h, "%H", &g); g_gtgnHour = h; }
     std::printf("[turb] building synthetic data (%s): GTGN levels 0-50,000 ft every 5,000 ft, EDR 0.02 + 0.03 per level\n", nm);
-    for (int k = 0; k <= 10; ++k) g_gtgnFile += gen::gtgnMsg(t15, k * 5000.0, 0.02 + 0.03 * k);
+    const bool partial = std::getenv("HARNESS_TURB_PARTIAL") != nullptr;   // a file still being uploaded: levels up to 10,000 ft only
+    for (int k = 0; k <= (partial ? 2 : 10); ++k) g_gtgnFile += gen::gtgnMsg(t15, k * 5000.0, 0.02 + 0.03 * k);
     const std::time_t run = ((now - 6 * 3600) / 21600) * 21600;
     int kk = 0;
     for (int lev : {700, 600, 500, 400, 300, 250, 200, 150, 100}) {
@@ -579,6 +580,15 @@ static int runTurb() {
         for (int i = 0; i < seconds * 20; ++i) { g_cb(1, 1, i, nullptr); if (g_logAll.find(text) != std::string::npos) return true; std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
         return false;
     };
+    if (partial) {
+        std::printf("[turb] incomplete GTGN file: not used\n");
+        CHECK(pumpUntil("is incomplete (3 levels, up to 10000 ft); trying the one before", 60));
+        for (int i = 0; i < 100; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        CHECK(g_logAll.find("in memory, crop") == std::string::npos);
+        XPluginDisable(); XPluginStop();
+        std::printf(g_fail ? "HARNESS_TURB_PARTIAL FAILED (%d)\n" : "HARNESS_TURB_PARTIAL OK (%d failures)\n", g_fail);
+        return g_fail ? 1 : 0;
+    }
     std::printf("[turb] 1) inside the US at 33,000 ft: GTGN\n");
     CHECK(pumpUntil("realistic turbulence on", 60));
     CHECK(pumpUntil("EDR levels 0..50000 ft", 60));

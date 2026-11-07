@@ -126,6 +126,9 @@ Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/tur
 
 - **NOMADS throttling:** requests to NOMADS are spaced at least 0.6 s apart. On 2026-11-06 a burst during the header walk got
   HTTP 302 for one level. A throttled request (302, 429 or 503) is retried once after 20 s.
+- **Files still being uploaded:** an analysis is used only from 5 minutes after its time. A file whose levels end below 45,000 ft
+  is treated as incomplete; the previous analysis is kept and the file is checked again 2 minutes later. On 2026-11-06 a file read 2
+  minutes after its time held only the levels up to 5,000 ft, so the climb above that fell back to the ECMWF estimate over the US.
 - **Network errors:** the worker retries with a growing delay (1 to 15 min for GTGN, 2 to 30 min for ECMWF) and logs each new problem
   once.
 - **Stale data:** a GTGN analysis older than 45 min, or an ECMWF step more than 4 h from now, is not used.

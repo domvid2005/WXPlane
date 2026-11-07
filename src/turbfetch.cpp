@@ -178,6 +178,7 @@ void Fetcher::gtgnStep(double lat, double lon, double alt, std::time_t now) {
         std::string found, foundHead, codes;
         for (int k = 0; k < 8 && !stop_; ++k) {
             std::time_t t = (now / 900) * 900 - (std::time_t)k * 900;
+            if (now - t < 300) continue;   // still being uploaded (2026-11-06: read at +2 min, it held only the levels up to 5,000 ft)
             std::string url = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn/prod/gtgn." + utc(t, "%Y%m%d") + "/" + utc(t, "%H") + "/gtgn.t" +
                               utc(t, "%H%M") + "z.3km.grib2";
             if (url == gFile_) { found = url; break; }
@@ -227,6 +228,13 @@ void Fetcher::gtgnStep(double lat, double lon, double alt, std::time_t now) {
                 return;
             }
             std::sort(lay.begin(), lay.end(), [](const GMsg& a, const GMsg& b) { return a.altFt < b.altFt; });
+            if (lay.back().altFt < 45000) {   // the file ends early: not completely written yet
+                log("GTGN: " + found.substr(found.rfind('/') + 1) + " is incomplete (" + std::to_string(lay.size()) + " levels, up to " +
+                    std::to_string((int)lay.back().altFt) + " ft); " + (gFile_.empty() ? "trying the one before" : "keeping the previous analysis") + ", rechecking in 2 min");
+                gMissing_[found] = now + 120;
+                gNextCheck_ = gFile_.empty() ? now : now + 120;
+                return;
+            }
             if (gFile_.empty() || gLayout_.size() != lay.size())
                 log("GTGN: " + found.substr(found.rfind('/') + 1) + ": " + std::to_string(lay.size()) + " EDR levels " + std::to_string((int)lay.front().altFt) +
                     ".." + std::to_string((int)lay.back().altFt) + " ft, " + grid.describe() + ", packing 5." + std::to_string(packing) +
