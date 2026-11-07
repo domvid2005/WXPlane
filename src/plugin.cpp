@@ -435,7 +435,7 @@ void eraseRec(const std::string& k) {
 // Only sim/weather/region/turbulence is written. When the feature is turned off, X-Plane's own values from before are put back.
 double awGet(XPLMDataRef r);
 wx::turb::Fetcher g_turbFetch;
-std::shared_ptr<const wx::hz::Snapshot> g_mapReports;   // latest reports/SIGMETs/AIRMETs, for the map and the floor
+std::shared_ptr<const wx::hz::Snapshot> g_mapReports;   // latest pilot reports, for the map, the turbulence floor and windshear odds
 struct TurbState {
     XPLMDataRef arr = nullptr, alts = nullptr, gN = nullptr, simT = nullptr, elev = nullptr;
     int n = 0;
@@ -487,7 +487,7 @@ void turbulenceTick() {
     const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
     const double altFt = t.elev ? XPLMGetDatad(t.elev) / 0.3048 : 0;
     const bool on = g_cfg.enabled && g_cfg.realisticTurbulence && !(lat == 0 && lon == 0);
-    // Pilot reports, SIGMETs and AIRMETs are kept current whenever the weather is on (for the map layers; reports also for the floor).
+    // Pilot reports are kept current whenever the weather is on (for the map layer and the floor).
     g_turbFetch.update(lat, lon, altFt, on, g_cfg.enabled && !(lat == 0 && lon == 0));
     g_mapReports = g_turbFetch.reports();
     if (!on) { turbRestore(g_cfg.realisticTurbulence ? "weather off" : "realistic turbulence off"); return; }
@@ -507,7 +507,7 @@ void turbulenceTick() {
     const double simT = t.simT ? XPLMGetDataf(t.simT) : 0.0;
     const std::shared_ptr<const wx::hz::Snapshot> rep = g_cfg.turbReports ? g_mapReports : nullptr;
     if (!in.gtgn && !in.ecA && !rep) return;   // nothing has arrived yet: X-Plane's values stay as they are
-    // Pilot reports raise the gridded value where the gridded data does not already contain them (SIGMETs/AIRMETs: map only):
+    // Pilot reports raise the gridded value where the gridded data does not already contain them:
     // GTGN assimilates pilot reports, so the floor is weighted by (1 - GTGN coverage).
     auto withReports = [&](const wx::turb::Sample& sm, double altQ, std::string* why) {
         double e = std::strcmp(sm.source, "none") != 0 ? sm.edr : 0.0;
@@ -597,128 +597,9 @@ void turbulenceTick() {
 }
 
 
-// ---- Map layers: pilot reports, and SIGMETs/AIRMETs (each with its own toggle in X-Plane's map layer list) ----------------------
-XPLMMapLayerID g_mapPireps = nullptr, g_mapAreas = nullptr;
-
-void hazardColor(const std::string& h, float* c) {
-    auto set = [&](float r, float g, float b) { c[0] = r; c[1] = g; c[2] = b; };
-    if (h == "TS" || h == "CONVECTIVE") set(1.0f, 0.25f, 0.25f);
-    else if (h == "TURB" || h == "TURB-LO" || h == "TURB-HI" || h == "MTW") set(1.0f, 0.6f, 0.1f);
-    else if (h == "ICE") set(0.3f, 0.8f, 1.0f);
-    else if (h == "IFR") set(0.75f, 0.45f, 1.0f);
-    else if (h == "MT_OBSC") set(0.8f, 0.55f, 0.3f);
-    else if (h == "LLWS") set(1.0f, 1.0f, 0.25f);
-    else if (h == "SFC_WND") set(0.45f, 1.0f, 0.45f);
-    else if (h == "FZLVL" || h == "M_FZLVL") set(0.6f, 0.75f, 1.0f);
-    else if (h == "TC") set(1.0f, 0.35f, 1.0f);
-    else if (h == "VA") set(0.75f, 0.75f, 0.75f);
-    else set(1.0f, 1.0f, 1.0f);
-}
-bool areaCurrent(const wx::hz::Area& a, std::time_t now) { return (!a.validTo || now <= a.validTo) && (!a.validFrom || now >= a.validFrom - 1800); }
-std::string flRange(double lo, double hi) {
-    char b[40];
-    std::string L = lo >= 0 ? (lo >= 18000 ? "FL" + std::to_string((int)std::lround(lo / 100)) : std::to_string((int)std::lround(lo)) + " ft") : "SFC";
-    std::string H = hi >= 0 ? (hi >= 18000 ? "FL" + std::to_string((int)std::lround(hi / 100)) : std::to_string((int)std::lround(hi)) + " ft") : "";
-    std::snprintf(b, sizeof b, "%s%s%s", L.c_str(), H.empty() ? "" : "-", H.c_str());
-    return b;
-}
+// ---- Map layer: pilot reports (with its own toggle in X-Plane's map layer list) ----------------------
+XPLMMapLayerID g_mapPireps = nullptr;
 bool inBounds(const float* bd, float x, float y) { return x >= bd[0] && x <= bd[2] && y <= bd[1] && y >= bd[3]; }
-
-// Ear-clipping triangulation of a simple polygon (areas are often concave, so a triangle fan would spill outside them).
-// Returns vertex index triples; a closing point equal to the first is ignored.
-std::vector<int> triangulate(const std::vector<float>& xs, const std::vector<float>& ys) {
-    std::vector<int> tri, idx;
-    size_t n = xs.size();
-    if (n >= 2 && xs[0] == xs[n - 1] && ys[0] == ys[n - 1]) --n;
-    if (n < 3) return tri;
-    double area = 0;
-    for (size_t i = 0, j = n - 1; i < n; j = i++) area += (double)xs[j] * ys[i] - (double)xs[i] * ys[j];
-    for (size_t i = 0; i < n; ++i) idx.push_back(area > 0 ? (int)i : (int)(n - 1 - i));   // counter-clockwise
-    auto cross = [&](int a, int b, int c) { return ((double)xs[b] - xs[a]) * ((double)ys[c] - ys[a]) - ((double)ys[b] - ys[a]) * ((double)xs[c] - xs[a]); };
-    auto inside = [&](int p, int a, int b, int c) { return cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0; };
-    size_t guard = 0;
-    while (idx.size() > 3 && guard++ < 4 * n * n) {
-        bool clipped = false;
-        for (size_t k = 0; k < idx.size(); ++k) {
-            int a = idx[(k + idx.size() - 1) % idx.size()], b = idx[k], c = idx[(k + 1) % idx.size()];
-            if (cross(a, b, c) <= 0) continue;   // reflex corner
-            bool empty = true;
-            for (int q : idx) if (q != a && q != b && q != c && inside(q, a, b, c)) { empty = false; break; }
-            if (!empty) continue;
-            tri.push_back(a); tri.push_back(b); tri.push_back(c);
-            idx.erase(idx.begin() + (long)k);
-            clipped = true;
-            break;
-        }
-        if (!clipped) break;   // self-intersecting outline: what is left is not filled
-    }
-    if (idx.size() == 3) { tri.push_back(idx[0]); tri.push_back(idx[1]); tri.push_back(idx[2]); }
-    return tri;
-}
-
-void drawAreas(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
-    if (!g_mapReports || !wxgl::load()) return;
-    const std::time_t now = std::time(nullptr);
-    XPLMSetGraphicsState(0, 0, 0, 0, 1, 0, 0);
-    for (const auto& a : g_mapReports->areas) {
-        if (!areaCurrent(a, now) || a.pts.empty()) continue;
-        float c[3]; hazardColor(a.hazard, c);
-        std::vector<float> xs, ys; bool any = false;
-        for (const auto& p : a.pts) { float x, y; XPLMMapProject(proj, p.first, p.second, &x, &y); xs.push_back(x); ys.push_back(y); any = any || inBounds(bd, x, y); }
-        if (!any) {   // still draw a large area that surrounds the view
-            float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
-            for (size_t k = 1; k < xs.size(); ++k) { x0 = std::min(x0, xs[k]); x1 = std::max(x1, xs[k]); y0 = std::min(y0, ys[k]); y1 = std::max(y1, ys[k]); }
-            if (x1 < bd[0] || x0 > bd[2] || y1 < bd[3] || y0 > bd[1]) continue;
-        }
-        if (a.pts.size() == 1) {   // a point SIGMET: a small diamond
-            const float r = 6 * uiUnit;
-            wxgl::color(c[0], c[1], c[2], 0.9f); wxgl::lineWidth(2);
-            wxgl::begin(wxgl::LINE_LOOP); wxgl::vertex(xs[0] - r, ys[0]); wxgl::vertex(xs[0], ys[0] + r); wxgl::vertex(xs[0] + r, ys[0]); wxgl::vertex(xs[0], ys[0] - r); wxgl::end();
-            continue;
-        }
-        if (!a.line) {   // 20 % fill
-            const std::vector<int> tri = triangulate(xs, ys);
-            if (!tri.empty()) {
-                wxgl::color(c[0], c[1], c[2], 0.2f);
-                wxgl::begin(wxgl::TRIANGLES);
-                for (int v : tri) wxgl::vertex(xs[(size_t)v], ys[(size_t)v]);
-                wxgl::end();
-            }
-        }
-        {   // a solid swatch in the area's colour at the label (X-Plane's map labels cannot be coloured)
-            double sx = 0, sy = 0; for (size_t k = 0; k < xs.size(); ++k) { sx += xs[k]; sy += ys[k]; }
-            const float cx = (float)(sx / xs.size()), cy = (float)(sy / ys.size()), h = 5 * uiUnit;
-            if (inBounds(bd, cx, cy)) {
-                wxgl::color(c[0], c[1], c[2], 1.0f);
-                wxgl::begin(wxgl::TRIANGLE_FAN); wxgl::vertex(cx - h, cy - h); wxgl::vertex(cx + h, cy - h); wxgl::vertex(cx + h, cy + h); wxgl::vertex(cx - h, cy + h); wxgl::end();
-                wxgl::color(0, 0, 0, 0.8f); wxgl::lineWidth(1);
-                wxgl::begin(wxgl::LINE_LOOP); wxgl::vertex(cx - h, cy - h); wxgl::vertex(cx + h, cy - h); wxgl::vertex(cx + h, cy + h); wxgl::vertex(cx - h, cy + h); wxgl::end();
-            }
-        }
-        wxgl::color(c[0], c[1], c[2], a.line ? 0.55f : 0.9f);
-        wxgl::lineWidth(a.product.find("SIGMET") != std::string::npos ? 2.5f : 1.5f);
-        wxgl::begin(a.line ? wxgl::LINE_STRIP : wxgl::LINE_LOOP);
-        for (size_t k = 0; k < xs.size(); ++k) wxgl::vertex(xs[k], ys[k]);
-        wxgl::end();
-    }
-}
-
-void labelAreas(XPLMMapLayerID layer, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
-    if (!g_mapReports) return;
-    const std::time_t now = std::time(nullptr);
-    for (const auto& a : g_mapReports->areas) {
-        if (!areaCurrent(a, now) || a.pts.empty()) continue;
-        double sx = 0, sy = 0; int n = 0;
-        for (const auto& p : a.pts) { float x, y; XPLMMapProject(proj, p.first, p.second, &x, &y); sx += x; sy += y; ++n; }
-        const float x = (float)(sx / n), y = (float)(sy / n);
-        if (!inBounds(bd, x, y)) continue;
-        std::string prod = a.product;
-        if (prod == "CONVECTIVE SIGMET") prod = "CONV SIGMET";
-        std::string t = prod + (a.id.empty() ? "" : " " + a.id) + " " + (a.severity.empty() ? "" : a.severity + " ") + a.hazard;
-        if (a.baseFt >= 0 || a.topFt >= 0) t += " " + flRange(a.baseFt, a.topFt);
-        XPLMDrawMapLabel(layer, t.c_str(), x, y - 11 * uiUnit, xplm_MapOrientation_UI, 0);   // just below the colour swatch
-    }
-}
 
 void drawPireps(XPLMMapLayerID, const float* bd, float, float uiUnit, XPLMMapStyle, XPLMMapProjectionID proj, void*) {
     if (!g_mapReports || !wxgl::load()) return;
@@ -764,7 +645,7 @@ void labelPireps(XPLMMapLayerID layer, const float* bd, float, float uiUnit, XPL
     }
 }
 
-void mapLayerDeleted(XPLMMapLayerID l, void*) { if (l == g_mapPireps) g_mapPireps = nullptr; if (l == g_mapAreas) g_mapAreas = nullptr; }
+void mapLayerDeleted(XPLMMapLayerID l, void*) { if (l == g_mapPireps) g_mapPireps = nullptr; }
 
 void createMapLayers() {
     XPLMCreateMapLayer_t p;
@@ -774,10 +655,6 @@ void createMapLayers() {
     p.layerType = xplm_MapLayer_Markings;
     p.willBeDeletedCallback = mapLayerDeleted;
     p.showUiToggle = 1;
-    if (!g_mapAreas) {
-        p.drawCallback = drawAreas; p.labelCallback = labelAreas; p.layerName = "WXPlane: SIGMETs and AIRMETs";
-        g_mapAreas = XPLMCreateMapLayer(&p);
-    }
     if (!g_mapPireps) {
         p.drawCallback = drawPireps; p.labelCallback = labelPireps; p.layerName = "WXPlane: Pilot reports (turbulence)";
         g_mapPireps = XPLMCreateMapLayer(&p);
@@ -786,7 +663,6 @@ void createMapLayers() {
 void mapCreated(const char* id, void*) { if (g_pluginEnabled && std::strcmp(id, XPLM_MAP_USER_INTERFACE) == 0) createMapLayers(); }
 void destroyMapLayers() {
     if (g_mapPireps) { XPLMDestroyMapLayer(g_mapPireps); g_mapPireps = nullptr; }
-    if (g_mapAreas) { XPLMDestroyMapLayer(g_mapAreas); g_mapAreas = nullptr; }
 }
 
 // ---- Dry runways (2026-11-06) ---------------------------------------------------------------------------------------------------------

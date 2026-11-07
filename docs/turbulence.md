@@ -82,15 +82,12 @@ Log lines start with `[WXPlane Turbulence]`.
    feature is turned off, the weather is turned off, or the plugin is disabled. Storm and gust turbulence in WXPlane's weather records
    is unchanged except for the Max turbulence scale.
 
-## Pilot reports, SIGMETs and AIRMETs (2026-11-06)
+## Pilot reports (2026-11-06)
 
 Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/turbfetch.cpp`, map layers in `src/plugin.cpp`.
 
-- **Data:** NOAA AWC data API, every 10 minutes (and after a move of 300 nm), whenever the weather is on:
-  - `pirep` within about ±8° latitude and ±12° longitude of the aircraft, last 90 minutes;
-  - `airsigmet` (US SIGMETs, convective and not);
-  - `isigmet` (international SIGMETs, worldwide);
-  - `gairmet` (G-AIRMET Sierra, Tango and Zulu; only the forecast snapshot nearest now).
+- **Data:** NOAA AWC data API (`pirep`) every 10 minutes (and after a move of 300 nm) whenever the weather is on: reports within
+  about ±8° latitude and ±12° longitude of the aircraft, last 90 minutes.
 - **Reporter size:** a reported intensity describes how the reporting aircraft felt it. It is turned into the EDR of the air with the
   reporter's ICAO type:
 
@@ -108,22 +105,16 @@ Code: `src/hazards.*` (parsing, reporter size, floor), `reportsStep` in `src/tur
 - **The floor (pilot reports only):** the turbulence is raised to the floor and never lowered by it. A NEG report raises nothing.
   - **PIREPs:** full strength within 10 nm and 30 minutes, fading to nothing at 50 nm and 90 minutes. They apply within the reported
     layer, or ±3,000 ft of the flight level when there is no layer, with a 2,000 ft taper.
-  - **SIGMETs and AIRMETs:** shown on the map only, since 2026-11-06. An earlier build raised turbulence to 0.30 inside turbulence
-    SIGMETs and to 0.18 inside G-AIRMET Tango. Those are broad forecast areas drawn wide on purpose, and turbulence inside them is
-    patchy, so a uniform floor overstated it over most of the area. Pilot reports are observations, so only they count.
+  - **SIGMETs and AIRMETs are not used.** An earlier build raised turbulence inside turbulence SIGMETs (0.30) and G-AIRMET Tango
+    (0.18), then only drew them on the map. Both were removed on 2026-11-06: they are broad forecast areas drawn wide on purpose.
   - **Weight:** each floor is weighted by (1 − GTGN coverage). GTGN already assimilates pilot reports, so this mainly acts outside
     the US.
   - **Off switch:** `turb_reports = 0` turns the floor off. The map layers stay.
-- **Map:** two layers in X-Plane's map, each with its own toggle in the map's layer list:
-  - **"WXPlane: Pilot reports (turbulence)":** a triangle at each report that mentions turbulence or low-level wind shear, orange
-    for a routine report (UA) and red for an urgent one (UUA, also larger). The label shows UUA/LLWS when present, then the
-    intensity, flight level, type and time. Labels are hidden when more than 80 reports are in view.
-  - **"WXPlane: SIGMETs and AIRMETs":** every current US SIGMET, international SIGMET and G-AIRMET, outlined by hazard and filled at 20 % opacity (areas are triangulated by ear clipping, so concave shapes fill correctly).
-    Convection red, turbulence and mountain wave orange, icing cyan, IFR purple, mountain obscuration brown, low-level wind shear
-    yellow, surface wind green, freezing level light blue (lines), tropical cyclone magenta, volcanic ash grey. The label shows the
-    product, ID, severity, hazard and altitudes, under a solid swatch in the area's colour. X-Plane's map labels cannot be coloured (`XPLMDrawMapLabel` takes no colour), so the swatch carries it.
-  - **Drawing:** lines use OpenGL 1.x through X-Plane's drawing callback. The functions are looked up at run time, so the plugin
-    links no OpenGL library.
+- **Map:** one layer in X-Plane's map, with its own toggle in the map's layer list: **"WXPlane: Pilot reports (turbulence)"**. It
+  puts a triangle at each report that mentions turbulence or low-level wind shear, red for an urgent report (UUA, also larger) and
+  orange for any other. The label shows UUA/LLWS when present, then the intensity, flight level, type and time. Labels are hidden
+  when more than 80 reports are in view. The triangles are drawn with OpenGL 1.x through X-Plane's drawing callback; the functions
+  are looked up at run time, so the plugin links no OpenGL library.
 - **Low-level wind shear reports:** a pilot report with LLWS (or a `/WS` group) within 15 nm and 90 minutes, reported no
   higher than 4,000 ft above the local ground, adds 0.025 to the hourly odds of a gust front and of a microburst at the windshear
   sources near it (for example 10 %/h becomes 12.5 %/h). Their strength is unchanged. It only applies where convection already makes

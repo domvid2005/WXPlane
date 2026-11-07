@@ -44,27 +44,10 @@ std::time_t timeOf(const Json& o, const char* k) {
     if (v->type == Json::Str) { std::time_t t = isoTime(v->str); if (t) return t; return (std::time_t)v->asNum(0); }
     return 0;
 }
-std::vector<std::pair<double, double>> coordsOf(const Json& o) {
-    std::vector<std::pair<double, double>> pts;
-    const Json* c = o.get("coords");
-    if (!c || c->type != Json::Arr) return pts;
-    for (const auto& p : c->arr) {
-        double la = num(p, "lat", 999), lo = num(p, "lon", 999);
-        if (la >= -90 && la <= 90 && lo >= -360 && lo <= 360) pts.emplace_back(la, lo);
-    }
-    return pts;
-}
 bool parseArray(const std::string& json, Json& root, std::string* err, const char* what) {
     if (json.empty()) { root = Json(); root.type = Json::Arr; return true; }   // HTTP 204: nothing
     if (!parseJson(json, root) || root.type != Json::Arr) { if (err) *err = std::string("unreadable ") + what + " answer"; return false; }
     return true;
-}
-// Altitude in ft from G-AIRMET strings ("SFC", "130" = FL130/13,000 ft, "FZL" = freezing level: unknown).
-double hundreds(const std::string& s) {
-    if (s.empty() || s == "SFC") return -1;
-    char* e = nullptr;
-    double v = std::strtod(s.c_str(), &e);
-    return e == s.c_str() ? -1 : v * 100.0;
 }
 bool startsWith(const std::string& s, const char* p) { return s.compare(0, std::strlen(p), p) == 0; }
 
@@ -139,99 +122,6 @@ std::vector<Pirep> parsePireps(const std::string& json, std::string* err) {
     return out;
 }
 
-std::vector<Area> parseAirSigmets(const std::string& json, std::string* err) {
-    std::vector<Area> out;
-    Json root;
-    if (!parseArray(json, root, err, "AIR/SIGMET")) return out;
-    for (const auto& o : root.arr) {
-        Area a;
-        std::string type = str(o, "airSigmetType");
-        a.hazard = str(o, "hazard");
-        a.product = (type == "SIGMET" && a.hazard == "CONVECTIVE") ? "CONVECTIVE SIGMET" : type.empty() ? "SIGMET" : type;
-        double sev = num(o, "severity", -1);
-        if (a.hazard == "TURB" || a.hazard == "ICE") a.severity = type == "SIGMET" ? "SEV" : "MOD";
-        else if (sev >= 0) a.severity = "";
-        a.baseFt = num(o, "altitudeLow1", -1);
-        a.topFt = num(o, "altitudeHi1", -1);
-        a.validFrom = timeOf(o, "validTimeFrom"); a.validTo = timeOf(o, "validTimeTo");
-        a.id = str(o, "seriesId");
-        a.raw = str(o, "rawAirSigmet");
-        a.pts = coordsOf(o);
-        if (a.pts.size() >= 2) out.push_back(a);
-    }
-    return out;
-}
-
-std::vector<Area> parseIntlSigmets(const std::string& json, std::string* err) {
-    std::vector<Area> out;
-    Json root;
-    if (!parseArray(json, root, err, "international SIGMET")) return out;
-    for (const auto& o : root.arr) {
-        Area a;
-        a.product = "INTL SIGMET";
-        a.hazard = str(o, "hazard");
-        a.severity = str(o, "qualifier");
-        a.baseFt = num(o, "base", -1);
-        a.topFt = num(o, "top", -1);
-        a.validFrom = timeOf(o, "validTimeFrom"); a.validTo = timeOf(o, "validTimeTo");
-        a.id = str(o, "firId") + " " + str(o, "seriesId");
-        a.raw = str(o, "rawSigmet");
-        a.line = str(o, "geom") == "LINE";
-        a.pts = coordsOf(o);
-        if (a.pts.size() >= 2 || (a.pts.size() == 1 && !a.line)) out.push_back(a);
-    }
-    return out;
-}
-
-std::vector<Area> parseGairmets(const std::string& json, std::time_t now, std::string* err) {
-    std::vector<Area> out;
-    Json root;
-    if (!parseArray(json, root, err, "G-AIRMET")) return out;
-    std::time_t best = 0;
-    for (const auto& o : root.arr) {
-        std::time_t vt = timeOf(o, "validTime");
-        if (vt && (!best || std::labs((long)(vt - now)) < std::labs((long)(best - now)))) best = vt;
-    }
-    for (const auto& o : root.arr) {
-        if (timeOf(o, "validTime") != best) continue;
-        Area a;
-        a.product = "G-AIRMET " + str(o, "product");
-        a.hazard = str(o, "hazard");
-        a.severity = str(o, "severity");
-        a.baseFt = hundreds(str(o, "base"));
-        a.topFt = hundreds(str(o, "top"));
-        a.validFrom = best - 90 * 60;            // a snapshot stands for +-90 minutes around its time
-        a.validTo = std::max<std::time_t>(best + 90 * 60, 0);
-        std::time_t exp = timeOf(o, "expireTime");
-        if (exp && exp < a.validTo) a.validTo = exp;
-        a.id = str(o, "tag");
-        std::string dueTo = str(o, "due_to");
-        a.raw = a.product + " " + a.hazard + (a.severity.empty() ? "" : " " + a.severity) + (dueTo.empty() ? "" : " - " + dueTo);
-        a.line = str(o, "geometryType") == "LINE" || a.hazard == "FZLVL" || a.hazard == "M_FZLVL";
-        a.pts = coordsOf(o);
-        if (a.pts.size() >= 2) out.push_back(a);
-    }
-    return out;
-}
-
-bool Area::contains(double lat, double lon) const {
-    if (line || pts.size() < 3) return false;
-    bool in = false;
-    for (size_t i = 0, j = pts.size() - 1; i < pts.size(); j = i++) {
-        auto rel = [&](double lo) { double d = lo - lon; while (d > 180) d -= 360; while (d < -180) d += 360; return d; };
-        double yi = pts[i].first, xi = rel(pts[i].second), yj = pts[j].first, xj = rel(pts[j].second);
-        if ((yi > lat) != (yj > lat)) {
-            double x = xj + (lat - yj) * (xi - xj) / (yi - yj);
-            if (x > 0) in = !in;
-        }
-    }
-    return in;
-}
-
-bool Area::isTurbulence() const {
-    return hazard == "TURB" || hazard == "MTW" || hazard == "TURB-LO" || hazard == "TURB-HI";
-}
-
 const Pirep* llwsNear(const Snapshot& s, double lat, double lon, double groundFt, std::time_t now) {
     const Pirep* best = nullptr;
     double bestD = 1e9;
@@ -275,8 +165,8 @@ Floor floorAt(const Snapshot& s, double lat, double lon, double altFt, std::time
             f.why = b;
         }
     }
-    // SIGMETs and AIRMETs are display-only (owner's decision, 2026-11-06): they are broad forecast areas drawn wide on purpose,
-    // and a uniform floor over the whole shape overstated the turbulence in most of it. Only pilot reports (observations) count.
+    // SIGMETs and AIRMETs are not used (owner's decision, 2026-11-06): broad forecast areas drawn wide on purpose overstated the
+    // turbulence over most of the area, and their map layer was removed. Only pilot reports (observations) count.
     return f;
 }
 

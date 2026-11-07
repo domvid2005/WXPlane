@@ -136,7 +136,7 @@ void Fetcher::run() {
     }
 }
 
-// ---- Pilot reports, SIGMETs, AIRMETs (NOAA AWC data API), every 10 minutes ---------------------------------------
+// ---- Pilot reports (NOAA AWC data API), every 10 minutes ---------------------------------------
 void Fetcher::reportsStep(double lat, double lon, std::time_t now) {
     const bool moved = hzLat_ > 900 || distNm(lat, lon, hzLat_, hzLon_) > 300;
     if (now < hzNext_ && !moved) return;
@@ -151,33 +151,14 @@ void Fetcher::reportsStep(double lat, double lon, std::time_t now) {
     // Reports around the aircraft (the API returns at most a few hundred, so the box is kept to ~1,000 km).
     if (get(base + "pirep?format=json&age=1.5&bbox=" + bbox, "", body, st, err, 30, 8u << 20)) snap->pireps = hz::parsePireps(body, &err);
     else { problems += " PIREPs: " + (st ? "HTTP " + std::to_string(st) : err) + ";"; if (old) snap->pireps = old->pireps; }
-    struct Src { const char* path; int kind; };
-    for (const Src& q : {Src{"airsigmet?format=json", 0}, Src{"isigmet?format=json", 1}, Src{"gairmet?format=json", 2}}) {
-        if (stop_) return;
-        if (!get(base + q.path, "", body, st, err, 30, 16u << 20)) {
-            problems += std::string(" ") + q.path + ": " + (st ? "HTTP " + std::to_string(st) : err) + ";";
-            if (old) for (const auto& a : old->areas) {
-                const bool fromThis = (q.kind == 0 && (a.product == "SIGMET" || a.product == "CONVECTIVE SIGMET" || a.product == "AIRMET")) ||
-                                      (q.kind == 1 && a.product == "INTL SIGMET") || (q.kind == 2 && a.product.compare(0, 8, "G-AIRMET") == 0);
-                if (fromThis) snap->areas.push_back(a);
-            }
-            continue;
-        }
-        std::vector<hz::Area> v = q.kind == 0 ? hz::parseAirSigmets(body, &err) : q.kind == 1 ? hz::parseIntlSigmets(body, &err) : hz::parseGairmets(body, now, &err);
-        snap->areas.insert(snap->areas.end(), v.begin(), v.end());
-    }
     snap->fetched = now;
     hzLat_ = lat; hzLon_ = lon;
-    int turbP = 0, sig = 0, intl = 0, gair = 0, turbA = 0;
-    for (const auto& p : snap->pireps) if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++turbP;
-    for (const auto& a : snap->areas) {
-        if (a.product == "INTL SIGMET") ++intl; else if (a.product.compare(0, 8, "G-AIRMET") == 0) ++gair; else ++sig;
-        if (a.isTurbulence()) ++turbA;
-    }
+    int turbP = 0, llws = 0;
+    for (const auto& p : snap->pireps) { if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++turbP; if (p.llws) ++llws; }
     if (!problems.empty()) { ++hzFail_; hzNext_ = now + std::min(600, 60 * hzFail_); } else hzFail_ = 0;
     char b[300];
-    std::snprintf(b, sizeof b, "reports: %zu PIREPs/AIREPs within ~500 nm (%d with turbulence), %d US SIGMETs, %d international SIGMETs, %d G-AIRMETs (%d turbulence areas)%s",
-                  snap->pireps.size(), turbP, sig, intl, gair, turbA, problems.empty() ? "" : ("; failed:" + problems).c_str());
+    std::snprintf(b, sizeof b, "reports: %zu PIREPs/AIREPs within ~500 nm (%d with turbulence, %d with low-level wind shear)%s",
+                  snap->pireps.size(), turbP, llws, problems.empty() ? "" : ("; failed:" + problems).c_str());
     log(b);
     std::lock_guard<std::mutex> l(mx_);
     hz_ = snap;

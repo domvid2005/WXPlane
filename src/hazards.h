@@ -1,10 +1,7 @@
-// Pilot reports, SIGMETs and AIRMETs from the NOAA Aviation Weather Center data API (no X-Plane or network calls).
-//  - PIREPs/AIREPs:        /api/data/pirep?format=json&age=H&bbox=lat0,lon0,lat1,lon1
-//  - US SIGMETs:           /api/data/airsigmet?format=json          (convective and non-convective)
-//  - International SIGMETs /api/data/isigmet?format=json             (worldwide, incl. TURB and MTW)
-//  - US G-AIRMETs:         /api/data/gairmet?format=json             (Sierra, Tango, Zulu; several forecast hours)
-// They are drawn on X-Plane's map (two layers with their own toggles). Pilot reports also become a turbulence floor where the
-// gridded turbulence data does not already include them (outside NOAA GTGN coverage); SIGMETs and AIRMETs are display-only.
+// Pilot reports from the NOAA Aviation Weather Center data API (no X-Plane or network calls):
+//   /api/data/pirep?format=json&age=H&bbox=lat0,lon0,lat1,lon1
+// They are drawn on X-Plane's map (a layer with its own toggle), become a turbulence floor where the gridded turbulence data does
+// not already include them (outside NOAA GTGN coverage), and LLWS reports raise the windshear odds.
 #pragma once
 #include <ctime>
 #include <string>
@@ -24,31 +21,12 @@ struct Pirep {
     bool llws = false;                 // the report mentions low-level wind shear (LLWS, or a /WS group)
 };
 
-struct Area {
-    std::string product;               // "SIGMET", "CONVECTIVE SIGMET", "INTL SIGMET", "G-AIRMET"
-    std::string hazard;                // TURB, MTW, TS, CONVECTIVE, ICE, IFR, MT_OBSC, LLWS, SFC_WND, FZLVL, VA, TC, ...
-    std::string severity;              // MOD, SEV, ... ("" when not given)
-    std::string id, raw;
-    double baseFt = -1, topFt = -1;    // -1 = surface / unknown top
-    std::time_t validFrom = 0, validTo = 0;
-    bool line = false;                 // a line (e.g. freezing level) rather than an area
-    std::vector<std::pair<double, double>> pts;   // (lat, lon)
-    bool contains(double lat, double lon) const;
-    bool isTurbulence() const;
-};
-
 struct Snapshot {
     std::vector<Pirep> pireps;
-    std::vector<Area> areas;
     std::time_t fetched = 0;
 };
 
 std::vector<Pirep> parsePireps(const std::string& json, std::string* err = nullptr);
-// `product` labels US airsigmet entries (SIGMET / CONVECTIVE SIGMET / AIRMET from airSigmetType and hazard).
-std::vector<Area> parseAirSigmets(const std::string& json, std::string* err = nullptr);
-std::vector<Area> parseIntlSigmets(const std::string& json, std::string* err = nullptr);
-// G-AIRMETs come as snapshots for several forecast hours: only the snapshot valid nearest `now` is kept.
-std::vector<Area> parseGairmets(const std::string& json, std::time_t now, std::string* err = nullptr);
 
 // A reported intensity is relative to the aircraft that reported it: "moderate" in a C172 is far less air than "moderate"
 // in an A320. Reports are converted to the EDR of the air using the reporter's size class:
@@ -67,7 +45,7 @@ struct Floor {
     double edr = 0;
     std::string why;                   // e.g. "PIREP MOD FL290 A321 12 nm, 20 min ago"
 };
-// Turbulence floor at a point from pilot reports (strongest one wins). SIGMETs and AIRMETs are shown on the map only.
+// Turbulence floor at a point from pilot reports (strongest one wins).
 //  - PIREPs (converted for the reporter's size, see reporterClass): full within 10 nm and 30 min, fading to nothing at 50 nm and 90 min; in the reported layer (or +-3,000 ft of the
 //    flight level) with a 2,000 ft taper.
 Floor floorAt(const Snapshot& s, double lat, double lon, double altFt, std::time_t now);
