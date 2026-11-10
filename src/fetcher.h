@@ -20,6 +20,7 @@ struct FetchRequest {
     Config cfg;
     bool radarOnly = false; // refresh only the storm radar (stations, ATIS and winds aloft are kept)
     bool immediate = false; // apply without X-Plane's 1-2 minute fade (first load, manual refresh)
+    double gsKt = 0, trackDeg = 0; // ground speed and true track: the GFS lattice is centred ahead of a fast aircraft
 };
 
 struct FetchResult {
@@ -79,6 +80,12 @@ private:
     std::vector<ModelPoint> fetchModelClouds(const FetchRequest& r, std::time_t now, std::string& note);
     std::time_t upTime_ = 0;
     double upLat_ = 0, upLon_ = 0;
+    // the shared 3x3 GFS lattice (winds and clouds use the same 9 nodes)
+    bool lattHave_ = false;
+    double lattLat_ = 0, lattLon_ = 0, lattStep_ = 1;
+    std::time_t lattTime_ = 0;
+    void chooseLattice(const FetchRequest& r, std::time_t now);
+    std::vector<std::pair<double, double>> latticePoints() const;
     std::vector<AloftStation> fetchUpperAir(const FetchRequest& r, std::time_t now, std::string& note, const std::vector<Station>& known);
     RadarResult lastMrms_;            // last MRMS result that worked, reused for a while when a download fails (worker thread only)
     std::time_t lastMrmsAt_ = 0;

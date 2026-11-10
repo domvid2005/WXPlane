@@ -66,6 +66,7 @@ bool g_loopStarted = false;
 Clock::time_point g_lastApplyLogAt{};
 XPLMDataRef g_drFramePeriod = nullptr;
 XPLMDataRef g_drLat = nullptr, g_drLon = nullptr, g_drLevels = nullptr, g_drAgl = nullptr, g_drLoading = nullptr;
+XPLMDataRef g_drGsFetch = nullptr, g_drTrkFetch = nullptr;   // ground speed (m/s) and true track: the GFS lattice is centred ahead of a fast aircraft
 float g_levelsM[XPLM_NUM_TEMPERATURE_LAYERS];
 float g_windAltM[XPLM_NUM_WIND_LAYERS];
 bool g_haveWindAlts = false;
@@ -2341,6 +2342,7 @@ float flightLoop(float, float, int, void*) {
                 g_lastRadarRequest = now;
                 wx::FetchRequest rq;
                 rq.lat = lat; rq.lon = lon; rq.cfg = g_cfg;
+                rq.gsKt = g_drGsFetch ? XPLMGetDataf(g_drGsFetch) * 1.943844 : 0; rq.trackDeg = g_drTrkFetch ? XPLMGetDataf(g_drTrkFetch) : 0;
                 if (catchUp) g_radarDeferred = false;
                 else if (!g_firstApplyDone && g_cfg.startupStaged && g_cfg.radar) { rq.cfg.radar = false; g_radarDeferred = true; }
                 rq.immediate = manual || !g_firstApplyDone;
@@ -2615,6 +2617,8 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     }
 
     g_drLat = XPLMFindDataRef("sim/flightmodel/position/latitude");
+    g_drGsFetch = XPLMFindDataRef("sim/flightmodel/position/groundspeed");
+    g_drTrkFetch = XPLMFindDataRef("sim/flightmodel/position/hpath");
     g_drLon = XPLMFindDataRef("sim/flightmodel/position/longitude");
     g_drLevels = XPLMFindDataRef("sim/weather/region/atmosphere_alt_levels_m");
     g_drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");

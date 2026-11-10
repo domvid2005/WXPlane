@@ -446,19 +446,58 @@ RadarResult Fetcher::fetchRainViewer(const FetchRequest& rq, std::time_t now) {
     return out;
 }
 
-std::vector<ModelPoint> Fetcher::fetchModelClouds(const FetchRequest& rq, std::time_t now, std::string& note) {
-    // The same 3x3 lattice as the winds, every 30 minutes (cloud cover changes slowly; it keeps the open-meteo.com cost low).
-    const double cLat = std::round(rq.lat), cLon = std::round(rq.lon);
-    if (!cloudCache_.empty() && now - cloudTime_ < 1800 && std::fabs(cLat - cloudLat_) < 0.5 && std::fabs(cLon - cloudLon_) < 0.5) return cloudCache_;
+// The 3x3 GFS lattice shared by the winds and the clouds. Nodes sit on whole degrees of latitude and on multiples of `step` degrees
+// of longitude (1 up to about 48 degrees latitude, 2 by 60, 3 by 70...), so the 9 points span roughly 120 x 120 nm anywhere.
+// A fast aircraft (over 150 kt) gets the lattice centred about 7 minutes ahead along its track, so it stays inside the 9 points
+// for at least 15 minutes. The lattice is moved only when the aircraft's (projected) node changes AND the lattice is at least 15
+// minutes old, or at once when the aircraft is more than 1.6 node spacings from the centre (a reposition). That caps a jet at
+// 4 downloads an hour of each kind: about 320 Open-Meteo calls an hour instead of about 970 (free allowance, 2026-11-09).
+static double lonStepFor(double lat) {
+    const double c = std::cos(std::fabs(lat) * 3.14159265358979323846 / 180.0);
+    double st = c > 0.01 ? std::round(1.0 / c) : 6.0;
+    return st < 1 ? 1 : st > 6 ? 6 : st;
+}
+static double wrapLon(double lo) { while (lo > 180) lo -= 360; while (lo < -180) lo += 360; return lo; }
+
+void Fetcher::chooseLattice(const FetchRequest& rq, std::time_t now) {
+    const double d2r = 3.14159265358979323846 / 180.0;
+    double aLat = rq.lat, aLon = rq.lon;
+    if (rq.gsKt > 150) {
+        const double d = std::min(rq.gsKt * 0.125, 62.0);   // nm, 7.5 minutes ahead
+        aLat += d * std::cos(rq.trackDeg * d2r) / 60.0;
+        const double c = std::max(0.05, std::cos(rq.lat * d2r));
+        aLon = wrapLon(aLon + d * std::sin(rq.trackDeg * d2r) / (60.0 * c));
+        aLat = std::max(-88.0, std::min(88.0, aLat));
+    }
+    const double nLat = std::round(aLat), step = lonStepFor(nLat);
+    const double nLon = wrapLon(std::round(aLon / step) * step);
+    if (lattHave_) {
+        double dLon = std::fabs(rq.lon - lattLon_);
+        if (dLon > 180) dLon = 360 - dLon;
+        const bool inside = std::fabs(rq.lat - lattLat_) <= 1.6 && dLon <= 1.6 * lattStep_;
+        const bool sameNode = std::fabs(nLat - lattLat_) < 0.5 && std::fabs(wrapLon(nLon - lattLon_)) < 0.5;
+        if (inside && (sameNode || now - lattTime_ < 900)) return;
+    }
+    lattHave_ = true; lattLat_ = nLat; lattLon_ = nLon; lattStep_ = step; lattTime_ = now;
+}
+
+std::vector<std::pair<double, double>> Fetcher::latticePoints() const {
     std::vector<std::pair<double, double>> pts;
     for (int dy = -1; dy <= 1; ++dy)
         for (int dx = -1; dx <= 1; ++dx) {
-            double la = cLat + dy, lo = cLon + dx;
+            const double la = lattLat_ + dy;
             if (la > 89 || la < -89) continue;
-            if (lo > 180) lo -= 360;
-            if (lo < -180) lo += 360;
-            pts.push_back({la, lo});
+            pts.push_back({la, wrapLon(lattLon_ + dx * lattStep_)});
         }
+    return pts;
+}
+
+std::vector<ModelPoint> Fetcher::fetchModelClouds(const FetchRequest& rq, std::time_t now, std::string& note) {
+    // The same 3x3 lattice as the winds (chosen there), every 30 minutes (cloud cover changes slowly; it keeps the open-meteo.com cost low).
+    if (!lattHave_) chooseLattice(rq, now);
+    const double cLat = lattLat_, cLon = lattLon_;
+    if (!cloudCache_.empty() && now - cloudTime_ < 1800 && cloudLat_ == cLat && cloudLon_ == cLon) return cloudCache_;
+    const std::vector<std::pair<double, double>> pts = latticePoints();
     std::string body, err;
     long st = 0;
     std::vector<ModelPoint> got;
@@ -483,17 +522,10 @@ std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::ti
     // 60 nm: the whole temperature column changed at once and the pressure surfaces with it (altitude fluctuations reported in cruise,
     // 2026-11-09). On a fixed lattice the same place always uses the same nodes, so the profile changes smoothly along the route.
     (void)known;
-    const double cLat = std::round(rq.lat), cLon = std::round(rq.lon);
-    if (!upCache_.empty() && now - upTime_ < 2700 && std::fabs(cLat - upLat_) < 0.5 && std::fabs(cLon - upLon_) < 0.5) return upCache_;
-    std::vector<std::pair<double, double>> pts;
-    for (int dy = -1; dy <= 1; ++dy)
-        for (int dx = -1; dx <= 1; ++dx) {
-            double la = cLat + dy, lo = cLon + dx;
-            if (la > 89 || la < -89) continue;
-            if (lo > 180) lo -= 360;
-            if (lo < -180) lo += 360;
-            pts.push_back({la, lo});
-        }
+    chooseLattice(rq, now);
+    const double cLat = lattLat_, cLon = lattLon_;
+    if (!upCache_.empty() && now - upTime_ < 2700 && upLat_ == cLat && upLon_ == cLon) return upCache_;
+    const std::vector<std::pair<double, double>> pts = latticePoints();
     const std::vector<int> full = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
     const std::vector<int> safe = {925, 850, 700, 500, 400, 300, 250, 200};   // if the endpoint refuses the highest levels
     std::vector<AloftStation> got;
@@ -520,7 +552,7 @@ std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::ti
     double top = 0;
     for (const auto& g : got) for (const auto& L : g.levels) if (L.hasWind) top = std::max(top, L.altFt);
     char b[160];
-    std::snprintf(b, sizeof b, "global-model winds aloft: %zu of %zu point(s) on the 1-degree lattice around %.0f,%.0f, up to FL%.0f", got.size(), pts.size(), cLat, cLon, top / 100.0);
+    std::snprintf(b, sizeof b, "global-model winds aloft: %zu of %zu point(s) on the lattice around %.0f,%.0f (%.0f deg apart E-W), up to FL%.0f", got.size(), pts.size(), cLat, cLon, lattStep_, top / 100.0);
     note = b;
     {   // what the global model says at the first point, level by level, so a wrong profile can be traced to its source
         std::string lv;

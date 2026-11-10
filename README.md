@@ -126,8 +126,8 @@ No free global radar data feed offers raw values. With `radar_global = 1` WXPlan
 |---|---|---|---|
 | METARs | NOAA AWC | 1 (bounding box) | every `update_minutes` (5) |
 | ATIS | D-ATIS | 1 per airport, at most `atis_max_airports` (2) within `atis_range_nm` | every update; airports with no ATIS are skipped for 1 hour |
-| Winds/temps aloft | Open-Meteo GFS | 1 request for 9 points (a 3x3 lattice of 1° nodes around the aircraft) | every 45 minutes, or when the aircraft reaches a new 1° node |
-| Clouds aloft and open-water weather | Open-Meteo GFS | 1 request for the same 9 points | every 30 minutes, or when the aircraft reaches a new 1° node |
+| Winds/temps aloft | Open-Meteo GFS | 1 request for 9 points (a 3x3 lattice about 60 nm apart around the aircraft) | every 45 minutes; when the aircraft moves on to a new node, at most every 15 minutes |
+| Clouds aloft and open-water weather | Open-Meteo GFS | 1 request for the same 9 points | every 30 minutes, and whenever the winds' lattice moves |
 | Radar | NOAA MRMS | 2 files (reflectivity + echo tops, a few MB each) | every update |
 | Global radar (optional) | RainViewer | 1 index + up to 9 tiles | every update, only outside NOAA coverage |
 
@@ -427,8 +427,15 @@ within 600 nm and this option off, the weather already set is kept (the 2026-11-
 
 The free tier allows 10,000 calls a day (and 5,000 an hour, 600 a minute) per IP address, non-commercial use. A request with many
 variables counts as several calls (one per 10 variables, per point). The cloud request (32 variables, so 4 calls per point, x 9 points) counts as
-36 calls every 30 minutes, and the winds (44 variables) 45 calls every 45 minutes: about 3,200 calls in 24 hours of continuous flying,
-well inside the limit. A busy household or a shared IP sharing the same allowance is the only way to run out; the plugin then keeps the
+36 calls, and the winds (44 variables) 45 calls.
+
+* **Parked or slow:** clouds every 30 minutes and winds every 45 minutes, about 3,200 calls a day, whatever `update_minutes` is.
+* **Moving:** the 9 points move with the aircraft (a fast aircraft gets them centred about 7 minutes ahead along its track, and the
+  east-west spacing widens towards the poles so they stay about 60 nm apart). They move at most every 15 minutes (each move is 81
+  calls), unless the aircraft is more than 1.6 spacings from their centre (a reposition). A jet at cruise uses about 320 calls an
+  hour: about 3,200 on a 10-hour flight, 7,800 for 24 hours non-stop, and it is never more than about 45 nm from a model point.
+  (Before this cap, a jet re-downloaded at nearly every update: about 970 calls an hour.)
+* `update_minutes` does not change these numbers, so it can be set as low as you like for the METARs (NOAA has no daily cap). A busy household or a shared IP sharing the same allowance is the only way to run out; the plugin then keeps the
 previous download (3 hours) and logs the reason.
 
 ### Winds aloft in the log
