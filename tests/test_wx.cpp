@@ -858,6 +858,49 @@ int main() {
         XpWx w4 = base; sc.maxTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);
         CHECK(w4.turbulence == 0);
 
+        {   // steady rain (MRMS PrecipFlag, 2026-11-10 bright band): a 45 dBZ composite over light rain is capped and never a cumulonimbus
+            Config sc2 = sc; sc2.maxTurbulence = 1;
+            RadarCell sr = cell; sr.dbz = 45; sr.dbzFine = 45; sr.rateMmH = rateFromDbz(45); sr.stratiform = true; sr.topM = 11000; sr.topKnown = true;
+            XpWx w5 = base; applyStorm(w5, sr, sc2, 400, 47);
+            CHECK(w5.clouds[2].type == 2.0f && w5.turbulence == 0);
+            RadarCell cv = sr; cv.stratiform = false;
+            XpWx w6 = base; applyStorm(w6, cv, sc2, 400, 47);
+            CHECK(w6.clouds[2].type == 3.0f && w6.turbulence > 0);
+            // the mask: a 3 x 3 field, a convective pixel (6), steady rain (1, 10), snow (3), hail (7), tropical convection (96)
+            GribField rf; rf.ni = 3; rf.nj = 2; rf.lat0 = 47.02; rf.lon0 = -119.0; rf.dLat = rf.dLon = 0.01;
+            rf.v = {45, 45, 45, 45, 25, 45};
+            GribField fl = rf; fl.v = {6, 1, 10, 3, 1, 96};
+            int capped = 0;
+            GribField m = convectiveMask(rf, &fl, nullptr, 33.0f, capped);
+            CHECK(capped == 3 && rf.v[0] == 45 && rf.v[1] == 33 && rf.v[2] == 33 && rf.v[3] == 33 && rf.v[4] == 25 && rf.v[5] == 45);
+            CHECK(m.v[0] == 1 && m.v[1] == 0 && m.v[5] == 1);
+            fl.v[1] = 7; GribField rf2 = rf; rf2.v[1] = 50; convectiveMask(rf2, &fl, nullptr, 33.0f, capped); CHECK(rf2.v[1] == 50);   // hail stays
+            // cells: one over the convective pixel stays convective, one far from it is steady rain
+            std::vector<RadarCell> cs(2); cs[0].lat = 47.02; cs[0].lon = -119.0; cs[1].lat = 46.5; cs[1].lon = -118.0;
+            markStratiform(cs, m, 2.0);
+            CHECK(!cs[0].stratiform && cs[1].stratiform);
+            // without PrecipFlag: convective only within 60 nm of an airport reporting convection
+            std::vector<Station> sts(2);
+            sts[0].icao = "KEPH"; sts[0].lat = 47.31; sts[0].lon = -119.52; sts[0].rawMetar = "METAR KEPH 100553Z AUTO 27003KT 10SM OVC031 08/07 A3002 RMK AO2 RAE0457B21E34";
+            parseReport(sts[0].rawMetar, sts[0].report);
+            sts[1].icao = "KALW"; sts[1].lat = 46.09; sts[1].lon = -118.29; sts[1].rawMetar = "METAR KALW 100553Z AUTO 15006KT 6SM RA BR FEW047 OVC060 11/08 A3007 RMK AO2 PK WND 27029/0514";
+            parseReport(sts[1].rawMetar, sts[1].report);
+            CHECK(!convectionReported(sts[0]) && !convectionReported(sts[1]));   // tonight: rain, no convection anywhere
+            GribField rf3 = rf; rf3.v = {45, 45, 45, 45, 25, 45};
+            convectiveMask(rf3, nullptr, &sts, 33.0f, capped);
+            CHECK(capped == 5 && rf3.v[0] == 33);
+            Station ts = sts[0]; ts.icao = "KMWH"; ts.lat = 47.2; ts.lon = -119.3; ts.rawMetar = "METAR KMWH 100552Z AUTO 31006KT 8SM -TSRA FEW035CB 07/07 A3004 RMK AO2 LTG DSNT W";
+            parseReport(ts.rawMetar, ts.report);
+            CHECK(convectionReported(ts));
+            sts.push_back(ts);
+            GribField rf4 = rf; rf4.v = {45, 45, 45, 45, 25, 45};
+            convectiveMask(rf4, nullptr, &sts, 33.0f, capped);
+            CHECK(capped == 0 && rf4.v[0] == 45);
+            Station cbOnly = sts[0]; cbOnly.rawMetar = "METAR KXYZ 100552Z 31006KT 10SM BKN040 07/07 A3004 RMK CB DSNT NW"; CHECK(convectionReported(cbOnly));
+            Station tsno = sts[0]; tsno.icao = "KATS"; tsno.rawMetar = "METAR KATS 100552Z AUTO 31006KT 10SM CLR 07/07 A3004 RMK AO2 TSNO"; parseReport(tsno.rawMetar, tsno.report);
+            CHECK(!convectionReported(tsno));   // the identifier and "sensor not operating" are not thunder
+        }
+
         CHECK(formatFl(11900, true) == "FL390" && formatFl(12000, false) == "~FL390" && formatFl(4700, true) == "FL150" && formatFl(0, true) == "FL000");
 
         // viewer text

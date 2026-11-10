@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Writes mock MRMS products (gzipped GRIB2) with a storm near 37.9N 97.8W for the plugin harness.
-Usage: gen_mrms.py <outdir>   -> mrms_refl.grib2.gz (simple packing), mrms_top.grib2.gz (PNG packing)"""
+Usage: gen_mrms.py <outdir>   -> mrms_refl.grib2.gz (simple packing), mrms_top.grib2.gz (PNG packing), mrms_flag.grib2.gz (PrecipFlag)"""
 import gzip, math, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_grib as g
@@ -20,6 +20,9 @@ def build(kind):
             lon = g.LO1 + i * g.DX - 360
             d = dist(lat, lon, 37.9, -97.8)
             d2 = dist(lat, lon, 38.9, -96.5)
+            if kind == 'flag':   # MRMS PrecipFlag: the storm is convection (6), the light patch steady rain (1), elsewhere none (0)
+                vals.append(6.0 if d < 0.40 else (1.0 if d2 < 0.25 else 0.0))
+                continue
             if kind == 'refl':
                 v = -99.0
                 if d < 0.40: v = round(58 - 100 * d, 1)
@@ -39,4 +42,6 @@ if __name__ == '__main__':
     top = g.message(0, g.LA1, g.LO1, la2, lo2, build('top'), 'png16')
     gzip.open(out + '/mrms_refl.grib2.gz', 'wb').write(refl)
     gzip.open(out + '/mrms_top.grib2.gz', 'wb').write(top)
+    flag = g.message(0, g.LA1, g.LO1, la2, lo2, build('flag'), 'simple')
+    gzip.open(out + '/mrms_flag.grib2.gz', 'wb').write(flag)
     print('refl', len(refl), 'top', len(top))

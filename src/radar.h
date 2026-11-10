@@ -28,6 +28,7 @@ struct RadarCell {
     float edge = 0;            // 0 = inside a cluster of storm blocks .. 1 = isolated / on the rim of one (see markStormEdges)
     bool natural = false;      // a record of the natural picture (buildNaturalCells): its size is sizeNm, not the block size
     float sizeNm = 0;          // side of the square the record stands for (natural records)
+    bool stratiform = false;   // steady (stratiform) rain or snow, not convection (MRMS PrecipFlag): no cumulonimbus, no storm turbulence or windshear
 };
 
 // Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
@@ -117,8 +118,17 @@ std::string mrmsUrl(const std::string& region, const std::string& product);
 // `tops` (km MSL, may be null) supplies echo tops. Values below zero (MRMS "missing" codes) mean no echo.
 // Values are quantized (5 dBZ, 500 m, quarter coverage) so that small radar wobbles do not change the records, and
 // `prev` (keys applied last time) gets hysteresis so storms do not flicker in and out at the thresholds.
+// `conv` (optional, same grid as refl): 1 where the precipitation is convective, 0 where it is stratiform rain or snow; cells with no
+// convective pixel in their footprint are marked stratiform.
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
-                            const std::set<std::string>* prev = nullptr);
+                            const std::set<std::string>* prev = nullptr, const GribField* conv = nullptr);
+// Convection reported at an airport (TS, SH, GR, GS, SQ in the weather; CB, TCU or LTG anywhere in the report). GFS points never count.
+bool convectionReported(const Station& st);
+// Caps steady rain/snow pixels of `refl` at capDbz and returns a mask on its grid (1 = convective). With `flag` (MRMS PrecipFlag),
+// 6, 7 and 96 are convective; without it, pixels above capDbz within 60 nm of an airport reporting convection. `capped` = pixels capped.
+GribField convectiveMask(GribField& refl, const GribField* flag, const std::vector<Station>* stations, float capDbz, int& capped);
+// Marks every cell whose footprint holds no convective pixel of `conv` as stratiform.
+void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm);
 
 // Applies a storm cell on top of the weather built for the nearest station.
 // Top (MSL, metres) of the storm cloud applied for a cell, and the value the map label shows: the measured radar echo top when

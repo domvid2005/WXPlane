@@ -52,7 +52,8 @@ public:
 private:
     void run();
     FetchResult fetch(const FetchRequest& r);
-    RadarResult fetchRadar(const FetchRequest& r, std::time_t now);
+    // stations (optional): the reports, for the convection check when MRMS PrecipFlag cannot be downloaded
+    RadarResult fetchRadar(const FetchRequest& r, std::time_t now, const std::vector<Station>* stations = nullptr);
 
     std::thread th_;
     std::mutex m_;
@@ -86,6 +87,7 @@ private:
     GribField lastTops_;              // last echo-top grid that downloaded fine, reused when a later download fails (worker thread only)
     std::string lastTopsRegion_;
     std::time_t lastTopsAt_ = 0;      // when it was downloaded
+    std::vector<Station> radarStations_; // the last full update's reports (worker thread only)
     std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
 };
 

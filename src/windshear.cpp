@@ -73,7 +73,7 @@ std::vector<Source> assess(const Env& env) {
     };
     if (env.cells)
         for (const auto& c : *env.cells) {
-            if (c.synthetic || !(c.dbz >= 30.0f) || !std::isfinite(c.lat) || !std::isfinite(c.lon)) continue;
+            if (c.synthetic || c.stratiform || !(c.dbz >= 30.0f) || !std::isfinite(c.lat) || !std::isfinite(c.lon)) continue;   // steady rain is no windshear source
             Sq& s = sq[keyOf(c.lat, c.lon)];
             if (c.dbz > s.dbz) { s.dbz = c.dbz; s.lat = c.lat; s.lon = c.lon; }
         }

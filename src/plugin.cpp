@@ -1704,13 +1704,13 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
          (g_pendingTodo.empty() && g_pendingGone.empty()) ? "" : " [queued, sent a few at a time]");
     if (g_cfg.radar) {
         if (res.radar.ok) {
-            float maxDbz = 0, maxTop = 0; int cb = 0;
-            for (const auto& c : res.radar.cells) { maxDbz = std::max(maxDbz, c.dbz); maxTop = std::max(maxTop, c.topM); if (c.dbz >= 40) ++cb; }
+            float maxDbz = 0, maxTop = 0; int cb = 0, steady = 0;
+            for (const auto& c : res.radar.cells) { maxDbz = std::max(maxDbz, c.dbz); maxTop = std::max(maxTop, c.topM); if (c.dbz >= 40 && !c.stratiform) ++cb; if (c.stratiform) ++steady; }
             if (res.radar.natural)
                 logf("radar: natural picture: %d rain records, %d dry records around them (radar_natural = 0 goes back to 12 nm blocks)%s", stormCount, dryCount,
                      res.radar.note.empty() ? "" : (" - " + res.radar.note).c_str());
-            logf("radar: %s, %d echo blocks, %d cells applied (%d at 40+ dBZ = cumulonimbus), strongest %.0f dBZ, highest echo top %.0f m%s%s; %d hole(s) interpolated, %d rim cell(s)",
-                 res.radar.source.c_str(), res.radar.echoBlocks, stormCount, cb, maxDbz, maxTop,
+            logf("radar: %s, %d echo blocks, %d cells applied (%d convective at 40+ dBZ = cumulonimbus, %d steady rain/snow), strongest %.0f dBZ, highest echo top %.0f m%s%s; %d hole(s) interpolated, %d rim cell(s)",
+                 res.radar.source.c_str(), res.radar.echoBlocks, stormCount, cb, steady, maxDbz, maxTop,
                  res.radar.topsFromRadar ? ", echo tops from radar" : ", tops estimated", res.radar.note.empty() ? "" : (" (" + res.radar.note + ")").c_str(), res.radar.holesFilled, res.radar.rimCells);
         }
         else if (g_radarDeferred)

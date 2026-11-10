@@ -92,6 +92,8 @@ struct Config {
     int radarNaturalMax = 250;          // records the natural picture may use (rain and the dry records around it)
     double radarNaturalFineNm = 3.0;    // smallest record near the aircraft (grows with distance, and when the budget runs short)
     double radarMinDbz = 20;      // ignore weaker echoes
+    bool radarPrecipType = true;  // MRMS PrecipFlag: only convection becomes cumulonimbus; steady rain and snow are capped (bright band)
+    double radarStratiformMaxDbz = 33;   // strongest reflectivity used for steady rain or snow (the melting-layer bright band reads 40-45 dBZ over light rain)
     double radarRainFullMmH = 40; // rain rate that maps to X-Plane's full precipitation (1.0)
     // Max turbulence (menu, bottom): 0 = no turbulence from WXPlane at all, 1 = full realism. Scales every turbulence
     // WXPlane sends: the real-data (EDR) turbulence, the storm turbulence and the gust turbulence at airports.

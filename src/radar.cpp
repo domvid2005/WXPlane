@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -924,8 +925,77 @@ const RadarCell* naturalCellAt(const RadarResult& r, double lat, double lon) {
     return nullptr;
 }
 
+// Convection seen at an airport: thunder, showers, hail or squalls in the weather, or CB / TCU / lightning anywhere in the report
+// (body or remarks: "BKN030CB", "CB DSNT N", "LTG DSNT"). The global model's points are forecasts and never count.
+bool convectionReported(const Station& st) {
+    if (st.icao.compare(0, 3, "GFS") == 0) return false;
+    const Report& r = st.report;
+    if (r.thunder) return true;
+    for (const char* k : {"TS", "SH", "GR", "GS", "SQ"}) if (r.wxText.find(k) != std::string::npos) return true;
+    std::string tok;
+    std::istringstream in(st.rawMetar);
+    int n = 0;
+    while (in >> tok) {
+        ++n;
+        if (tok == "METAR" || tok == "SPECI" || (n <= 2 && tok.size() == 4)) continue;   // the header and the station's own identifier
+        if (tok == "TSNO") continue;                                                      // "thunderstorm sensor not operating"
+        auto ends = [&](const char* e) { const size_t k = std::strlen(e); return tok.size() >= k && tok.compare(tok.size() - k, k, e) == 0; };
+        if (tok == "CB" || tok == "TCU" || ends("CB") || ends("TCU") || tok.compare(0, 3, "LTG") == 0) return true;
+        const size_t ts = tok.find("TS");   // TSRA, +TSRA, VCTS, TSB05, TSE10 ...
+        if (ts != std::string::npos && (ts == 0 || tok[ts - 1] == '+' || tok[ts - 1] == '-' || (ts >= 2 && tok.compare(ts - 2, 2, "VC") == 0))) return true;
+    }
+    return false;
+}
+
+// Steady rain or snow under a melting layer reads 40-45 dBZ in the composite (the bright band) while 15-30 dBZ reach the ground
+// (2026-11-10, eastern Washington: 10 "cumulonimbus" cells, no airport reporting TS, CB or more than 3 mm of rain an hour). MRMS
+// PrecipFlag classes every pixel; only convection (6), hail (7) and tropical convection (96) keep their reflectivity and can become
+// cumulonimbus. Everything else is capped at radar_stratiform_max_dbz and marked stratiform. Without PrecipFlag, an echo counts as
+// convective only within 60 nm of an airport reporting convection. Returns the mask (1 = convective) on refl's grid.
+GribField convectiveMask(GribField& refl, const GribField* flag, const std::vector<Station>* stations, float capDbz, int& capped) {
+    GribField m = refl;
+    capped = 0;
+    std::vector<const Station*> ev;
+    if (!flag && stations) for (const auto& st : *stations) if (convectionReported(st)) ev.push_back(&st);
+    const bool sameGrid = flag && flag->ni == refl.ni && flag->nj == refl.nj && std::fabs(flag->lat0 - refl.lat0) < 1e-6 && std::fabs(flag->lon0 - refl.lon0) < 1e-6;
+    for (int j = 0; j < refl.nj; ++j) {
+        const double la = refl.lat0 - j * refl.dLat;
+        for (int i = 0; i < refl.ni; ++i) {
+            const size_t k = (size_t)j * (size_t)refl.ni + (size_t)i;
+            const double lo = refl.lon0 + i * refl.dLon;
+            bool conv;
+            if (flag) {
+                const float f = sameGrid ? flag->v[k] : flag->at(la, lo);
+                conv = (f > 5.5f && f < 7.5f) || (f > 95.5f && f < 96.5f);
+            } else {
+                conv = false;
+                if (refl.v[k] > capDbz)
+                    for (const Station* s : ev) if (std::fabs(s->lat - la) < 1.0 && distNm(la, lo, s->lat, s->lon) <= 60.0) { conv = true; break; }
+            }
+            m.v[k] = conv ? 1.0f : 0.0f;
+            if (!conv && refl.v[k] > capDbz) { refl.v[k] = capDbz; ++capped; }
+        }
+    }
+    return m;
+}
+
+void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm) {
+    if (!conv.valid()) return;
+    for (auto& c : cells) {
+        const double halfNm = std::max((double)c.sizeNm, cellNm) * 0.5;
+        const double dLat = halfNm / 60.0, dLon = halfNm / (60.0 * std::max(0.2, std::cos(c.lat * kPi / 180.0)));
+        const int j0 = std::max(0, (int)std::floor((conv.lat0 - (c.lat + dLat)) / conv.dLat)), j1 = std::min(conv.nj - 1, (int)std::ceil((conv.lat0 - (c.lat - dLat)) / conv.dLat));
+        const int i0 = std::max(0, (int)std::floor((c.lon - dLon - conv.lon0) / conv.dLon)), i1 = std::min(conv.ni - 1, (int)std::ceil((c.lon + dLon - conv.lon0) / conv.dLon));
+        bool any = false;
+        for (int j = j0; j <= j1 && !any; ++j)
+            for (int i = i0; i <= i1; ++i)
+                if (conv.v[(size_t)j * (size_t)conv.ni + (size_t)i] > 0.5f) { any = true; break; }
+        c.stratiform = !any;
+    }
+}
+
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
-                            const std::set<std::string>* prev) {
+                            const std::set<std::string>* prev, const GribField* conv) {
     RadarResult res;
     res.attempted = true;
     if (!refl.valid()) { res.note = "no reflectivity grid"; return res; }
@@ -999,6 +1069,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     res.echoBlocks = (int)all.size();
     if (cfg.radarNatural) {
         buildNaturalCells(refl, tops, lat, lon, cfg, res);
+        if (conv) markStratiform(res.cells, *conv, cfg.radarCellNm);
         res.ok = true;
         res.topsFromRadar = tops != nullptr;
         return res;
@@ -1021,6 +1092,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
                                                std::max(50.0, cfg.stormTopStepM), {30.0, 40.0, 50.0}, std::max(4, cfg.radarMaxCells));
     markStormEdges(all, cfg.radarCellNm);
     if (cfg.stormContour) for (auto& c : all) if (!c.synthetic) c.radiusScale = std::min(1.0f, c.contourScale);   // the outline decides how far a measured block reaches
+    if (conv) markStratiform(all, *conv, cfg.radarCellNm);
     res.cells = std::move(all);
     res.ok = true;
     res.topsFromRadar = tops != nullptr;
@@ -1083,7 +1155,7 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     // further down to 1.0 made smooth stratus sheets with curtain edges, so the floor stays at cumulus.
     // 3 (cumulonimbus) only for real thunderstorm cores: X-Plane gives that type strong up- and downdrafts. Ordinary rain clouds are
     // cumulus (2), even when they are tall (before: 30 dBZ or a top over 6 km already made a cumulonimbus, 2026-11-04 altitude-loss log).
-    cl.type = dbz >= 40.0f ? 3.0f : 2.0f;
+    cl.type = dbz >= 40.0f && !c.stratiform ? 3.0f : 2.0f;   // steady rain (MRMS PrecipFlag) is never a cumulonimbus
     float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
     cl.coverage = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac);
     if (!c.synthetic && c.edge <= 0.01f && dbz >= 35.0f)   // deep inside a storm: solid, so X-Plane draws no clear-air pockets (and no rain-free spots on the map) there
@@ -1099,7 +1171,7 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     for (const auto& k : x.clouds) if (k.coverage > 0) ++x.cloudCount;
 
     // Turbulence and gusts below the storm top.
-    float turb = clampf((dbz - 30.0f) / 30.0f, 0.0f, 1.0f) * (float)cfg.maxTurbulence;
+    float turb = c.stratiform ? 0.0f : clampf((dbz - 30.0f) / 30.0f, 0.0f, 1.0f) * (float)cfg.maxTurbulence;   // steady rain: no storm turbulence
     if (turb > 0) {
         if (x.winds.empty() && x.hasWind) {
             XpWind w;

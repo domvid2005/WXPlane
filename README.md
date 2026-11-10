@@ -72,7 +72,7 @@ No compiler? Push this folder to a GitHub repo; `.github/workflows/build.yml` bu
 
 ## Config keys (`WXPlane.cfg`)
 
-`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `max_turbulence` (1), `apply_frame_ms` (6: in flight, weather records are handed to X-Plane at most this many ms per tick; 0 = all at once), `kept_airports_max` (200: airports that left range are kept in place with their surroundings' weather instead of a replacing update; above this many, one replacing clean-up), `realistic_turbulence` (1), `model_clouds` (1), `ocean_model_weather` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
+`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_precip_type` (1), `radar_stratiform_max_dbz` (33), `radar_rain_full_mmh` (40), `max_turbulence` (1), `apply_frame_ms` (6: in flight, weather records are handed to X-Plane at most this many ms per tick; 0 = all at once), `kept_airports_max` (200: airports that left range are kept in place with their surroundings' weather instead of a replacing update; above this many, one replacing clean-up), `realistic_turbulence` (1), `model_clouds` (1), `ocean_model_weather` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
 
 Advanced settings (start-up gating, `transition_s`, `update_transition_s`, `apply_per_tick`, `first_load_immediate`, station and gap-fill record radii, `low_cloud_type`, storm top handling, `rough_min_coverage`) are no longer written to `WXPlane.cfg`. They keep their built-in defaults; a line added by hand is still read.
 
@@ -96,6 +96,13 @@ X-Plane's weather API cannot take a radar image, so WXPlane builds the storms fr
 Every update (`update_minutes`, 5 by default) a background thread downloads:
 
 * **MergedReflectivityQCComposite** from NOAA's MRMS system (`mrms.ncep.noaa.gov`), a quality-controlled mosaic of the whole US radar network at about 1 km, valid within a couple of minutes.
+* **PrecipFlag** from MRMS (`radar_precip_type`, default on): the type of precipitation at every pixel. The composite is the strongest
+  echo in the column, and in steady rain or snow the melting layer (the bright band) reads 40-45 dBZ over light rain at the ground
+  (2026-11-10, eastern Washington: 10 "cumulonimbus" cells, while no airport reported thunder, CB or more than 3 mm of rain an hour).
+  Only convection (6), hail (7) and tropical convection (96) keep their reflectivity and can become cumulonimbus. Steady rain and
+  snow are capped at `radar_stratiform_max_dbz` (33, about 4 mm/h) and get rain cloud with no storm turbulence and no windshear.
+  If PrecipFlag cannot be downloaded, an echo counts as convective only within 60 nm of an airport reporting thunder, showers, hail,
+  CB, TCU or lightning. The radar log line counts both ("N convective at 40+ dBZ = cumulonimbus, M steady rain/snow").
 * **EchoTop_18**, the height in km MSL of the 18 dBZ echo, used as the storm top.
 
 Both are gzipped GRIB2 files. WXPlane decodes them itself (no extra libraries) and only keeps the area around the aircraft (`radar_range_nm`). The CONUS, Alaska, Hawaii, Caribbean and Guam products are used by position.
@@ -129,7 +136,7 @@ thunderstorms come from the METARs (TS, CB) and from the GFS weather codes over 
 | ATIS | D-ATIS | 1 per airport, at most `atis_max_airports` (2) within `atis_range_nm` | every update; airports with no ATIS are skipped for 1 hour |
 | Winds/temps aloft | Open-Meteo GFS | 1 request for 9 points (a 3x3 lattice about 60 nm apart around the aircraft) | every 45 minutes; when the aircraft moves on to a new node, at most every 15 minutes |
 | Clouds aloft and open-water weather | Open-Meteo GFS | 1 request for the same 9 points | every 30 minutes, and whenever the winds' lattice moves |
-| Radar | NOAA MRMS | 2 files (reflectivity + echo tops, a few MB each) | every update |
+| Radar | NOAA MRMS | 3 files (reflectivity + echo tops, a few MB each, + precipitation type, about 130 KB) | every update |
 
 An update also happens early when you move more than `refetch_move_nm` (40 nm; at most once a minute), and when you press "Refresh Weather Data Now" or toggle a data option. Applying is incremental: only records that changed are sent to X-Plane.
 

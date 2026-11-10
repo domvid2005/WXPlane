@@ -162,7 +162,7 @@ static bool g_ocean = false, g_oceanModel = false; static int g_oceanMetar = 0; 
 static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
 static void (*g_ecBuild)(std::time_t run, int step) = nullptr;   // HARNESS_TURB: builds the synthetic ECMWF index/file for one run+step
 static std::vector<std::string> g_urls;
-static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
+static std::string g_mrmsRefl, g_mrmsTop, g_mrmsFlag, g_tilePng;
 static std::string readFile(const char* p) { FILE* f = std::fopen(p, "rb"); std::string r; if (!f) return r; char b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) r.append(b, n); std::fclose(f); return r; }
 static const char* kAwcT =
     "[{\"icaoId\":\"KICT\",\"lat\":37.65,\"lon\":-97.43,\"elev\":407,\"rawOb\":\"KICT @A@ 00000KT 1/4SM FG VV001 08/08 A3010 RMK AO2\"},"
@@ -275,7 +275,7 @@ CURLcode curl_easy_perform(CURL* c) {
         return 0;
     }
     if (e->url.find("mrms.ncep.noaa.gov") != std::string::npos) {
-        const std::string& b = e->url.find("EchoTop_18") != std::string::npos ? g_mrmsTop : g_mrmsRefl;
+        const std::string& b = e->url.find("EchoTop_18") != std::string::npos ? g_mrmsTop : e->url.find("PrecipFlag") != std::string::npos ? g_mrmsFlag : g_mrmsRefl;
         e->status = b.empty() ? 404 : 200;
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
@@ -738,6 +738,7 @@ int main() {
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
+    g_mrmsFlag = readFile((std::string(kScratch) + "mrms_flag.grib2.gz").c_str());
     g_tilePng = readFile((std::string(kScratch) + "tile.png").c_str());
     CHECK(!g_mrmsRefl.empty() && !g_mrmsTop.empty() && !g_tilePng.empty());
     char n[256], s[256], d[256];

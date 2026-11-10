@@ -1,4 +1,6 @@
 #include "fetcher.h"
+#include <cstring>
+#include <sstream>
 
 #include <algorithm>
 #include <cmath>
@@ -108,7 +110,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     res.radarOnly = rq.radarOnly;
     const Config& cfg = rq.cfg;
     if (rq.radarOnly) {
-        if (cfg.radar) res.radar = fetchRadar(rq, res.fetchedAt);
+        if (cfg.radar) res.radar = fetchRadar(rq, res.fetchedAt, radarStations_.empty() ? nullptr : &radarStations_);
         res.ok = res.radar.ok;
         if (!res.ok) res.error = res.radar.note.empty() ? std::string("radar refresh failed") : res.radar.note;
         return res;
@@ -219,7 +221,8 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     }
 
     // 4) Radar storm cells.
-    if (cfg.radar) res.radar = fetchRadar(rq, now);
+    radarStations_ = keep;   // radar-only refreshes check convection against these
+    if (cfg.radar) res.radar = fetchRadar(rq, now, &keep);
 
     res.noaaFixes = 0;
     for (const auto& k : keep) if (!k.filled.empty()) ++res.noaaFixes;
@@ -258,7 +261,7 @@ GribWindow windowFor(double lat, double lon, double rangeNm) {
 }
 } // namespace
 
-RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
+RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const std::vector<Station>* stations) {
     const Config& cfg = rq.cfg;
     RadarResult out;
     out.attempted = true;
@@ -289,13 +292,32 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
                 tops = lastTops_; haveTops = true; oldTops = true;
             }
         }
-        out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg, &radarPrev_);
+        // steady rain and snow (MRMS PrecipFlag): capped and marked, so the bright band never makes a cumulonimbus
+        GribField conv;
+        std::string typeNote;
+        if (cfg.radarPrecipType) {
+            GribField flag;
+            std::string flagErr;
+            bool haveFlag = loadMrms(mrmsUrl(region, "PrecipFlag"), win, flag, flagErr);
+            if (!haveFlag) { flag = GribField(); haveFlag = loadMrms(mrmsUrl(region, "PrecipFlag"), win, flag, flagErr); }
+            if (haveFlag && flag.refTime > 0 && refl.refTime > 0 && std::llabs((long long)(flag.refTime - refl.refTime)) > 20 * 60) { haveFlag = false; flagErr = "older than the reflectivity"; }
+            if (haveFlag || stations) {
+                int capped = 0;
+                conv = convectiveMask(refl, haveFlag ? &flag : nullptr, stations, (float)cfg.radarStratiformMaxDbz, capped);
+                char b[200];
+                if (haveFlag) std::snprintf(b, sizeof b, "precipitation type from MRMS PrecipFlag: %d pixel(s) of steady rain/snow capped at %.0f dBZ", capped, cfg.radarStratiformMaxDbz);
+                else std::snprintf(b, sizeof b, "MRMS PrecipFlag unavailable (%s): convection only within 60 nm of an airport reporting it; %d pixel(s) capped at %.0f dBZ", flagErr.c_str(), capped, cfg.radarStratiformMaxDbz);
+                typeNote = b;
+            }
+        }
+        out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr);
         radarPrev_.clear();
         for (const auto& c : out.cells) radarPrev_.insert(c.key);
         out.source = "NOAA MRMS (" + name + ")";
         out.dataTime = refl.refTime;
         if (oldTops) out.note = "echo-top download failed (" + topErr + "), reusing the last good tops" + " from " + std::to_string((now - lastTopsAt_) / 60) + " min ago";
         else if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
+        if (!typeNote.empty()) out.note += (out.note.empty() ? "" : "; ") + typeNote;
         if (out.ok) { lastMrms_ = out; lastMrmsAt_ = now; lastMrmsLat_ = rq.lat; lastMrmsLon_ = rq.lon; }
         return out;
     }

@@ -72,6 +72,8 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "max_turbulence") c.maxTurbulence = d < 0 ? 0 : (d > 1 ? 1 : d);
         else if (k == "turb_reports") c.turbReports = toBool(v);
         else if (k == "realistic_turbulence") { c.realisticTurbulence = toBool(v); sawRealistic = true; }
+        else if (k == "radar_precip_type") c.radarPrecipType = toBool(v);
+        else if (k == "radar_stratiform_max_dbz") c.radarStratiformMaxDbz = d < 20 ? 20 : (d > 60 ? 60 : d);
         else if (k == "radar_echo_tops") c.radarEchoTops = toBool(v);
         else if (k == "storm_coverage_max") c.stormCoverageMax = d < 0.5 ? 0.5 : (d > 1 ? 1 : d);
         else if (k == "first_load_immediate") c.firstLoadImmediate = toBool(v);
@@ -222,6 +224,8 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "max_turbulence = " << c.maxTurbulence << "\n"
       << "realistic_turbulence = " << (c.realisticTurbulence ? 1 : 0) << "\n"
       << "turb_reports = " << (c.turbReports ? 1 : 0) << "\n"
+      << "radar_precip_type = " << (c.radarPrecipType ? 1 : 0) << "\n"
+      << "radar_stratiform_max_dbz = " << c.radarStratiformMaxDbz << "\n"
       << "radar_echo_tops = " << (c.radarEchoTops ? 1 : 0) << "\n"
       << "storm_coverage_max = " << c.stormCoverageMax << "\n"
       << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"
