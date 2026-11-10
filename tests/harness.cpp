@@ -160,6 +160,7 @@ static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
 static std::string g_pirepJson;
 static bool g_ocean = false, g_oceanModel = false; static int g_oceanMetar = 0;   // HARNESS_OCEAN: METAR searches answer HTTP 204 (open water)   // HARNESS_TURB: pilot reports served for /api/data/pirep
 static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
+static void (*g_ecBuild)(std::time_t run, int step) = nullptr;   // HARNESS_TURB: builds the synthetic ECMWF index/file for one run+step
 static std::vector<std::string> g_urls;
 static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
 static std::string readFile(const char* p) { FILE* f = std::fopen(p, "rb"); std::string r; if (!f) return r; char b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) r.append(b, n); std::fclose(f); return r; }
@@ -234,6 +235,16 @@ CURLcode curl_easy_perform(CURL* c) {
         (e->url.find("/pirep?") != std::string::npos || e->url.find("sigmet?") != std::string::npos || e->url.find("gairmet?") != std::string::npos)) {
         const std::string b = e->url.find("/pirep?") != std::string::npos ? g_pirepJson : std::string("[]");
         e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
+    if (!g_gtgnFile.empty() && g_ecBuild && e->url.find("data.ecmwf.int/forecasts/") != std::string::npos) {
+        // the run and step the plugin asked for (".../20261109/18z/ifs/0p25/scda/20261109180000-9h-scda-fc.index"): the synthetic file is
+        // built for exactly that one, so the test does not depend on the time of day it runs at
+        const size_t k = e->url.find("/scda/");
+        int y = 0, mo = 0, d = 0, h = 0, step = -1;
+        if (k != std::string::npos && std::sscanf(e->url.c_str() + k + 6, "%4d%2d%2d%2d0000-%dh", &y, &mo, &d, &h, &step) == 5) {
+            std::tm t{}; t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d; t.tm_hour = h;
+            g_ecBuild(timegm(&t), step);
+        }
     }
     if (!g_gtgnFile.empty() && (e->url.find("nomads.ncep.noaa.gov/pub/data/nccf/com/gtgn") != std::string::npos || e->url.find("data.ecmwf.int") != std::string::npos)) {
         const bool ec = e->url.find("data.ecmwf.int") != std::string::npos;
@@ -624,17 +635,23 @@ static int runTurb() {
     std::printf("[turb] building synthetic data (%s): GTGN levels 0-50,000 ft every 5,000 ft, EDR 0.02 + 0.03 per level\n", nm);
     const bool partial = std::getenv("HARNESS_TURB_PARTIAL") != nullptr;   // a file still being uploaded: levels up to 10,000 ft only
     for (int k = 0; k <= (partial ? 2 : 10); ++k) g_gtgnFile += gen::gtgnMsg(t15, k * 5000.0, 0.02 + 0.03 * k);
-    const std::time_t run = ((now - 6 * 3600) / 21600) * 21600;
-    int kk = 0;
-    for (int lev : {700, 600, 500, 400, 300, 250, 200, 150, 100}) {
-        for (int uv = 0; uv < 2; ++uv) {
-            std::string msg = gen::ecMsg(run, 6, uv == 0, lev, kk);
-            char line[300];
-            std::snprintf(line, sizeof line, "{\"domain\": \"g\", \"step\": \"6\", \"levelist\": \"%d\", \"levtype\": \"pl\", \"param\": \"%s\", \"_offset\": %zu, \"_length\": %zu}\n", lev, uv ? "v" : "u", g_ecFile.size(), msg.size());
-            g_ecIndex += line; g_ecFile += msg;
+    g_ecBuild = [](std::time_t run, int step) {
+        static std::time_t builtRun = 0; static int builtStep = -1;
+        if (run == builtRun && step == builtStep) return;
+        builtRun = run; builtStep = step;
+        g_ecIndex.clear(); g_ecFile.clear();
+        int kk = 0;
+        for (int lev : {700, 600, 500, 400, 300, 250, 200, 150, 100}) {
+            for (int uv = 0; uv < 2; ++uv) {
+                std::string msg = gen::ecMsg(run, step, uv == 0, lev, kk);
+                char line[300];
+                std::snprintf(line, sizeof line, "{\"domain\": \"g\", \"step\": \"%d\", \"levelist\": \"%d\", \"levtype\": \"pl\", \"param\": \"%s\", \"_offset\": %zu, \"_length\": %zu}\n", step, lev, uv ? "v" : "u", g_ecFile.size(), msg.size());
+                g_ecIndex += line; g_ecFile += msg;
+            }
+            ++kk;
         }
-        ++kk;
-    }
+    };
+    g_ecBuild(((now - 6 * 3600) / 21600) * 21600, 6);
     std::printf("[turb] GTGN file %zu bytes, ECMWF file %zu bytes\n", g_gtgnFile.size(), g_ecFile.size());
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
@@ -681,7 +698,7 @@ static int runTurb() {
     std::printf("[turb] 2) over Germany: ECMWF estimate, the source changes\n");
     g_lat = 50.0; g_lon = 10.0;
     CHECK(pumpUntil("wind fields", 60));
-    CHECK(pumpUntil("ECMWF Ellrod TI1", 40));   // the estimate is there; the report floor is above it, so the source shows the floor
+    CHECK(pumpUntil("ECMWF Ellrod TI1", 90));   // the status line is logged once a minute   // the estimate is there; the report floor is above it, so the source shows the floor
     CHECK(g_logAll.find("source changed: GTGN -> ") != std::string::npos);
     CHECK(g_logAll.find("Ellrod TI1") != std::string::npos);
     CHECK(pumpUntil("floor EDR 0.300 from PIREP MOD A320 (medium", 60));
@@ -989,21 +1006,6 @@ int main() {
         std::printf("  erased %d records after switching radar off (had %d)\n", g_erases - er1, storms);
         CHECK(g_erases - er1 >= storms);
         (void)erBefore;
-    }
-
-    std::printf("[8] outside NOAA coverage: experimental global radar\n");
-    {
-        g_menuHandler(nullptr, (void*)(intptr_t)6 /*radar on again*/);
-        g_lat = 50.0; g_lon = 8.0;                       // Germany: no MRMS product, no METARs in the mock data
-        g_urls.clear();
-        g_logAll.clear();
-        g_menuHandler(nullptr, (void*)(intptr_t)7 /*kRadarGlobal -> on, refresh*/);
-        for (int i = 0; i < 300 && g_logAll.find("radar:") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
-        bool mrms = false, idx = false, tiles = false;
-        for (auto& u : g_urls) { mrms = mrms || u.find("mrms.ncep") != std::string::npos; idx = idx || u.find("weather-maps.json") != std::string::npos; tiles = tiles || u.find("/256/6/") != std::string::npos; }
-        CHECK(!mrms && idx && tiles);
-        CHECK(g_logAll.find("radar: RainViewer (global, experimental)") != std::string::npos);
-        CHECK(g_logAll.find("echo blocks") != std::string::npos);
     }
 
     g_sawImmediate = false;                                   // (the start-up and manual refreshes above are immediate by design)

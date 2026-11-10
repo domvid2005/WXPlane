@@ -858,28 +858,6 @@ int main() {
         XpWx w4 = base; sc.maxTurbulence = 0; cell.dbz = 55; applyStorm(w4, cell, sc, 400, 38);
         CHECK(w4.turbulence == 0);
 
-        // RainViewer-style tiles (z=6): one tile around 35N 97W with a dark blob
-        int x0, x1, y0, y1;
-        tileRange(35.0, -97.0, 100, 6, x0, x1, y0, y1);
-        CHECK(x0 <= x1 && y0 <= y1 && (x1 - x0 + 1) * (y1 - y0 + 1) <= 4);
-        TileImage t; t.z = 6; t.x = (int)std::floor((-97.0 + 180.0) / 360.0 * 64); t.w = t.h = 256;
-        { double r = 35.0 * 3.14159265358979 / 180; t.y = (int)std::floor((1.0 - std::log(std::tan(r) + 1.0 / std::cos(r)) / 3.14159265358979) / 2.0 * 64); }
-        t.rgba.assign(256 * 256 * 4, 0);
-        double fx = (-97.0 + 180.0) / 360.0 * 64, fy; { double r = 35.0 * 3.14159265358979 / 180; fy = (1.0 - std::log(std::tan(r) + 1.0 / std::cos(r)) / 3.14159265358979) / 2.0 * 64; }
-        int cx = (int)((fx - t.x) * 256), cy = (int)((fy - t.y) * 256);
-        for (int dy = -6; dy <= 6; ++dy) for (int dx = -6; dx <= 6; ++dx) { uint8_t* p = &t.rgba[((size_t)(cy + dy) * 256 + (size_t)(cx + dx)) * 4]; p[0] = 20; p[1] = 20; p[2] = 90; p[3] = 255; }
-        GribWindow gw; gw.latMin = 34; gw.latMax = 36; gw.lonMin = -98; gw.lonMax = -96;
-        GribField tf;
-        CHECK(tilesToField({t}, gw, tf) && tf.valid());
-        CHECK(tf.at(35.0, -97.0) > 30 && tf.at(34.2, -97.9) < -50);   // blob found at the right place, elsewhere empty
-        CHECK(dbzFromRainViewerPixel(0, 0, 0, 0) < -50 && dbzFromRainViewerPixel(20, 20, 90, 255) > dbzFromRainViewerPixel(200, 220, 255, 255));
-        std::FILE* pf = std::fopen("wx_pal_test.csv", "w");
-        std::fputs("# r,g,b,dbz\n200,220,255,15\n20,20,90,45\n", pf); std::fclose(pf);
-        CHECK(loadRainViewerPalette("wx_pal_test.csv") == 2);
-        CHECK(dbzFromRainViewerPixel(22, 18, 95, 255) == 45 && dbzFromRainViewerPixel(198, 221, 250, 255) == 15 && dbzFromRainViewerPixel(0, 255, 0, 255) < -50);
-        loadRainViewerPalette("/nonexistent");                         // unreadable file leaves the palette alone
-        CHECK(dbzFromRainViewerPixel(22, 18, 95, 255) == 45);
-
         CHECK(formatFl(11900, true) == "FL390" && formatFl(12000, false) == "~FL390" && formatFl(4700, true) == "FL150" && formatFl(0, true) == "FL000");
 
         // viewer text
@@ -924,26 +902,13 @@ int main() {
         CHECK(wrapText("", 10).size() == 1);
     }
 
-    // --- NOAA winds / temps aloft (FD winds)
-    const std::string fd =
-        "000\nFBUS31 KWNO 301359\nFD1US1\nDATA BASED ON 301200Z\nVALID 301800Z   FOR USE 1400-2100Z. TEMPS NEG ABV 24000\n\n"
-        "FT  3000    6000    9000   12000   18000   24000  30000  34000  39000\n"
-        "ABI 2420    2625+11 2731+06 2834+00 2938-16 3047-30 305945 305552 305157\n"
-        "DEN             9900+05 2215-02 2420-08 2530-20 2640-33 265648 266452 267254\n"
-        "SEA      0314+02 2820+00 3122-04 3227-15 3135-28 303743 304354 761253\n";
-    auto al = parseWindTemp(fd);
-    CHECK(al.size() == 3 && al[0].id == "ABI" && al[0].levels.size() == 9);
-    CHECK(al[0].levels[0].altFt == 3000 && al[0].levels[0].dirDeg == 240 && al[0].levels[0].speedKt == 20 && !al[0].levels[0].hasTemp);
-    CHECK(al[0].levels[1].hasTemp && al[0].levels[1].tempC == 11);
-    CHECK(al[0].levels[4].dirDeg == 290 && al[0].levels[4].speedKt == 38 && al[0].levels[4].tempC == -16);
-    CHECK(al[0].levels[6].altFt == 30000 && al[0].levels[6].speedKt == 59 && al[0].levels[6].tempC == -45); // implied minus
-    CHECK(al[1].levels.size() == 8 && al[1].levels[0].altFt == 6000 && al[1].levels[0].speedKt == 0); // light & variable, 3000 ft under terrain
-    CHECK(al[2].levels.size() == 8 && al[2].levels.back().altFt == 39000);
-    CHECK(al[2].levels.back().dirDeg == 260 && al[2].levels.back().speedKt == 112 && al[2].levels.back().tempC == -53); // >=100 kt coding
-    CHECK(parseWindTemp("garbage\n<html>").empty());
-    {   // a 4-letter form of the identifier reads the same (robustness for a product change)
-        auto k4 = parseWindTemp("FT  3000    6000    9000   12000   18000   24000  30000  34000  39000\nKABI 2420    2625+11 2731+06 2834+00 2938-16 3047-30 305945 305552 305157\n");
-        CHECK(k4.size() == 1 && k4[0].id == "ABI" && k4[0].levels.size() == 9);
+    // --- winds / temps aloft profile (the shape a global-model point gives: 9 levels, the top one at 39,000 ft)
+    std::vector<AloftStation> al(1);
+    {
+        const double lv[9][4] = {{3000, 240, 20, 99}, {6000, 260, 25, 11}, {9000, 270, 31, 6}, {12000, 280, 34, 0}, {18000, 290, 38, -16},
+                                 {24000, 300, 47, -30}, {30000, 300, 59, -45}, {34000, 300, 55, -52}, {39000, 300, 51, -57}};
+        al[0].id = "ABI";
+        for (const auto& r : lv) { AloftLevel L; L.altFt = r[0]; L.hasWind = true; L.dirDeg = r[1]; L.speedKt = r[2]; L.hasTemp = r[3] != 99; L.tempC = r[3]; al[0].levels.push_back(L); }
     }
 
     {   // blending: two stations either side of a point; closer one dominates
@@ -985,9 +950,6 @@ int main() {
         XpWx xo = buildXp(kabi, off, now, &st2);
         CHECK(!xo.aloft && xo.maxAltFt == 10000 && xo.winds.size() == 1);
     }
-
-    CHECK(windTempUrl("all", "low", 6) == "https://aviationweather.gov/api/data/windtemp?region=all&level=low&fcst=06");
-    { std::string rg; char pf; aloftRegionFor(61.2, -149.9, rg, pf); CHECK(rg == "alaska" && pf == 'P'); aloftRegionFor(21.3, -157.9, rg, pf); CHECK(rg == "hawaii"); aloftRegionFor(40, -100, rg, pf); CHECK(rg == "all" && pf == 'K'); }
 
     // ---- validateXp: sanity fixes that must leave legitimate weather alone
     {

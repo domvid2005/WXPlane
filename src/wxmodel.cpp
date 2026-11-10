@@ -505,7 +505,7 @@ std::string describeXp(const XpWx& x, double elevM) {
                       c.coverage * 100.0f, (c.baseM - elevM) / kFtToM, (c.topM - elevM) / kFtToM);
         out += b;
     }
-    if (x.aloft) { std::snprintf(b, sizeof b, " | NOAA winds aloft to FL%.0f", x.winds.back().altMsl / kFtToM / 100.0f); out += b; }
+    if (x.aloft) { std::snprintf(b, sizeof b, " | GFS winds aloft to FL%.0f", x.winds.back().altMsl / kFtToM / 100.0f); out += b; }
     return out;
 }
 

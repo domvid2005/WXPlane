@@ -52,9 +52,7 @@ public:
 private:
     void run();
     FetchResult fetch(const FetchRequest& r);
-    std::vector<AloftStation> fetchAloft(const FetchRequest& r, std::time_t now, std::string& note, const std::vector<Station>& known = {});
     RadarResult fetchRadar(const FetchRequest& r, std::time_t now);
-    RadarResult fetchRainViewer(const FetchRequest& r, std::time_t now);
 
     std::thread th_;
     std::mutex m_;
@@ -67,11 +65,6 @@ private:
     std::atomic<bool> working_{false};
     std::vector<std::pair<std::string, std::time_t>> noAtis_; // negative cache, worker thread only
     // winds-aloft cache (worker thread only)
-    std::string alRegion_;
-    std::time_t alTime_ = 0;
-    std::vector<AloftStation> alCache_;
-    std::map<std::string, std::pair<double, double>> coords_; // FD id -> lat/lon
-    std::map<std::string, std::time_t> coordsMiss_;
     // global-model winds aloft (Open-Meteo GFS), worker thread only
     std::vector<AloftStation> upCache_;
     std::vector<ModelPoint> cloudCache_;

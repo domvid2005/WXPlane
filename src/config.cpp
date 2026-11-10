@@ -34,7 +34,6 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "enabled") c.enabled = toBool(v);
         else if (k == "use_atis") c.useAtis = toBool(v);
         else if (k == "use_aloft") c.useAloft = toBool(v);
-        else if (k == "upper_air") c.upperAir = toBool(v);
         else if (k == "update_minutes") c.updateMinutes = (int)(d < 1 ? 1 : d);
         else if (k == "search_nm") c.searchNm = d < 20 ? 20 : (d > 400 ? 400 : d);
         else if (k == "max_stations") c.maxStations = (int)(d < 1 ? 1 : (d > 120 ? 120 : d));
@@ -49,7 +48,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "normal_ceiling_ft") c.normalCeilingFt = (int)d;
         else if (k == "aloft_ceiling_ft") c.cruiseCeilingFt = (int)d;
         else if (k == "aloft_range_nm") c.aloftRangeNm = d < 50 ? 50 : d;
-        else if (k == "aloft_fcst_hours") c.aloftFcstHours = (int)d;
+        else if (k == "aloft_fcst_hours" || k == "radar_global" || k == "upper_air") {}   // removed 2026-11-10 (NOAA FD tables, RainViewer): ignored
         else if (k == "aloft_stations") c.aloftStations = (int)(d < 1 ? 1 : (d > 8 ? 8 : d));
         else if (k == "clear_vis_m") c.clearVisM = d < 10000 ? 10000 : d;
         else if (k == "vis_scale") c.visScale = d < 0.2 ? 0.2 : (d > 1.5 ? 1.5 : d);
@@ -65,7 +64,6 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "bump_radius_factor") c.bumpRadiusFactor = d < 0.05 ? 0.05 : (d > 0.8 ? 0.8 : d);
         else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
         else if (k == "radar") c.radar = toBool(v);
-        else if (k == "radar_global") c.radarGlobal = toBool(v);
         else if (k == "radar_range_nm") c.radarRangeNm = d < 30 ? 30 : (d > 300 ? 300 : d);
         else if (k == "radar_cell_nm") c.radarCellNm = d < 3 ? 3 : (d > 30 ? 30 : d);
         else if (k == "radar_max_cells") c.radarMaxCells = (int)(d < 10 ? 10 : (d > 400 ? 400 : d));
@@ -189,7 +187,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "enabled = " << (c.enabled ? 1 : 0) << "\n"
       << "use_atis = " << (c.useAtis ? 1 : 0) << "\n"
       << "use_aloft = " << (c.useAloft ? 1 : 0) << "\n"
-      << "upper_air = " << (c.upperAir ? 1 : 0) << "\n"
       << "update_minutes = " << c.updateMinutes << "\n"
       << "search_nm = " << c.searchNm << "\n"
       << "max_stations = " << c.maxStations << "\n"
@@ -204,7 +201,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "normal_ceiling_ft = " << c.normalCeilingFt << "\n"
       << "aloft_ceiling_ft = " << c.cruiseCeilingFt << "\n"
       << "aloft_range_nm = " << c.aloftRangeNm << "\n"
-      << "aloft_fcst_hours = " << c.aloftFcstHours << "\n"
       << "aloft_stations = " << c.aloftStations << "\n"
       << "clear_vis_m = " << c.clearVisM << "\n"
       << "vis_scale = " << c.visScale << "\n"
@@ -218,7 +214,6 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "bump_radius_factor = " << c.bumpRadiusFactor << "\n"
       << "vis_check_s = " << c.visCheckS << "\n"
       << "radar = " << (c.radar ? 1 : 0) << "\n"
-      << "radar_global = " << (c.radarGlobal ? 1 : 0) << "\n"
       << "radar_range_nm = " << c.radarRangeNm << "\n"
       << "radar_cell_nm = " << c.radarCellNm << "\n"
       << "radar_max_cells = " << c.radarMaxCells << "\n"

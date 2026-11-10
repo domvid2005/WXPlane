@@ -18,8 +18,6 @@ namespace {
 const double kPi = 3.14159265358979323846;
 float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-struct PalEntry { int r, g, b; float dbz; };
-std::vector<PalEntry> g_pal;
 
 } // namespace
 
@@ -1027,84 +1025,6 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     res.ok = true;
     res.topsFromRadar = tops != nullptr;
     return res;
-}
-
-// ---------------------------------------------------------------------------------------------------------
-// RainViewer (experimental): the free tiles are coloured images, not data, so intensity is inferred from colour.
-
-int loadRainViewerPalette(const std::string& path) {
-    std::ifstream f(path);
-    if (!f) return 0;
-    std::string line;
-    std::vector<PalEntry> p;
-    while (std::getline(f, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        PalEntry e;
-        float r, g, b, d;
-        if (std::sscanf(line.c_str(), "%f , %f , %f , %f", &r, &g, &b, &d) == 4) { e.r = (int)r; e.g = (int)g; e.b = (int)b; e.dbz = d; p.push_back(e); }
-    }
-    g_pal = p;
-    return (int)p.size();
-}
-
-float dbzFromRainViewerPixel(int r, int g, int b, int a) {
-    if (a < 24) return -99.0f;
-    if (!g_pal.empty()) {
-        int best = -1, bestD = 40 * 40 * 3;
-        for (size_t i = 0; i < g_pal.size(); ++i) {
-            int dr = r - g_pal[i].r, dg = g - g_pal[i].g, db = b - g_pal[i].b, d = dr * dr + dg * dg + db * db;
-            if (d < bestD) { bestD = d; best = (int)i; }
-        }
-        return best >= 0 ? g_pal[(size_t)best].dbz : -99.0f;
-    }
-    // Approximation: stronger echoes are drawn darker / more saturated. Light = drizzle, dark = heavy rain.
-    float lum = (0.299f * r + 0.587f * g + 0.114f * b) / 255.0f;
-    return 10.0f + 45.0f * clampf(1.0f - lum, 0.0f, 1.0f);
-}
-
-void tileRange(double lat, double lon, double rangeNm, int z, int& x0, int& x1, int& y0, int& y1) {
-    double dLat = rangeNm / 60.0, dLon = rangeNm / (60.0 * std::max(0.2, std::cos(lat * kPi / 180.0)));
-    auto tx = [&](double lo) { return (int)std::floor((lo + 180.0) / 360.0 * (1 << z)); };
-    auto ty = [&](double la) {
-        la = clampf((float)la, -85.0f, 85.0f);
-        double r = la * kPi / 180.0;
-        return (int)std::floor((1.0 - std::log(std::tan(r) + 1.0 / std::cos(r)) / kPi) / 2.0 * (1 << z));
-    };
-    int n = 1 << z;
-    x0 = std::max(0, tx(lon - dLon)); x1 = std::min(n - 1, tx(lon + dLon));
-    y0 = std::max(0, ty(lat + dLat)); y1 = std::min(n - 1, ty(lat - dLat));
-}
-
-bool tilesToField(const std::vector<TileImage>& tiles, const GribWindow& win, GribField& out) {
-    out = GribField();
-    if (tiles.empty()) { out.error = "no tiles"; return false; }
-    const double step = 0.02;   // output spacing in degrees (about 1.2 nm)
-    int z = tiles[0].z;
-    out.dLat = step; out.dLon = step;
-    out.lat0 = win.latMax; out.lon0 = win.lonMin;
-    out.ni = (int)std::floor((win.lonMax - win.lonMin) / step) + 1;
-    out.nj = (int)std::floor((win.latMax - win.latMin) / step) + 1;
-    if (out.ni <= 0 || out.nj <= 0 || (long)out.ni * out.nj > 4000000) { out.error = "bad window"; out.ni = out.nj = 0; return false; }
-    const float kNone = -99.0f;
-    out.v.assign((size_t)out.ni * (size_t)out.nj, kNone);
-    std::map<std::pair<int, int>, const TileImage*> idx;
-    for (const auto& t : tiles) idx[{t.x, t.y}] = &t;
-    double n = (double)(1 << z);
-    for (int j = 0; j < out.nj; ++j) {
-        double la = out.lat0 - j * step;
-        double r = clampf((float)la, -85.0f, 85.0f) * kPi / 180.0;
-        double fy = (1.0 - std::log(std::tan(r) + 1.0 / std::cos(r)) / kPi) / 2.0 * n;
-        for (int i = 0; i < out.ni; ++i) {
-            double fx = (out.lon0 + i * step + 180.0) / 360.0 * n;
-            auto it = idx.find({(int)std::floor(fx), (int)std::floor(fy)});
-            if (it == idx.end()) continue;
-            const TileImage& t = *it->second;
-            int px = std::min(t.w - 1, (int)((fx - std::floor(fx)) * t.w)), py = std::min(t.h - 1, (int)((fy - std::floor(fy)) * t.h));
-            const uint8_t* p = &t.rgba[((size_t)py * (size_t)t.w + (size_t)px) * 4];
-            out.v[(size_t)j * (size_t)out.ni + (size_t)i] = dbzFromRainViewerPixel(p[0], p[1], p[2], p[3]);
-        }
-    }
-    return true;
 }
 
 // ---------------------------------------------------------------------------------------------------------

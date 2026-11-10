@@ -77,7 +77,7 @@ int addStormLevelContours(std::vector<RadarCell>& cells, double cellNm, double b
 struct RadarResult {
     bool attempted = false;
     bool ok = false;
-    std::string source;        // e.g. "NOAA MRMS (CONUS)" or "RainViewer (global, experimental)"
+    std::string source;        // e.g. "NOAA MRMS (CONUS)"
     std::string note;          // why there is nothing, or caveats
     std::time_t dataTime = 0;  // when the radar mosaic was valid (0 = unknown)
     int echoBlocks = 0;        // blocks with echo before the cap
@@ -119,15 +119,6 @@ std::string mrmsUrl(const std::string& region, const std::string& product);
 // `prev` (keys applied last time) gets hysteresis so storms do not flicker in and out at the thresholds.
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
                             const std::set<std::string>* prev = nullptr);
-
-// RainViewer tiles are only coloured images. `dbzFromColor` is the (approximate) inverse of their scheme.
-float dbzFromRainViewerPixel(int r, int g, int b, int a);
-// Builds a GribField-compatible reflectivity grid from decoded RGBA tiles (z/x/y list); see radar.cpp.
-struct TileImage { int z = 0, x = 0, y = 0; int w = 0, h = 0; std::vector<uint8_t> rgba; };
-bool tilesToField(const std::vector<TileImage>& tiles, const GribWindow& win, GribField& out);
-// Optional user palette (lines "r,g,b,dbz") that overrides the built-in approximation of the RainViewer colours.
-int loadRainViewerPalette(const std::string& path);
-void tileRange(double lat, double lon, double rangeNm, int z, int& x0, int& x1, int& y0, int& y1);
 
 // Applies a storm cell on top of the weather built for the nearest station.
 // Top (MSL, metres) of the storm cloud applied for a cell, and the value the map label shows: the measured radar echo top when

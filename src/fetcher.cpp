@@ -177,10 +177,9 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
         }
     }
 
-    // 3) NOAA winds & temperatures aloft (FD winds), so the cruise levels follow real data too.
+    // 3) Winds & temperatures aloft from the global model (Open-Meteo GFS), so the cruise levels follow real data too.
     // NOAA's FD wind/temperature tables (fetchAloft) were discontinued with the NAM model: AWC answers HTTP 400 ("Wind/temp tables have
     // been discontinued", SCN 26-47, seen 2026-11-09). The global model is now the source at every level.
-    if (cfg.useAloft) res.aloftNote = "NOAA wind/temperature tables discontinued (NAM retired)";
     if (cfg.useAloft) {   // the global model at every level
         std::string upNote;
         std::vector<AloftStation> up = fetchUpperAir(rq, now, upNote, res.stations);
@@ -232,82 +231,6 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     return res;
 }
 
-std::vector<AloftStation> Fetcher::fetchAloft(const FetchRequest& rq, std::time_t now, std::string& note, const std::vector<Station>& known) {
-    const Config& cfg = rq.cfg;
-    std::string region;
-    char prefix = 'K';
-    aloftRegionFor(rq.lat, rq.lon, region, prefix);
-
-    if (region != alRegion_ || alCache_.empty() || now - alTime_ > 1800) { // FD products change a few times a day
-        std::vector<AloftStation> all;
-        std::string firstErr;
-        for (const char* level : {"low", "high"}) {
-            std::string body, err;
-            long st = 0;
-            if (!httpGet(windTempUrl(region, level, cfg.aloftFcstHours), body, st, err, 15)) {
-                if (firstErr.empty()) firstErr = err;
-                continue;
-            }
-            std::vector<AloftStation> got = parseWindTemp(body);
-            if (got.empty() && firstErr.empty()) {
-                // Every update of the 2026-11-05 flight said "no data parsed": the download worked but nothing in it read as FD lines. The
-                // answer's status, size and start now go in the log so the cause (an error page, a format change) can be seen.
-                std::string head = body.substr(0, 160);
-                for (char& c : head) if (c == '\n' || c == '\r' || c == '\t') c = ' ';
-                char b[96];
-                std::snprintf(b, sizeof b, "%s: HTTP %ld, %zu bytes, nothing read as FD lines, start: ", level, st, body.size());
-                firstErr = std::string(b) + "\"" + head + "\"";
-            }
-            mergeAloft(all, got);
-        }
-        if (all.empty()) {
-            note = firstErr.empty() ? "NOAA winds aloft: no data parsed" : "NOAA winds aloft: " + firstErr;
-            if (alCache_.empty() || region != alRegion_) return {};
-            all = alCache_; // keep using the previous set rather than dropping to sim winds
-        } else {
-            alCache_ = std::move(all);
-            alRegion_ = region;
-            alTime_ = now;
-        }
-    }
-
-    // FD stations come without coordinates. Many of them are airports we already have a report for ("ABI" -> "KABI"): take the position from there.
-    for (const auto& k : known)
-        if (k.icao.size() == 4 && k.icao[0] == prefix && !coords_.count(k.icao.substr(1))) coords_[k.icao.substr(1)] = {k.lat, k.lon};
-    // The rest are looked up once through their METAR.
-    std::vector<std::string> need;
-    for (const auto& s : alCache_) {
-        if (coords_.count(s.id)) continue;
-        auto miss = coordsMiss_.find(s.id);
-        if (miss != coordsMiss_.end() && now - miss->second < 6 * 3600) continue;
-        need.push_back(s.id);
-    }
-    for (size_t i = 0; i < need.size(); i += 30) {   // small batches: one bad id or one failed request must not stop the others
-        std::string ids;
-        size_t end = std::min(need.size(), i + 30);
-        for (size_t j = i; j < end; ++j) ids += (j > i ? "," : "") + std::string(1, prefix) + need[j];
-        std::string body, err;
-        long st = 0;
-        if (!httpGet("https://aviationweather.gov/api/data/metar?format=json&ids=" + ids, body, st, err, 15)) continue;   // tried again at the next update
-        for (const auto& m : parseAwcMetarJson(body))
-            if (m.icao.size() == 4) coords_[m.icao.substr(1)] = {m.lat, m.lon};
-        for (size_t j = i; j < end; ++j)
-            if (!coords_.count(need[j])) coordsMiss_[need[j]] = now;
-    }
-
-    std::vector<AloftStation> out;
-    for (auto s : alCache_) {
-        auto c = coords_.find(s.id);
-        if (c == coords_.end()) continue;
-        s.lat = c->second.first;
-        s.lon = c->second.second;
-        s.located = true;
-        if (distNm(rq.lat, rq.lon, s.lat, s.lon) <= std::max(1200.0, cfg.aloftRangeNm + cfg.searchNm + 60)) out.push_back(std::move(s));   // far ones too: places without a closer station use the nearest
-    }
-    if (out.empty() && note.empty()) note = "no NOAA winds-aloft stations near this position (US/Pacific coverage only)";
-    return out;
-}
-
 } // namespace wx
 
 namespace wx {
@@ -345,7 +268,7 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
         const std::string name = region.empty() ? "CONUS" : region;
         GribField refl;
         if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) {
-            refl = GribField();   // one retry: a truncated download ("bad gzip data", 2026-11-06) made the first load fall back to RainViewer
+            refl = GribField();   // one retry: a truncated download ("bad gzip data", 2026-11-06) made the first load go without storms
             if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) { lastErr = name + ": " + lastErr; continue; }
         }
         if (refl.refTime > 0 && now - refl.refTime > 30 * 60) {
@@ -376,8 +299,8 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
         if (out.ok) { lastMrms_ = out; lastMrmsAt_ = now; lastMrmsLat_ = rq.lat; lastMrmsLon_ = rq.lon; }
         return out;
     }
-    // Inside NOAA coverage a failed download used to fall straight through to RainViewer (log 2026-11-04, Ohio): its colour-decoded tiles read
-    // the same storms as 153 cumulonimbus cells at 40+ dBZ where MRMS had 7 a few minutes earlier, in blocky colour bands. The last MRMS
+    // Inside NOAA coverage a failed download used to fall straight through to RainViewer (log 2026-11-04, Ohio; RainViewer was removed
+    // 2026-11-10): its colour-decoded tiles read the same storms as 153 cumulonimbus cells at 40+ dBZ where MRMS had 7 a few minutes earlier, in blocky colour bands. The last MRMS
     // picture is kept instead while it is under 20 minutes old and the aircraft is within 30 nm of where it was built.
     const bool mrmsArea = !mrmsRegionsFor(rq.lat, rq.lon).empty();
     if (mrmsArea && lastMrms_.ok && now - lastMrmsAt_ < 20 * 60 && distNm(rq.lat, rq.lon, lastMrmsLat_, lastMrmsLon_) < 30.0) {
@@ -385,64 +308,8 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now) {
         r.note = "MRMS download failed (" + lastErr + "), reusing the radar picture from " + std::to_string((now - lastMrmsAt_) / 60) + " min ago";
         return r;
     }
-    if (cfg.radarGlobal) {
-        RadarResult g = fetchRainViewer(rq, now);
-        if (mrmsArea && !lastErr.empty()) g.note = "MRMS failed (" + lastErr + "), using RainViewer instead" + (g.note.empty() ? "" : "; " + g.note);
-        if (g.ok || g.note.size()) return g;
-    }
     out.ok = false;
-    out.note = lastErr.empty() ? std::string("no NOAA radar coverage here") + (cfg.radarGlobal ? "" : " (enable the global option for other regions)") : lastErr;
-    return out;
-}
-
-RadarResult Fetcher::fetchRainViewer(const FetchRequest& rq, std::time_t now) {
-    (void)now;
-    const Config& cfg = rq.cfg;
-    RadarResult out;
-    out.attempted = true;
-    out.source = "RainViewer (global, experimental)";
-    std::string body, err;
-    long status = 0;
-    if (!httpGet("https://api.rainviewer.com/public/weather-maps.json", body, status, err)) { out.note = "RainViewer index failed: " + err; return out; }
-    Json j;
-    if (!parseJson(body, j)) { out.note = "RainViewer index unreadable"; return out; }
-    std::string host = j.get("host") ? j.get("host")->asString() : "";
-    const Json* radar = j.get("radar");
-    const Json* past = radar ? radar->get("past") : nullptr;
-    if (host.empty() || !past || past->arr.empty()) { out.note = "RainViewer has no radar frames"; return out; }
-    const Json& frame = past->arr.back();
-    std::string path = frame.get("path") ? frame.get("path")->asString() : "";
-    if (path.empty()) { out.note = "RainViewer frame has no path"; return out; }
-    out.dataTime = frame.get("time") ? (std::time_t)frame.get("time")->asNum() : 0;
-
-    const int z = 6;
-    int x0, x1, y0, y1;
-    tileRange(rq.lat, rq.lon, cfg.radarRangeNm, z, x0, x1, y0, y1);
-    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 16) { out.note = "radar range needs too many tiles"; return out; }
-    std::vector<TileImage> tiles;
-    for (int y = y0; y <= y1; ++y)
-        for (int x = x0; x <= x1; ++x) {
-            std::string url = host + path + "/256/" + std::to_string(z) + "/" + std::to_string(x) + "/" + std::to_string(y) + "/2/0_0.png";
-            std::string png, terr;
-            if (!httpGet(url, png, status, terr, 20, 2u * 1024u * 1024u)) continue;
-            PngImage im;
-            if (!decodePng((const uint8_t*)png.data(), png.size(), im, 1000000) || im.depth != 8 || im.channels != 4) continue;
-            TileImage t;
-            t.z = z; t.x = x; t.y = y; t.w = im.w; t.h = im.h; t.rgba = std::move(im.px);
-            tiles.push_back(std::move(t));
-        }
-    if (tiles.empty()) { out.note = "RainViewer tiles unavailable"; return out; }
-    GribWindow win = windowFor(rq.lat, rq.lon, cfg.radarRangeNm);
-    GribField f;
-    if (!tilesToField(tiles, win, f)) { out.note = "RainViewer tiles unusable: " + f.error; return out; }
-    std::string src = out.source;
-    std::time_t dt = out.dataTime;
-    out = buildRadarCells(f, nullptr, rq.lat, rq.lon, cfg, &radarPrev_);
-    radarPrev_.clear();
-    for (const auto& c : out.cells) radarPrev_.insert(c.key);
-    out.source = src;
-    out.dataTime = dt;
-    out.note = "colour-decoded image tiles: intensities and tops are approximate";
+    out.note = lastErr.empty() ? std::string("no NOAA radar coverage here (US only)") : lastErr;
     return out;
 }
 

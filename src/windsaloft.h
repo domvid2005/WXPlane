@@ -1,4 +1,5 @@
-// NOAA winds & temperatures aloft (FD winds, aviationweather.gov /api/data/windtemp). No X-Plane dependencies.
+// Winds & temperatures aloft from the global model (Open-Meteo GFS), and the clouds and surface weather from the same model. No X-Plane
+// dependencies. (NOAA's FD wind/temperature tables were discontinued with the NAM model, SCN 26-47; their parser was removed 2026-11-10.)
 #pragma once
 #include <string>
 #include <vector>
@@ -23,16 +24,6 @@ struct AloftStation {
     // Global-model clouds (separate, slower download): cloud cover on pressure levels, (altitude ft MSL, 0..1) ascending.
     std::vector<std::pair<double, double>> cloudLevels;
 };
-
-// Parses one windtemp text product (low or high level). Stations come back without coordinates.
-std::vector<AloftStation> parseWindTemp(const std::string& text);
-
-// Merges the levels of `more` into `into` (matching by station id).
-void mergeAloft(std::vector<AloftStation>& into, const std::vector<AloftStation>& more);
-
-std::string windTempUrl(const std::string& region, const std::string& level, int fcstHours);
-// Picks the NOAA region for a position, and the ICAO prefix letter used to look up station coordinates.
-void aloftRegionFor(double lat, double lon, std::string& region, char& icaoPrefix);
 
 // Global model (Open-Meteo GFS endpoint): wind, temperature and geopotential height on pressure levels at a few points.
 // Levels come back as feet MSL (geopotential height when given, else ISA).

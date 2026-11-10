@@ -15,11 +15,10 @@ Requires **X-Plane 12.3 or newer** (it uses the `XPLMWeather` plugin API, SDK 4.
 |---|---|
 | **Enabled** | On/off. Off removes all of the plugin's weather and gives control back to X-Plane. |
 | **Refresh Weather Data Now** | Downloads fresh data and applies it without freezing the sim; X-Plane fades it in over 1–2 minutes (`manual_refresh_immediate = 1` makes it appear at once, at the cost of a freeze of several seconds). Also turns the plugin on if it was off. |
-| **Show Local METAR/ATIS Data...** | Opens a scrollable, resizable window listing every nearby station: raw METAR, ATIS text and letter, what WXPlane applied to the sim (visibility, fog, clouds, wind), and the NOAA winds-aloft stations in use. Mouse wheel scrolls. |
+| **Show Local METAR/ATIS Data...** | Opens a scrollable, resizable window listing every nearby station: raw METAR, ATIS text and letter, what WXPlane applied to the sim (visibility, fog, clouds, wind), and the global-model (GFS) points in use. Mouse wheel scrolls. |
 | **Radar Storms (NOAA MRMS)** | Turns the NOAA radar mosaic into storm cells (see Radar below). On by default. |
-| **Radar Outside US (experimental)** | Uses RainViewer image tiles where NOAA has no radar. Off by default. |
 | **Use ATIS** | Merge D-ATIS data for airports near you. |
-| **Use NOAA Winds/Temps Aloft** | On (default): winds and temperatures at every level come from NOAA. Off: only the lowest 10,000 ft is touched and X-Plane's own winds/temps are used above. |
+| **Global Winds/Temps & Clouds Aloft (GFS)** | On (default): winds and temperatures at every level, clouds above what airports report, and the weather over open water come from the GFS model (Open-Meteo). Off: only the lowest 10,000 ft is touched, X-Plane's own winds/temps are used above, and nothing is set where no airport reports. |
 
 Which layers count: the rough-top records apply to every layer with at least `rough_min_coverage` (0.65) coverage, so broken (BKN, 0.70) decks get them as well as overcast ones. Set it to 0.85 for overcast only.
 
@@ -36,7 +35,7 @@ Settings are saved to `Output/preferences/WXPlane.cfg`.
 1. Every `update_minutes` (5; or when you move 40 nm from the last download point) a background thread asks NOAA for all METARs within 120 nm **of the aircraft**, so the data follows you along your route. The sim is never blocked by the network.
 2. The nearest 40 reports are applied with `XPLMSetWeatherAtAirport` (replacing the sim's own METAR for that airport) or `XPLMSetWeatherAtLocation`. Only changed stations are re-sent and stations that left range are erased, so stale stations never linger.
 3. If an ATIS exists for one of the 2 nearest airports within 35 nm, its values override that airport's METAR values.
-4. **Winds/temps aloft:** NOAA FD winds (3,000–39,000 ft, ~175 US stations plus Alaska/Hawaii) are downloaded every 30 minutes. For each weather report, the 4 nearest FD stations are blended by inverse-distance-squared on the wind *vectors* (so opposing winds cancel instead of averaging compass numbers). The report then carries a surface wind layer plus the aloft layers, and a temperature profile anchored to the airport's own METAR temperature. The highest NOAA wind is held up to FL600 so the sim's own winds never take over above FL390. X-Plane interpolates between reports and layers.
+4. **Winds/temps aloft:** GFS winds and temperatures (925–70 hPa, about 2,500–60,000 ft) at 9 points around the aircraft are downloaded every 45 minutes. For each weather report, the 4 nearest points are blended by inverse-distance-squared on the wind *vectors* (so opposing winds cancel instead of averaging compass numbers). The report then carries a surface wind layer plus the aloft layers, and a temperature profile anchored to the airport's own METAR temperature. The highest model wind is held up to FL600, so the sim's own winds never take over. X-Plane interpolates between reports and layers.
 5. **Smooth transitions:** periodic updates are applied without the "immediate" flag, so X-Plane fades them in over 1–2 minutes. The first load applies immediately; the manual Refresh does not (see `manual_refresh_immediate`).
 
 ### Visibility
@@ -73,7 +72,7 @@ No compiler? Push this folder to a GitHub repo; `.github/workflows/build.yml` bu
 
 ## Config keys (`WXPlane.cfg`)
 
-`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_fcst_hours` (6; 12 or 24 also valid), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_global` (0), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `max_turbulence` (1), `apply_frame_ms` (6: in flight, weather records are handed to X-Plane at most this many ms per tick; 0 = all at once), `kept_airports_max` (200: airports that left range are kept in place with their surroundings' weather instead of a replacing update; above this many, one replacing clean-up), `realistic_turbulence` (1), `model_clouds` (1), `ocean_model_weather` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
+`update_minutes` (5), `search_nm` (120), `max_stations` (40), `radius_nm` (30), `fill_gaps` (1), `fill_range_nm` (60), `fill_cell_nm` (12), `fill_far_range_nm` (120), `fill_far_cell_nm` (30), `max_age_hours` (3), `refetch_move_nm` (40), `use_atis` (1), `atis_range_nm` (35), `atis_max_airports` (2), `use_aloft` (1), `aloft_stations` (4), `aloft_range_nm` (250), `aloft_ceiling_ft` (60000), `normal_ceiling_ft` (10000), `fog_layer` (1), `fog_haze` (1), `fog_top_agl_m` (200), `clear_vis_m` (40000; used for 10 SM or more and when a report has no visibility), `vis_scale` (1), `vis_autocal` (0), `vis_check_s` (100), `radar` (1), `radar_range_nm` (150), `radar_cell_nm` (12), `radar_max_cells` (60), `radar_min_dbz` (20), `radar_rain_full_mmh` (40), `max_turbulence` (1), `apply_frame_ms` (6: in flight, weather records are handed to X-Plane at most this many ms per tick; 0 = all at once), `kept_airports_max` (200: airports that left range are kept in place with their surroundings' weather instead of a replacing update; above this many, one replacing clean-up), `realistic_turbulence` (1), `model_clouds` (1), `ocean_model_weather` (1), `radar_echo_tops` (1), `radar_map_tops` (1), `storm_coverage_max` (0.95), `top_bumps` (0), `bump_count` (10), `bump_fill_count` (1), `bump_max` (200), `bump_height_m` (550), `bump_radius_factor` (0.26), `manual_refresh_immediate` (0).
 
 Advanced settings (start-up gating, `transition_s`, `update_transition_s`, `apply_per_tick`, `first_load_immediate`, station and gap-fill record radii, `low_cloud_type`, storm top handling, `rough_min_coverage`) are no longer written to `WXPlane.cfg`. They keep their built-in defaults; a line added by hand is still read.
 
@@ -110,11 +109,13 @@ The echoes are grouped into blocks of about `radar_cell_nm`; the strongest and n
 
 Only cells that changed are re-sent, and cells with no echo left are erased, so storms move and fade between updates. The window under "Show Local METAR/ATIS Data..." lists the radar source, its age and the strongest cells.
 
-**Limits:** radar mosaics are 2D, so the base height and the shape of a storm are estimated; reflectivity above 70 dBZ is capped (hail and clutter); the API is limited to a few hundred records; the data is a few minutes old when you get it; and cells are only applied where at least one METAR station is within the search radius. The MRMS file layout (grid, PNG/simple packing) was built from the GRIB2 specification and tested with generated files; it has since decoded live NOAA CONUS data in real X-Plane sessions (the log showed e.g. 122 echo blocks, 120 cells, echo tops up to 12 000 m from radar). Not yet seen live: the Alaska/Hawaii/Caribbean/Guam products and the experimental global RainViewer fallback.
+**Limits:** radar mosaics are 2D, so the base height and the shape of a storm are estimated; reflectivity above 70 dBZ is capped (hail and clutter); the API is limited to a few hundred records; the data is a few minutes old when you get it; and cells are only applied where at least one METAR station is within the search radius. The MRMS file layout (grid, PNG/simple packing) was built from the GRIB2 specification and tested with generated files; it has since decoded live NOAA CONUS data in real X-Plane sessions (the log showed e.g. 122 echo blocks, 120 cells, echo tops up to 12 000 m from radar). Not yet seen live: the Alaska/Hawaii/Caribbean/Guam products.
 
-### Outside the US (experimental)
+### Outside the US
 
-No free global radar data feed offers raw values. With `radar_global = 1` WXPlane uses RainViewer's public radar tiles instead (past frame, zoom 6). Those tiles are coloured pictures, so the intensity is inferred from the colour, and tops are estimated from reflectivity. The built-in colour table is an approximation. If storms look too strong or too weak, create `WXPlane_radar_palette.csv` next to `WXPlane.cfg` with lines like `r,g,b,dBZ` (taken from RainViewer's colour scheme 2 table) and it will be used instead. RainViewer's free access is for personal and educational use and rate limited; please respect their terms.
+There is no radar storm system outside NOAA's coverage. The experimental RainViewer option was removed (2026-11-10): no free global feed
+offers radar values, only coloured pictures, and reading intensity from colours produced storms that were not there. Outside the US,
+thunderstorms come from the METARs (TS, CB) and from the GFS weather codes over open water.
 
 ## Tests
 
@@ -129,7 +130,6 @@ No free global radar data feed offers raw values. With `radar_global = 1` WXPlan
 | Winds/temps aloft | Open-Meteo GFS | 1 request for 9 points (a 3x3 lattice about 60 nm apart around the aircraft) | every 45 minutes; when the aircraft moves on to a new node, at most every 15 minutes |
 | Clouds aloft and open-water weather | Open-Meteo GFS | 1 request for the same 9 points | every 30 minutes, and whenever the winds' lattice moves |
 | Radar | NOAA MRMS | 2 files (reflectivity + echo tops, a few MB each) | every update |
-| Global radar (optional) | RainViewer | 1 index + up to 9 tiles | every update, only outside NOAA coverage |
 
 An update also happens early when you move more than `refetch_move_nm` (40 nm; at most once a minute), and when you press "Refresh Weather Data Now" or toggle a data option. Applying is incremental: only records that changed are sent to X-Plane.
 
@@ -386,20 +386,17 @@ The storm edge now follows one smooth outline drawn around all the blocks (your 
 
 ### Winds aloft without gaps
 
-* A level an FD station does not report (it often skips one, or has no wind or temperature at the lowest levels) is interpolated from the levels above and below it, as vectors, before the stations are blended. A station is held at its top or bottom level for at most 6000 ft, so one with only the low-level product never adds a wind at FL390.
-* A report with no FD station within `aloft_range_nm` now uses the nearest ones up to 1000 nm away instead of falling back to the sim's own winds. Beyond that, X-Plane's own winds are used and the status line says so.
-* FD station positions come first from the reports already downloaded ("ABI" is "KABI"), then from the METAR lookup in batches of 30; a failed batch is skipped and retried at the next update instead of ending the lookup (the likely cause of a session with 0 FD stations). Stations up to 1200 nm away are kept.
-* The top wind is held up to the ceiling (FL600) as before, and the top temperature is held there too (the stratosphere is nearly isothermal).
+* A level a point does not report is interpolated from the levels above and below it, as vectors, before the points are blended.
+* The top wind is held up to the ceiling (FL600), and the top temperature is held there too (the stratosphere is nearly isothermal).
 
-### Global-model winds aloft (`upper_air`, default on)
+### Global-model winds aloft (`use_aloft`, default on)
 
-NOAA's FD wind/temperature tables were discontinued (SCN 26-47; the server now answers HTTP 400), so this is now the only source of winds and temperatures aloft. WXPlane asks Open-Meteo's GFS endpoint (`api.open-meteo.com/v1/gfs`, free, no key; check its terms if you redistribute the plugin) for wind speed and direction, temperature and geopotential height on the 925, 850, 700, 500, 400, 300, 250, 200, 150, 100 and 70 hPa levels (to about FL600) at 9 points (a 3x3 lattice of 1° nodes around the aircraft), once every 45 minutes (or when the aircraft reaches a new 1° node). The FD notes below are kept for history.
+NOAA's FD wind/temperature tables were discontinued (SCN 26-47; the server now answers HTTP 400), and their code was removed (2026-11-10), so this is the only source of winds and temperatures aloft. WXPlane asks Open-Meteo's GFS endpoint (`api.open-meteo.com/v1/gfs`, free, no key; check its terms if you redistribute the plugin) for wind speed and direction, temperature and geopotential height on the 925, 850, 700, 500, 400, 300, 250, 200, 150, 100 and 70 hPa levels (to about FL600) at 9 points about 60 nm apart around the aircraft, once every 45 minutes (see the allowance section below for when they move).
 
-* **Where it is used:** wherever FD has no station within `aloft_range_nm` (everything outside the FD coverage gets real winds and temperatures instead of the sim's own, using the nearest model points up to 2500 nm away), and above the highest FD level of a report (more than 1000 ft above it, so normally above FL390). FD stays the source below that, as it is corrected by observations.
+* **Where it is used:** every level above the surface layer, everywhere (the surface wind and temperature still come from the METAR).
 * **Heights:** the model's own geopotential height of each pressure level is used (ISA only when it is missing), so a cold or warm air mass puts the levels where they really are.
 * **Safety:** if the endpoint refuses the highest levels the request is repeated with the levels up to 200 hPa; if both fail the previous download is kept for up to 3 hours, and `Log.txt` gets a line `global-model winds aloft unavailable (reason)`. A normal update logs `global-model winds aloft: N point(s), up to FLxxx`.
-* `upper_air = 0` turns it off (FD only, as before).
-* This could not be tried against the real service while it was written; the request and answer formats follow Open-Meteo's published pattern and are covered by tests with made-up answers. If the log shows "unavailable" or "answered without wind levels", send it.
+* The menu item (or `use_aloft = 0`) turns it off, together with the model clouds and the open-water weather.
 
 ### Global-model clouds aloft (`model_clouds`, default on)
 

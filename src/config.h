@@ -8,7 +8,6 @@ constexpr int kConfigVersion = 30;   // bumped when defaults change; older confi
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
-    bool upperAir = true;        // global model (Open-Meteo GFS) winds/temps for the levels above FD (FL390) and where no FD station is near
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
     // X-Plane cloud type for low/overcast layers: 1 = stratus (smooth sheet, curtain-like edges), 2 = cumulus, 3 = cumulonimbus.
     // 2 since 2026-11-04: X-Plane flies 3 as a thunderstorm cloud, with strong up- and downdrafts, so with every deck at 3 an aircraft
@@ -39,9 +38,8 @@ struct Config {
     bool fogHaze = true;          // fog / mist / haze also cap visibility (and saturate the air for fog)
     int normalCeilingFt = 10000;  // reach of a report that has no aloft data (X-Plane default)
     int cruiseCeilingFt = 60000;  // reach of a report carrying winds/temps aloft (FL600)
-    double aloftRangeNm = 250;    // use FD stations up to this far from each weather report
-    int aloftFcstHours = 6;       // NOAA winds-aloft forecast cycle: 6, 12 or 24
-    int aloftStations = 4;        // FD stations blended per report
+    double aloftRangeNm = 250;    // use global-model points up to this far from each weather report
+    int aloftStations = 4;        // global-model points blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
     double roughMinCoverage = 0.65; // layers at least this solid get rough-top records (0.65 = broken and overcast; 0.85 = overcast only)
     bool topBumps = false;        // EXPERIMENTAL: scatter records over thick overcasts that differ from the parent only by a slightly higher top
@@ -55,7 +53,6 @@ struct Config {
     int visCheckS = 100;          // seconds after an update to run that comparison
     // Radar storms (NOAA MRMS mosaic, optional global fallback)
     bool radar = true;            // turn radar echoes into storm cells
-    bool radarGlobal = false;     // outside MRMS coverage use RainViewer tiles (experimental, colour-decoded)
     double radarRangeNm = 150;    // storms within this distance of the aircraft
     double stormRadiusFactor = 1.3;   // storm record radius = this x radar cell size (min 6 nm); cells sit at the centre of their echo (storm_centroid), up to half a block off the grid, so 1.3 keeps them overlapping each other and the gap-fill tiles
     bool stormCentroid = true;       // a storm cell sits at the reflectivity-weighted centre of its echo instead of the block centre (breaks up the square grid)

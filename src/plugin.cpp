@@ -49,14 +49,14 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobal, kSettings, kWindshear, kTurbulence };
+enum MenuId { kEnabled = 1, kRefresh, kAtis, kAloft, kShow, kRadar, kRadarGlobalRemoved /* keeps the ids below unchanged */, kSettings, kWindshear, kTurbulence };
 
 wx::Config g_cfg;
 wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxRadarGlobal = -1, g_idxWindshear = -1, g_idxTurbulence = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxWindshear = -1, g_idxTurbulence = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -132,7 +132,6 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxAtis, g_cfg.useAtis ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
-    XPLMCheckMenuItem(g_menu, g_idxRadarGlobal, g_cfg.radarGlobal ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxWindshear >= 0) XPLMCheckMenuItem(g_menu, g_idxWindshear, g_cfg.windshear ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxTurbulence >= 0) XPLMCheckMenuItem(g_menu, g_idxTurbulence, g_cfg.realisticTurbulence ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
@@ -871,7 +870,7 @@ void windshearTick() {
     if (g_wsCmd == 1) seeded = true;
     if (g_wsCmd != 0) {
         const int cmd = g_wsCmd; g_wsCmd = 0;
-        if (cmd == 1) { g_ws.setSeed((uint32_t)g_cfg.windshearSeed); wsLog("realistic windshear enabled (seed %d)", g_cfg.windshearSeed); nextEval = simT; }
+        if (cmd == 1) { g_ws.setSeed((uint32_t)g_cfg.windshearSeed); wsLog("realistic windshear enabled (seed %d)", g_cfg.windshearSeed); nextEval = simT; lastRiskLine.clear(); }
         else if (cmd == -1) {
             if (!g_wsSent.empty()) {
                 XPLMBeginWeatherUpdate();
@@ -2587,10 +2586,6 @@ void menuHandler(void*, void* item) {
             g_cfg.radar = !g_cfg.radar;
             if (g_cfg.enabled) { if (g_cfg.radar && g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
             break;
-        case kRadarGlobal:
-            g_cfg.radarGlobal = !g_cfg.radarGlobal;
-            if (g_cfg.enabled && g_cfg.radar) { if (g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
-            break;
         case kAloft:
             g_cfg.useAloft = !g_cfg.useAloft;
             if (g_cfg.enabled) g_manualRefresh = true;
@@ -2610,11 +2605,6 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_cfgPath = configPath();
     wx::loadConfig(g_cfgPath, g_cfg);
     wx::saveConfig(g_cfgPath, g_cfg); // writes defaults on first run so the file can be edited
-    {   // optional colour table for the experimental global radar: lines "r,g,b,dBZ" next to the config file
-        std::string pal = g_cfgPath.substr(0, g_cfgPath.find_last_of("/\\") + 1) + "WXPlane_radar_palette.csv";
-        int n = wx::loadRainViewerPalette(pal);
-        if (n > 0) logf("loaded %d radar palette entries from %s", n, pal.c_str());
-    }
 
     g_drLat = XPLMFindDataRef("sim/flightmodel/position/latitude");
     g_drGsFetch = XPLMFindDataRef("sim/flightmodel/position/groundspeed");
@@ -2633,9 +2623,8 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_idxShow = XPLMAppendMenuItem(g_menu, "Show Local METAR/ATIS Data...", (void*)(intptr_t)kShow, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxAtis = XPLMAppendMenuItem(g_menu, "Use ATIS", (void*)(intptr_t)kAtis, 0);
-    g_idxAloft = XPLMAppendMenuItem(g_menu, "Use NOAA Winds/Temps Aloft", (void*)(intptr_t)kAloft, 0);
+    g_idxAloft = XPLMAppendMenuItem(g_menu, "Global Winds/Temps & Clouds Aloft (GFS)", (void*)(intptr_t)kAloft, 0);
     g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
-    g_idxRadarGlobal = XPLMAppendMenuItem(g_menu, "Radar Outside US (experimental)", (void*)(intptr_t)kRadarGlobal, 0);
     g_idxWindshear = XPLMAppendMenuItem(g_menu, "Enable Realistic Windshear", (void*)(intptr_t)kWindshear, 0);
     g_idxTurbulence = XPLMAppendMenuItem(g_menu, "Enable Realistic Turbulence", (void*)(intptr_t)kTurbulence, 0);
     XPLMAppendMenuItem(g_menu, "Max Turbulence...", (void*)(intptr_t)kSettings, 0);   // below every toggle, above the status lines

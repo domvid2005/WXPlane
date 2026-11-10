@@ -83,7 +83,7 @@ std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, cons
     }
     add(LineKind::Blank, "");
 
-    add(LineKind::Header, fmt("NOAA winds/temps aloft stations nearby: %zu", res.aloft.size()));
+    add(LineKind::Header, fmt("Global-model (GFS) winds/temps aloft points nearby: %zu", res.aloft.size()));
     if (!res.aloftNote.empty()) add(LineKind::Note, res.aloftNote);
     std::string row;
     for (const auto& a : res.aloft) {
