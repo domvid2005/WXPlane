@@ -8,13 +8,12 @@ WXPlane includes the following open-source software. Their licences require thes
   * libcurl (downloads) - curl licence (MIT/X derivative). The Windows build links it statically, with zlib (zlib licence).
 
 Data used by WXPlane (not included in the plugin, downloaded while flying):
-  * NOAA / National Weather Service: Aviation Weather Center (METAR, winds and temperatures aloft, pilot reports),
-    MRMS radar, GTGN turbulence nowcast (GTG developed by NCAR for the FAA). Public domain.
-  * ECMWF Open Data, (c) ECMWF, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
-  * Open-Meteo.com, CC BY 4.0 (winds and temperatures aloft outside the US).
-  * RainViewer (rainviewer.com) radar tiles (experimental radar outside the US).
+  * NOAA / National Weather Service: Aviation Weather Center (METAR, pilot reports), MRMS radar (reflectivity, echo tops,
+    precipitation type), GTGN turbulence nowcast (GTG developed by NCAR for the FAA). Public domain.
+  * Open-Meteo.com, CC BY 4.0 (https://open-meteo.com): NOAA NCEP GFS model data - winds and temperatures aloft, clouds aloft
+    and the weather over open water.
+  * ECMWF Open Data, (c) ECMWF, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/): turbulence outside the US.
   * D-ATIS by clowd.io (ATIS text).
-
 
 ================================================================================
 OpenJPEG
