@@ -1073,7 +1073,7 @@ bool nearlySame(const XPLMWeatherInfo_t& a, const XPLMWeatherInfo_t& b) {
     if (!rel(a.visibility, b.visibility, 0.03f, 50.0f) || !within(a.precip_rate, b.precip_rate, 0.02f)) return false;
     if (!within(a.radius_nm, b.radius_nm, 0.05f) || !within(a.max_altitude_msl_ft, b.max_altitude_msl_ft, 1.0f)) return false;
     if (!within(a.wave_height, b.wave_height, 0.1f) || a.wave_dir != b.wave_dir || !within(a.thermal_climb, b.thermal_climb, 0.05f)) return false;
-    if (!within(a.troposphere_alt, b.troposphere_alt, 50.0f) || !within(a.troposphere_temp, b.troposphere_temp, 0.5f)) return false;
+    if (!within(a.troposphere_alt, b.troposphere_alt, 150.0f) || !within(a.troposphere_temp, b.troposphere_temp, 1.0f)) return false;
     for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i)
         if (!within(a.temp_layers[i], b.temp_layers[i], 0.3f) || !within(a.dewp_layers[i], b.dewp_layers[i], 0.3f)) return false;
     for (int i = 0; i < XPLM_NUM_WIND_LAYERS; ++i) {
@@ -1210,8 +1210,11 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
             info.temp_layers[i] = wx::profileTemp(x.tempProfile, g_levelsM[i]);
         info.temperature_alt = kUnset;
     }
-    info.troposphere_alt = 0.0f;   // derive from existing data
-    info.troposphere_temp = kUnset;
+    // The tropopause from the same profile (GFS): left to itself X-Plane derived the standard one and pinned -56.5 C at 11,000 m
+    // (FL360 read -57 C where the profile had -52 C, log 2026-11-10). Without a profile that shows one, X-Plane still derives it.
+    float tropoM = 0, tropoC = 0;
+    if (x.tempProfile.size() >= 3 && wx::findTropopause(x.tempProfile, tropoM, tropoC)) { info.troposphere_alt = tropoM; info.troposphere_temp = tropoC; }
+    else { info.troposphere_alt = 0.0f; info.troposphere_temp = kUnset; }   // derive from existing data
     info.age = 0.0f;   // X-Plane weights a record by its age; an old METAR would count for less than its own weather
     info.radius_nm = (float)g_cfg.radiusNm;
     info.max_altitude_msl_ft = x.maxAltFt;
@@ -1833,6 +1836,17 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
             std::snprintf(b, sizeof b, " FL%03.0f %+.0f/%+.0fC(ISA%+.0f)", ft / 100.0, ours, q.temperature_alt, ours - isa);
             tl += b;
         }
+        // and the tropopause: ours (from the profile) and the one X-Plane reports at this spot
+        float ta = 0, tt = 0;
+        XPLMWeatherInfo_t q;
+        std::memset(&q, 0, sizeof q);
+        q.structSize = sizeof q;
+        XPLMGetWeatherAtLocation(lat, lon, 10000.0, &q);
+        if (wx::findTropopause(x.tempProfile, ta, tt)) std::snprintf(b, sizeof b, " | tropopause ours FL%03.0f %+.0fC", ta / 0.3048f / 100.0f, tt);
+        else std::snprintf(b, sizeof b, " | tropopause ours: none in the profile");
+        tl += b;
+        std::snprintf(b, sizeof b, ", X-Plane's FL%03.0f %+.0fC", q.troposphere_alt / 0.3048f / 100.0f, q.troposphere_temp);
+        tl += b;
         logf("  temperatures aloft, ours/X-Plane's:%s", tl.c_str());
     }
 }
@@ -1924,6 +1938,30 @@ void pushRegionWinds(const wx::XpWx& xin) {
     } else if (!tReported && x.tempProfile.size() >= 2) {
         tReported = true;
         logf("region temperature datarefs are missing or read-only: not writing temperatures aloft there");
+    }
+    // The tropopause, if X-Plane has region datarefs for it (not documented; looked up, written only when they exist and are writable).
+    // Ramped like the temperatures: at most 1.5 C and 300 m per write.
+    static XPLMDataRef drTa = XPLMFindDataRef("sim/weather/region/tropo_alt_m"), drTt = XPLMFindDataRef("sim/weather/region/tropo_temp_c");
+    static bool troReported = false, haveTro = false;
+    static float cTa = 0, cTt = 0;
+    float ta = 0, tt = 0;
+    const bool canTro = drTa && drTt && XPLMCanWriteDataRef(drTa) && XPLMCanWriteDataRef(drTt);
+    if (!troReported) {
+        troReported = true;
+        logf(canTro ? "tropopause: writing the GFS profile's tropopause into the sim's region tropopause datarefs too"
+                    : "tropopause: no writable region tropopause datarefs (set in the weather records only)");
+    }
+    if (canTro && x.tempProfile.size() >= 3 && wx::findTropopause(x.tempProfile, ta, tt)) {
+        if (!haveTro) {
+            const float a0 = XPLMGetDataf(drTa), t0 = XPLMGetDataf(drTt);
+            cTa = (std::isfinite(a0) && a0 > 5000.0f && a0 < 20000.0f) ? a0 : ta;
+            cTt = (std::isfinite(t0) && t0 > -95.0f && t0 < -20.0f) ? t0 : tt;
+            haveTro = true;
+        }
+        cTa += std::max(-300.0f, std::min(300.0f, ta - cTa));
+        cTt += std::max(-1.5f, std::min(1.5f, tt - cTt));
+        XPLMSetDataf(drTa, cTa);
+        XPLMSetDataf(drTt, cTt);
     }
 }
 

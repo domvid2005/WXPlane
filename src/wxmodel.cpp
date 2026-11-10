@@ -56,6 +56,34 @@ float profileTemp(const std::vector<std::pair<float, float>>& p, float altM) {
     return p.back().second;
 }
 
+// The tropopause of a temperature profile, by the WMO rule: the lowest height above 5 km where the lapse rate falls to 2 C/km or less
+// and its average over the 2 km above stays at 2 C/km or less. The lapse rate of each segment is taken at the segment's middle and
+// interpolated between middles, so the height moves smoothly with the profile instead of snapping to a model level (2026-11-10:
+// X-Plane, left to derive its own, pinned the standard -56.5 C at 11,000 m, so FL360 read -57 C where GFS had -52 C).
+bool findTropopause(const std::vector<std::pair<float, float>>& p, float& altM, float& tempC) {
+    if (p.size() < 3) return false;
+    const float top = p.back().first;
+    auto lapse = [&](size_t i) { return (p[i].second - p[i + 1].second) / ((p[i + 1].first - p[i].first) / 1000.0f); };   // C/km, segment i
+    auto mid = [&](size_t i) { return 0.5f * (p[i].first + p[i + 1].first); };
+    for (size_t i = 0; i + 1 < p.size(); ++i) {
+        if (p[i + 1].first - p[i].first < 1.0f || p[i + 1].first < 5000.0f) continue;
+        const float L = lapse(i);
+        if (L > 2.0f) continue;
+        // where the lapse rate crosses 2 C/km: between the middle of the segment below (steeper) and this one
+        float z = std::max(5000.0f, p[i].first);
+        if (i > 0 && p[i].first - p[i - 1].first >= 1.0f) {
+            const float Lb = lapse(i - 1), zb = mid(i - 1), za = mid(i);
+            if (Lb > 2.0f && Lb > L) z = std::max(5000.0f, zb + (za - zb) * (Lb - 2.0f) / (Lb - L));
+        }
+        if (z + 2000.0f > top) return false;   // the profile does not reach high enough to tell
+        if ((profileTemp(p, z) - profileTemp(p, z + 2000.0f)) / 2.0f > 2.0f) continue;
+        altM = z;
+        tempC = profileTemp(p, z);
+        return std::isfinite(altM) && std::isfinite(tempC) && altM > 5000.0f && altM < 20000.0f && tempC > -95.0f && tempC < -20.0f;
+    }
+    return false;
+}
+
 bool stationHasFog(const Station& st, const Config& cfg) {
     const Report& r = st.report;
     if (!cfg.fogLayer) return false;

@@ -394,6 +394,10 @@ The storm edge now follows one smooth outline drawn around all the blocks (your 
 NOAA's FD wind/temperature tables were discontinued (SCN 26-47; the server now answers HTTP 400), and their code was removed (2026-11-10), so this is the only source of winds and temperatures aloft. WXPlane asks Open-Meteo's GFS endpoint (`api.open-meteo.com/v1/gfs`, free, no key; check its terms if you redistribute the plugin) for wind speed and direction, temperature and geopotential height on the 925, 850, 700, 500, 400, 300, 250, 200, 150, 100 and 70 hPa levels (to about FL600) at 9 points about 60 nm apart around the aircraft, once every 45 minutes (see the allowance section below for when they move).
 
 * **Where it is used:** every level above the surface layer, everywhere (the surface wind and temperature still come from the METAR).
+* **Tropopause:** found in the same temperature profile by the WMO rule (the lowest height above 5 km where the temperature stops
+  falling faster than 2 C per km, for at least 2 km) and sent with every record, and into the sim's region tropopause datarefs if it
+  has them. Left to itself X-Plane derived the standard one and pinned -56.5 C at 11,000 m, so FL360 read 5 C colder than the model.
+  The log's temperature line shows ours and X-Plane's. With no tropopause in the profile, X-Plane still derives its own.
 * **Heights:** the model's own geopotential height of each pressure level is used (ISA only when it is missing), so a cold or warm air mass puts the levels where they really are.
 * **Safety:** if the endpoint refuses the highest levels the request is repeated with the levels up to 200 hPa; if both fail the previous download is kept for up to 3 hours, and `Log.txt` gets a line `global-model winds aloft unavailable (reason)`. A normal update logs `global-model winds aloft: N point(s), up to FLxxx`.
 * The menu item (or `use_aloft = 0`) turns it off, together with the model clouds and the open-water weather.

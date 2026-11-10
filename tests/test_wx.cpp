@@ -944,6 +944,24 @@ int main() {
         CHECK(xa.winds.size() <= 13);
         CHECK(xa.tempProfile.size() >= 6 && xa.tempProfile[0].second == 30);       // METAR surface temp anchors the profile
         NEAR(profileTemp(xa.tempProfile, 546), 30, 0.01);
+        {   // the tropopause of the profile (WMO lapse-rate rule)
+            float ta = 0, tt = 0;
+            CHECK(!findTropopause(xa.tempProfile, ta, tt));   // 34,000 ft -52 C, 39,000 -57: still 3.3 C/km at the top, so none can be told
+            // a typical mid-latitude profile: 6.5 C/km to 10.5 km, then nearly isothermal
+            std::vector<std::pair<float, float>> mp = {{300, 15}, {3000, -2.5f}, {6000, -22}, {9000, -41.5f}, {10500, -51}, {11800, -53}, {13500, -54}, {16000, -56}};
+            CHECK(findTropopause(mp, ta, tt) && ta > 10000 && ta < 11400 && tt < -49 && tt > -53);
+            std::printf("  tropopause of a mid-latitude profile: %.0f m %.1f C\n", ta, tt);
+            // a low inversion (below 5 km) is not the tropopause
+            std::vector<std::pair<float, float>> inv = {{300, 5}, {1500, 8}, {3000, 0}, {6000, -20}, {9000, -40}, {10500, -50}, {11800, -51}, {14000, -52}};
+            CHECK(findTropopause(inv, ta, tt) && ta > 9500);
+            // the profile ends too soon to tell: none (X-Plane then derives its own)
+            std::vector<std::pair<float, float>> shortP = {{300, 15}, {6000, -22}, {9000, -41.5f}, {10500, -51}, {11000, -51.5f}};
+            CHECK(!findTropopause(shortP, ta, tt));
+            // a smooth change in the profile moves the tropopause smoothly (no snap to a level)
+            std::vector<std::pair<float, float>> mp2 = mp; mp2[4].second = -50.5f;
+            float ta2 = 0, tt2 = 0;
+            CHECK(findTropopause(mp2, ta2, tt2) && std::fabs(ta2 - ta) < 400);
+        }
         NEAR(profileTemp(xa.tempProfile, 9144), -45, 0.5);                           // 30 000 ft
         CHECK(profileTemp(xa.tempProfile, 20000) == profileTemp(xa.tempProfile, 12000)); // constant above the top level
         Config off = cfg; off.useAloft = false;

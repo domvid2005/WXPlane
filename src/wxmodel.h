@@ -64,6 +64,8 @@ struct XpWx {
 
 // Temperature from a profile at an altitude (linear between points, constant outside).
 float profileTemp(const std::vector<std::pair<float, float>>& p, float altM);
+// The tropopause (WMO lapse-rate rule) of a profile; false when the profile is too short or shows none.
+bool findTropopause(const std::vector<std::pair<float, float>>& p, float& altM, float& tempC);
 float isaTempC(float altM);
 // Wind at an altitude from an ascending profile, interpolated as vectors (350 and 010 deg give 000); ends are held.
 XpWind windAt(const std::vector<XpWind>& p, float altM);
