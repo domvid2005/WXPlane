@@ -169,6 +169,52 @@ int main() {
         mdl[0].highCloud = 0.05; CHECK(!buildXp(c1, tc, now, &mdl).modelCirrus);   // hardly any high cloud: none
         Config off; off.modelCirrus = false; mdl[0].highCloud = 0.9; CHECK(!buildXp(c1, off, now, &mdl).modelCirrus);
     }
+    {   // Clouds from the global model's cloud cover on pressure levels (2026-11-09)
+        Config tc;
+        std::vector<AloftStation> mdl(1);
+        mdl[0].model = true; mdl[0].located = true; mdl[0].lat = 38.0; mdl[0].lon = -98.0;
+        // a mid-level deck at 500-400 hPa (~18,300-23,700 ft) and cirrus at 250 hPa (~34,000 ft); nothing low
+        mdl[0].cloudLevels = {{2500, 0.0}, {5000, 0.1}, {10000, 0.05}, {14000, 0.1}, {18300, 0.7}, {23700, 0.45}, {30000, 0.1}, {34000, 0.6}, {38700, 0.2}};
+        Station c1; c1.lat = 38.1; c1.lon = -98.1; c1.elevM = 400; parseReport("KXXX 301553Z 18005KT 10SM CLR 10/08 A2990", c1.report);
+        XpWx w = buildXp(c1, tc, now, &mdl);
+        std::vector<XpCloud> got; for (const auto& c : w.clouds) if (c.coverage > 0) got.push_back(c);
+        CHECK(got.size() == 2 && w.modelCirrus);
+        if (got.size() == 2) {
+            CHECK(got[0].type == (float)tc.stratusCloudType && got[0].baseM > 5200 && got[0].baseM < 5600 && got[0].topM - got[0].baseM <= 1500.0f);
+            NEAR(got[0].coverage, 0.595, 1e-3);   // 0.7 x 0.85
+            CHECK(got[1].type == 0.0f && got[1].baseM > 10000 && got[1].topM - got[1].baseM <= 549.0f);
+        }
+        // never below 12,000 ft above the station, never under or into the reported layers, not under SKC
+        Station c2 = c1; parseReport("KXXX 301553Z 18005KT 10SM SKC 10/08 A2990", c2.report);
+        CHECK(!buildXp(c2, tc, now, &mdl).modelCirrus);
+        Station c3 = c1; parseReport("KXXX 301553Z 18005KT 10SM SCT030 BKN200 OVC250 10/08 A2990", c3.report);   // all three slots taken
+        CHECK(!buildXp(c3, tc, now, &mdl).modelCirrus);
+        mdl[0].cloudLevels = {{8000, 0.9}, {11000, 0.9}};   // only low/mid cloud below 12,000 ft AGL: left to the report
+        CHECK(!buildXp(c1, tc, now, &mdl).modelCirrus);
+        Config off; off.modelClouds = false; off.modelCirrus = false;
+        mdl[0].cloudLevels = {{18300, 0.9}};
+        CHECK(!buildXp(c1, off, now, &mdl).modelCirrus);
+
+        // Open-Meteo's answer for two mid-Atlantic points (real, 2026-11-10 04Z): a low stratocumulus deck at 925 hPa, drizzle
+        const char* om = R"([{"latitude":45.04393,"longitude":-35.039062,"elevation":0.0,"hourly":{"time":[1794283200,1794286800],"cloud_cover_1000hPa":[5,5],"geopotential_height_1000hPa":[53.00,52.00],"cloud_cover_925hPa":[92,98],"geopotential_height_925hPa":[705.00,704.00],"cloud_cover_850hPa":[8,40],"geopotential_height_850hPa":[1403.00,1403.00],"cloud_cover_700hPa":[0,0],"geopotential_height_700hPa":[2971.00,2972.00],"cloud_cover_600hPa":[0,0],"geopotential_height_600hPa":[4190.00,4191.00],"cloud_cover_500hPa":[0,0],"geopotential_height_500hPa":[5589.00,5589.00],"cloud_cover_400hPa":[0,0],"geopotential_height_400hPa":[7222.22,7223.46],"cloud_cover_300hPa":[0,0],"geopotential_height_300hPa":[9214.52,9214.52],"cloud_cover_250hPa":[0,0],"geopotential_height_250hPa":[10419.05,10417.14],"cloud_cover_200hPa":[0,0],"geopotential_height_200hPa":[11853.49,11848.84],"cloud_cover_150hPa":[0,0],"geopotential_height_150hPa":[13692.54,13686.57],"temperature_2m":[14.6,14.5],"dew_point_2m":[12.8,12.9],"pressure_msl":[1006.3,1006.2],"wind_speed_10m":[18.2,18.3],"wind_direction_10m":[340,345],"wind_gusts_10m":[20.2,20.0],"visibility":[24140.00,24140.00],"precipitation":[0.10,0.10],"snowfall":[0.00,0.00],"weather_code":[51,51]}},{"latitude":45.981125,"longitude":-35.039062,"elevation":0.0,"location_id":1,"hourly":{"time":[1794283200,1794286800],"cloud_cover_1000hPa":[5,4],"geopotential_height_1000hPa":[52.00,53.00],"cloud_cover_925hPa":[54,27],"geopotential_height_925hPa":[703.00,703.00],"cloud_cover_850hPa":[8,4],"geopotential_height_850hPa":[1401.00,1401.00],"cloud_cover_700hPa":[0,0],"geopotential_height_700hPa":[2971.00,2971.00],"temperature_2m":[13.7,13.6],"dew_point_2m":[12.2,11.9],"pressure_msl":[1006.2,1006.3],"wind_speed_10m":[16.7,17.4],"wind_direction_10m":[351,350],"wind_gusts_10m":[19.2,19.0],"visibility":[24140.00,24140.00],"precipitation":[0.00,0.00],"snowfall":[0.00,0.00],"weather_code":[3,3]}}])";
+        std::vector<std::pair<double, double>> pts = {{45, -35}, {46, -35}};
+        std::string err;
+        auto mp = parseOpenMeteoClouds(om, pts, 1794283300, &err);
+        CHECK(mp.size() == 2 && mp[0].sfc && mp[0].cloudLevels.size() == 11 && mp[1].cloudLevels.size() == 4);
+        if (mp.size() == 2) {
+            CHECK(mp[0].lat == 45 && mp[0].lon == -35);   // the requested node, not the model's snapped cell
+            NEAR(mp[0].cloudLevels[1].first, 705.0 / 0.3048, 0.1); NEAR(mp[0].cloudLevels[1].second, 0.92, 1e-9);
+            NEAR(mp[0].mslHpa, 1006.3, 1e-9); NEAR(mp[0].windKt, 18.2, 1e-9); CHECK(mp[0].weatherCode == 51);
+            Station os = modelStation(mp[0], (std::time_t)1794283300);
+            CHECK(os.icao == "GFSN45W035" && os.report.hasWind && os.report.windDir == 340 && os.report.windKt == 18 && os.report.gustKt == 0);
+            CHECK(os.report.clouds.size() == 1 && os.report.clouds[0].cover == CloudGroup::OVC && os.report.clouds[0].baseFtAgl == 1300);
+            CHECK(os.report.hasAltim && nr(os.report.altimHpa, 1006.3, 1e-9) && os.report.visM == 9999 && os.report.precip > 0 && os.report.wxText == "-RA");
+            CHECK(reportAgeSeconds(os.report, (std::time_t)1794283300) < 120);
+            XpWx ow = buildXp(os, tc, (std::time_t)1794283300, &mdl);
+            CHECK(!ow.modelCirrus && ow.cloudCount >= 1);   // its own layers, no second copy from the model
+        }
+        CHECK(parseOpenMeteoClouds("{\"error\":true,\"reason\":\"Too many requests\"}", pts, 0, &err).empty() && err.find("Too many") != std::string::npos);
+    }
     Station dfw;
     dfw.elevM = 185;
     parseReport("KDFW 301553Z 18015G30KT 3SM +TSRA BKN020CB OVC040 BKN150 BKN250 24/22 A2985", dfw.report);

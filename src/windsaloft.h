@@ -20,6 +20,8 @@ struct AloftStation {
     double highCloud = -1; // global model only: high cloud cover (0..1) at this point, -1 = not known
     bool model = false; // a point of the global model (Open-Meteo / GFS), not an FD station: used above the FD levels and where FD has no station
     std::vector<AloftLevel> levels; // ascending altitude
+    // Global-model clouds (separate, slower download): cloud cover on pressure levels, (altitude ft MSL, 0..1) ascending.
+    std::vector<std::pair<double, double>> cloudLevels;
 };
 
 // Parses one windtemp text product (low or high level). Stations come back without coordinates.
@@ -39,6 +41,21 @@ std::string openMeteoUrl(const std::vector<std::pair<double, double>>& points, c
 // One model station per point (id "GFS<n>", model = true, located). Picks the hour closest to `now` (unix time). Empty on a malformed answer; `err` says why.
 std::vector<AloftStation> parseOpenMeteo(const std::string& body, const std::vector<std::pair<double, double>>& points,
                                          const std::vector<int>& levelsHpa, long long now, std::string* err = nullptr);
+
+// Global-model clouds and surface weather at a lattice point (Open-Meteo GFS): cloud cover on pressure levels, for cloud layers above
+// what an airport report can see, and the surface weather, for open water where no airport reports.
+struct ModelPoint {
+    double lat = 0, lon = 0;       // as requested (lattice node)
+    double elevM = 0;              // the model's ground height there
+    std::vector<std::pair<double, double>> cloudLevels;   // (altitude ft MSL, cover 0..1), ascending
+    bool sfc = false;
+    double tempC = 0, dewC = 0, mslHpa = 0, windDir = 0, windKt = 0, gustKt = 0, visM = -1, precipMm = 0, snowCm = 0;
+    int weatherCode = -1;
+};
+const std::vector<int>& modelCloudLevels();   // 1000 ... 150 hPa
+std::string openMeteoCloudUrl(const std::vector<std::pair<double, double>>& points);
+std::vector<ModelPoint> parseOpenMeteoClouds(const std::string& body, const std::vector<std::pair<double, double>>& points, long long now,
+                                             std::string* err = nullptr);
 
 // Winds/temps at a point, blended from the nearest stations (inverse-distance-squared on wind vectors).
 struct AloftSample {

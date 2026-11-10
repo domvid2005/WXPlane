@@ -188,6 +188,37 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
         if (!upNote.empty()) res.aloftNote += (res.aloftNote.empty() ? "" : "; ") + upNote;
     }
 
+    // 3b) Global-model clouds and surface weather on the same lattice (every 30 min): cloud layers above what airport reports can see,
+    //     and the weather over open water where no airport reports within the search radius.
+    if (cfg.useAloft && (cfg.modelClouds || cfg.oceanModelWeather)) {
+        std::string cNote;
+        std::vector<ModelPoint> mp = fetchModelClouds(rq, now, cNote);
+        if (!cNote.empty()) res.aloftNote += (res.aloftNote.empty() ? "" : "; ") + cNote;
+        if (cfg.modelClouds)
+            for (auto& a : res.aloft) {
+                if (!a.model) continue;
+                const ModelPoint* best = nullptr; double bd = 1e9;
+                for (const auto& p : mp) { const double d = distNm(a.lat, a.lon, p.lat, p.lon); if (d < bd) { bd = d; best = &p; } }
+                if (best && bd < 30.0) a.cloudLevels = best->cloudLevels;
+            }
+        // Open water: no airport within the search radius. The model's surface weather at the lattice nodes becomes reports of its own
+        // ("GFS..." stations, location records), so the weather around the aircraft follows the model instead of distant coasts.
+        const bool noNear = keep.empty() || keep.front().distNm > cfg.searchNm;
+        if (cfg.oceanModelWeather && noNear) {
+            int added = 0;
+            for (const auto& p : mp) {
+                if (!p.sfc) continue;
+                Station st = modelStation(p, now);
+                st.distNm = distNm(rq.lat, rq.lon, st.lat, st.lon);
+                keep.push_back(std::move(st));
+                ++added;
+            }
+            std::sort(keep.begin(), keep.end(), [](const Station& a, const Station& b) { return a.distNm < b.distNm; });
+            if (added) widened += std::string(widened.empty() ? "" : "; ") + "no airport within " + std::to_string((int)cfg.searchNm) + " nm: " +
+                                  std::to_string(added) + " global-model (GFS) points give the weather around the aircraft";
+        }
+    }
+
     // 4) Radar storm cells.
     if (cfg.radar) res.radar = fetchRadar(rq, now);
 
@@ -413,6 +444,35 @@ RadarResult Fetcher::fetchRainViewer(const FetchRequest& rq, std::time_t now) {
     out.dataTime = dt;
     out.note = "colour-decoded image tiles: intensities and tops are approximate";
     return out;
+}
+
+std::vector<ModelPoint> Fetcher::fetchModelClouds(const FetchRequest& rq, std::time_t now, std::string& note) {
+    // The same 3x3 lattice as the winds, every 30 minutes (cloud cover changes slowly; it keeps the open-meteo.com cost low).
+    const double cLat = std::round(rq.lat), cLon = std::round(rq.lon);
+    if (!cloudCache_.empty() && now - cloudTime_ < 1800 && std::fabs(cLat - cloudLat_) < 0.5 && std::fabs(cLon - cloudLon_) < 0.5) return cloudCache_;
+    std::vector<std::pair<double, double>> pts;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            double la = cLat + dy, lo = cLon + dx;
+            if (la > 89 || la < -89) continue;
+            if (lo > 180) lo -= 360;
+            if (lo < -180) lo += 360;
+            pts.push_back({la, lo});
+        }
+    std::string body, err;
+    long st = 0;
+    std::vector<ModelPoint> got;
+    if (httpGet(openMeteoCloudUrl(pts), body, st, err, 20)) got = parseOpenMeteoClouds(body, pts, (long long)now, &err);
+    if (got.empty()) {
+        note = "global-model clouds unavailable (" + (err.empty() ? std::string("no data") : err) + ")";
+        if (!cloudCache_.empty() && now - cloudTime_ < 3 * 3600) { note += ", using the earlier download"; return cloudCache_; }
+        return {};
+    }
+    cloudCache_ = got; cloudTime_ = now; cloudLat_ = cLat; cloudLon_ = cLon;
+    char b[120];
+    std::snprintf(b, sizeof b, "global-model clouds and surface weather: %zu of %zu point(s)", got.size(), pts.size());
+    note = b;
+    return got;
 }
 
 std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::time_t now, std::string& note, const std::vector<Station>& known) {

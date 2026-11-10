@@ -78,8 +78,10 @@ std::vector<Source> assess(const Env& env) {
             if (c.dbz > s.dbz) { s.dbz = c.dbz; s.lat = c.lat; s.lon = c.lon; }
         }
     // thunder reported at a station with no radar echo of its own (radar off or outside coverage): a source of its own
+    // (the global model's open-water points are forecasts, not observations: they never count as evidence)
+    auto observed = [](const Station& st) { return st.icao.compare(0, 3, "GFS") != 0; };
     for (const auto& st : *env.stations)
-        if (hasTs(st.report)) {
+        if (observed(st) && hasTs(st.report)) {
             Sq& s = sq[keyOf(st.lat, st.lon)];
             if (s.dbz <= 0) { s.lat = st.lat; s.lon = st.lon; }
         }
@@ -89,7 +91,7 @@ std::vector<Source> assess(const Env& env) {
         const Station* nearest = nullptr; double nd = 1e9;
         for (const auto& st : *env.stations) {
             const double d = distNm(s.lat, s.lon, st.lat, st.lon);
-            if (d < 15.0) { if (hasTs(st.report)) s.tsObserved = true; s.gustKt = std::max(s.gustKt, (float)st.report.gustKt); }
+            if (d < 15.0 && observed(st)) { if (hasTs(st.report)) s.tsObserved = true; s.gustKt = std::max(s.gustKt, (float)st.report.gustKt); }
             if (d < nd) { nd = d; nearest = &st; }
         }
         // dry microburst evidence: a convective echo that is not heavy, a deep dry sub-cloud layer (spread >= 15 C) and a high cloud base

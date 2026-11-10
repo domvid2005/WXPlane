@@ -266,11 +266,66 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         c.topM = (float)(c.baseM + thick);
         layers.push_back(c);
     }
+    // Clouds from the global model above what the report can see (2026-11-09): automatic stations report nothing above 12,000 ft, and
+    // airports are far apart in many regions. The model's cloud cover on pressure levels (Open-Meteo GFS, inverse-distance blend of the
+    // lattice nodes within 150 nm) gives layers above 12,000 ft AGL and above the highest reported layer, in the slots left free. Runs of
+    // levels with at least 30 % cover become one layer: cirrus from 7 km (at most 500 m deep, X-Plane's limit is 549 m), stratus-type
+    // mid-level cloud below that (at most 1.5 km deep); coverage 85 % of the model's, at most 85 %. Not over an SKC report (an observer
+    // saw no cloud at any height) and not for the model's own open-water points (their report already has the model's layers).
+    bool modelLayersDone = false;
+    const bool ownModelPoint = st.icao.compare(0, 3, "GFS") == 0;
+    if (cfg.modelClouds && aloft && !r.skyClearAll && !ownModelPoint) {
+        std::vector<std::pair<double, double>> prof;   // (alt ft, cover)
+        {
+            const AloftStation* nearest = nullptr; double nd = 150.0;
+            for (const auto& a : *aloft) {
+                if (!a.model || a.cloudLevels.empty()) continue;
+                const double d = distNm(st.lat, st.lon, a.lat, a.lon);
+                if (d < nd) { nd = d; nearest = &a; }
+            }
+            if (nearest) {
+                const size_t n = nearest->cloudLevels.size();
+                std::vector<double> sa(n, 0), sc(n, 0);
+                double sw = 0;
+                for (const auto& a : *aloft) {
+                    if (!a.model || a.cloudLevels.size() != n) continue;
+                    const double d = distNm(st.lat, st.lon, a.lat, a.lon);
+                    if (d > 150.0) continue;
+                    const double w = 1.0 / std::max(1.0, d * d);
+                    for (size_t k = 0; k < n; ++k) { sa[k] += w * a.cloudLevels[k].first; sc[k] += w * a.cloudLevels[k].second; }
+                    sw += w;
+                }
+                if (sw > 0) for (size_t k = 0; k < n; ++k) prof.push_back({sa[k] / sw, sc[k] / sw});
+            }
+        }
+        if (!prof.empty()) {
+            modelLayersDone = true;
+            float floorM = (float)(st.elevM + 12000.0 * kFtToM);
+            for (const auto& L : layers) floorM = std::max(floorM, L.topM + 300.0f);
+            const size_t cap = fogSlot ? ((x.fogLayerApplied || ceilingInsteadOfMist) ? 3u : 2u) : 3u;
+            size_t k = 0;
+            while (k < prof.size() && layers.size() < cap) {
+                if (prof[k].second < 0.3 || prof[k].first * kFtToM < floorM) { ++k; continue; }
+                size_t e = k;
+                double cmax = prof[k].second;
+                while (e + 1 < prof.size() && prof[e + 1].second >= 0.3) { ++e; cmax = std::max(cmax, prof[e].second); }
+                XpCloud c;
+                const float lo = (float)(prof[k].first * kFtToM), hi = (float)(prof[e].first * kFtToM);
+                c.baseM = std::max(floorM, lo - 300.0f);
+                const bool cirrus = c.baseM >= 7000.0f;
+                c.type = cirrus ? 0.0f : (float)cfg.stratusCloudType;
+                c.topM = std::min(c.baseM + (cirrus ? 500.0f : 1500.0f), std::max(c.baseM + (cirrus ? 300.0f : 400.0f), hi + 300.0f));
+                c.coverage = (float)std::min(0.85, cmax * 0.85);
+                if (c.topM <= kXpMaxTopM && c.coverage >= 0.1f) { layers.push_back(c); x.modelCirrus = true; floorM = c.topM + 300.0f; }
+                k = e + 1;
+            }
+        }
+    }
     // Cirrus from the global model: automatic stations report no cloud above 12,000 ft, so the high cloud of the model (Open-Meteo GFS,
     // nearest point within 400 nm) is added as a cirrus layer when the report has nothing that high itself, the sky is not reported
     // clear at every height (SKC) and a slot is free. Base 2 km under the tropopause (7.5-11 km), 500 m deep (X-Plane allows cirrus up to
     // 549 m), coverage at most 75 %.
-    if (cfg.modelCirrus && aloft && !r.skyClearAll) {
+    if (cfg.modelCirrus && aloft && !r.skyClearAll && !modelLayersDone && !ownModelPoint) {   // older fallback: high-cloud cover only
         const AloftStation* best = nullptr; double bd = 400.0;
         for (const auto& a : *aloft) {
             if (!a.model || a.highCloud < 0) continue;
@@ -582,6 +637,66 @@ Station blendAt(const std::vector<Station>& st, double lat, double lon) {
     }
     if (r.hasAltim) { double sw = sumW([](const Report& q) { return q.hasAltim; }), m = 0; if (sw > 0) { for (const auto& n : use) if (n.s->report.hasAltim) m += n.d * n.s->report.altimHpa; r.altimHpa = m / sw; } }
     return out;
+}
+
+Station modelStation(const ModelPoint& p, std::time_t now) {
+    Station st;
+    char id[32];
+    std::snprintf(id, sizeof id, "GFS%c%02d%c%03d", p.lat >= 0 ? 'N' : 'S', (int)std::lround(std::fabs(p.lat)), p.lon >= 0 ? 'E' : 'W', (int)std::lround(std::fabs(p.lon)));
+    st.icao = id;
+    st.lat = p.lat; st.lon = p.lon; st.elevM = std::max(0.0, p.elevM);
+    st.obsTime = (long long)now;
+    Report& r = st.report;
+    r.icao = id;
+    std::tm g{};
+#ifdef _WIN32
+    gmtime_s(&g, &now);
+#else
+    gmtime_r(&now, &g);
+#endif
+    r.day = g.tm_mday; r.hour = g.tm_hour; r.minute = g.tm_min;
+    r.hasWind = true;
+    r.windDir = ((int)std::lround(p.windDir / 10.0) * 10) % 360;
+    if (r.windDir == 0 && p.windKt >= 1) r.windDir = 360;
+    r.windKt = std::round(p.windKt);
+    if (p.gustKt >= p.windKt + 8) r.gustKt = std::round(p.gustKt);
+    r.hasTemp = true; r.tempC = std::round(p.tempC);
+    r.hasDewp = true; r.dewpC = std::round(std::min(p.dewC, p.tempC));
+    r.hasAltim = p.mslHpa > 850 && p.mslHpa < 1100; r.altimHpa = p.mslHpa;
+    r.hasVis = p.visM >= 0; r.visM = std::min(9999.0, std::max(50.0, p.visM));
+    // cloud layers from the model's cloud cover on pressure levels (runs of levels with at least 25 %), like report groups
+    const double elevFt = st.elevM / kFtToM;
+    for (size_t k = 0; k < p.cloudLevels.size() && r.clouds.size() < 3;) {
+        if (p.cloudLevels[k].second < 0.25 || p.cloudLevels[k].first < elevFt + 300) { ++k; continue; }
+        size_t e = k; double cmax = p.cloudLevels[k].second;
+        while (e + 1 < p.cloudLevels.size() && p.cloudLevels[e + 1].second >= 0.25) { ++e; cmax = std::max(cmax, p.cloudLevels[e].second); }
+        CloudGroup c;
+        c.cover = cmax >= 0.85 ? CloudGroup::OVC : cmax >= 0.6 ? CloudGroup::BKN : cmax >= 0.35 ? CloudGroup::SCT : CloudGroup::FEW;
+        c.baseFtAgl = (int)std::max(500.0, std::round((p.cloudLevels[k].first - elevFt - 1000.0) / 100.0) * 100.0);
+        if (p.weatherCode >= 95 && r.clouds.empty()) c.kind = 1;   // thunderstorm: the lowest layer is cumulonimbus
+        r.clouds.push_back(c);
+        k = e + 1;
+    }
+    r.clearSky = r.clouds.empty();
+    // precipitation (mm per hour) and weather code
+    if (p.precipMm > 0.05) r.precip = p.precipMm < 0.5 ? 0.2 : p.precipMm < 2.5 ? 0.4 : p.precipMm < 8 ? 0.7 : 1.0;
+    r.snow = p.snowCm > 0 && p.tempC < 2.0;
+    r.thunder = p.weatherCode >= 95 && p.weatherCode <= 99;
+    r.fog = (p.weatherCode == 45 || p.weatherCode == 48) && p.visM >= 0 && p.visM < 1000;
+    r.mist = !r.fog && p.visM >= 0 && p.visM < 5000 && r.precip <= 0;
+    r.freezing = p.weatherCode == 56 || p.weatherCode == 57 || p.weatherCode == 66 || p.weatherCode == 67;
+    std::string wx;
+    if (r.precip > 0) wx = std::string(r.precip < 0.3 ? "-" : r.precip >= 0.9 ? "+" : "") + (r.thunder ? "TS" : "") + (r.freezing ? "FZ" : "") + (r.snow ? "SN" : "RA");
+    else if (r.thunder) wx = "TS";
+    if (r.fog) wx += (wx.empty() ? "" : " ") + std::string("FG");
+    else if (r.mist) wx += (wx.empty() ? "" : " ") + std::string("BR");
+    r.wxText = wx;
+    char raw[200];
+    std::snprintf(raw, sizeof raw, "%s (GFS model point, no airport within range) %03d%02.0fKT vis %.0f m %s T%.0f/%.0f Q%.0f", id, r.windDir, r.windKt, r.visM, wx.c_str(),
+                  r.tempC, r.dewpC, p.mslHpa);
+    st.rawMetar = raw;
+    st.filled = "global model";
+    return st;
 }
 
 } // namespace wx

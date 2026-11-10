@@ -158,7 +158,7 @@ void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* 
 struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
 static std::string g_pirepJson;
-static bool g_ocean = false; static int g_oceanMetar = 0;   // HARNESS_OCEAN: METAR searches answer HTTP 204 (open water)   // HARNESS_TURB: pilot reports served for /api/data/pirep
+static bool g_ocean = false, g_oceanModel = false; static int g_oceanMetar = 0;   // HARNESS_OCEAN: METAR searches answer HTTP 204 (open water)   // HARNESS_TURB: pilot reports served for /api/data/pirep
 static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
 static std::vector<std::string> g_urls;
 static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
@@ -268,6 +268,18 @@ CURLcode curl_easy_perform(CURL* c) {
         e->status = b.empty() ? 404 : 200;
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
+    }
+    if (g_oceanModel && e->url.find("api.open-meteo.com") != std::string::npos && e->url.find("cloud_cover_1000hPa") != std::string::npos) {
+        // HARNESS_OCEAN, second part: the model's clouds and surface weather at 9 nodes (a low overcast deck at 925 hPa, drizzle)
+        const long t = (long)std::time(nullptr);
+        std::string one = "{\"latitude\":45,\"longitude\":-35,\"elevation\":0.0,\"hourly\":{\"time\":[" + std::to_string(t) + "],"
+                          "\"cloud_cover_925hPa\":[92],\"geopotential_height_925hPa\":[705],\"cloud_cover_500hPa\":[0],\"geopotential_height_500hPa\":[5589],"
+                          "\"temperature_2m\":[14.6],\"dew_point_2m\":[12.8],\"pressure_msl\":[1006.3],\"wind_speed_10m\":[18.2],\"wind_direction_10m\":[340],"
+                          "\"wind_gusts_10m\":[20.2],\"visibility\":[24140],\"precipitation\":[0.1],\"snowfall\":[0],\"weather_code\":[51]}}";
+        std::string b = "[";
+        for (int k = 0; k < 9; ++k) b += (k ? "," : "") + one;
+        b += "]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
     }
     if (e->url.find("api.open-meteo.com") != std::string::npos) {   // one location, the hour 'now' is among the two returned
         std::string b = "[{\"latitude\":37.7,\"longitude\":-97.4,\"hourly\":{\"time\":[1000000000,1000003600]";
@@ -560,7 +572,7 @@ static bool nr(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 static int runOcean() {
     // 2026-11-09 crash report: "[WXPlane] no METARs within search radius" then X-Plane crashed (the open ocean).
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\n", f); std::fclose(f); }
     g_ocean = true;
     g_loadingFlag = 0;
     g_lat = 45.0; g_lon = -35.0; g_elev = 11000; g_agl = 11000;
@@ -573,15 +585,30 @@ static int runOcean() {
     CHECK(g_oceanMetar >= 3);   // 120, 300 and 600 nm (plus the dry-runway check's own quick look)
     for (int i = 0; i < 100; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }   // still alive, no records sent
     CHECK(g_calls.empty());
+    // with the global model's surface weather, the open water gets weather of its own (9 GFS points, location records)
+    g_oceanModel = true;
+    g_menuHandler(nullptr, (void*)(intptr_t)2);
+    for (int i = 0; i < 600 && g_calls.empty(); ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    CHECK(g_logAll.find("global-model (GFS) points give the weather around the aircraft") != std::string::npos);
+    {
+        int gfs = 0; bool overcast = false;
+        for (const auto& c : g_calls) if (!c.airport) { ++gfs; for (const auto& L : c.info.cloud_layers) if (L.coverage > 0.8f && L.alt_base < 800) overcast = true; }
+        std::printf("[ocean] model weather: %d location records, low overcast %s\n", gfs, overcast ? "yes" : "no");
+        CHECK(gfs >= 9 && overcast);
+    }
+    g_oceanModel = false;
     // the menu's refresh and the windows also cope with no stations
     g_menuHandler(nullptr, (void*)(intptr_t)2);
     for (int i = 0; i < 300; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     // back near land: weather as usual
     g_ocean = false;
     g_lat = 37.65; g_lon = -97.43;
+    const size_t callsLand = g_calls.size();
     g_menuHandler(nullptr, (void*)(intptr_t)2);
-    for (int i = 0; i < 600 && g_calls.empty(); ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-    CHECK(!g_calls.empty());
+    for (int i = 0; i < 600 && g_calls.size() == callsLand; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    for (int i = 0; i < 300; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }   // the rest of the slices
+    bool kict = false; for (size_t k = callsLand; k < g_calls.size(); ++k) if (g_calls[k].where == "KICT") kict = true;
+    CHECK(kict);
     XPluginDisable(); XPluginStop();
     std::printf(g_fail ? "HARNESS_OCEAN FAILED (%d)\n" : "HARNESS_OCEAN OK (%d failures)\n", g_fail);
     return g_fail ? 1 : 0;
@@ -589,7 +616,7 @@ static int runOcean() {
 
 static int runTurb() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
-    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 1\nmax_turbulence = 1\ndiag_verbosity = 2\n", f); std::fclose(f); }
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 1\nmax_turbulence = 1\ndiag_verbosity = 2\n", f); std::fclose(f); }
     const std::time_t now = std::time(nullptr), t15 = (now - 300) / 900 * 900;   // a file at least 5 minutes old (newer ones are skipped)
     char nm[64]; std::tm g{}; gmtime_r(&t15, &g); std::strftime(nm, sizeof nm, "gtgn.t%H%Mz.3km.grib2", &g);
     g_gtgnName = nm;

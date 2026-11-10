@@ -17,6 +17,8 @@ struct Config {
     // Stratus look for overcast decks (low stratus and mid-level altostratus): between stratus (1) and cumulus (2). 1.0 renders as a smooth
     // sheet with hard vertical edges, so the default is a mix; broken low decks get halfway between this and low_cloud_type.
     double stratusCloudType = 1.5;
+    bool modelClouds = true;          // cloud layers above 12,000 ft AGL from the global model's cloud cover on pressure levels
+    bool oceanModelWeather = true;    // no airport within the search radius: the global model's surface weather around the aircraft
     bool modelCirrus = true;          // add cirrus from the global model's high cloud cover where the reports cannot see it
     double stormTopVariationM = 1500; // estimated storm tops (no radar echo-top data) vary by up to +/- this, stable per block, so tops are not one flat plateau
     double startupCalmS = 1.5;        // scenery loading must have been finished this long before the first download starts

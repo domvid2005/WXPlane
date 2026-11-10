@@ -79,6 +79,8 @@ int validateProfile(XpWx& x, bool fix, std::string* why = nullptr);
 // fogSlot: reserve cloud slot 0 for ground fog at EVERY station (empty where there is none). X-Plane blends cloud
 // layers between neighbouring reports by slot number, so fog must always sit in the same slot or it gets mixed
 // with unrelated clouds as you fly past (this shows up as flicker).
+// A report made from the global model's surface weather at a lattice node (open water: no airport within range). id "GFSN28W083".
+Station modelStation(const ModelPoint& p, std::time_t now);
 XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft = nullptr,
              bool fogSlot = false);
 

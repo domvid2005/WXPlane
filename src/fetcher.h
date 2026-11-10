@@ -73,6 +73,10 @@ private:
     std::map<std::string, std::time_t> coordsMiss_;
     // global-model winds aloft (Open-Meteo GFS), worker thread only
     std::vector<AloftStation> upCache_;
+    std::vector<ModelPoint> cloudCache_;
+    std::time_t cloudTime_ = 0;
+    double cloudLat_ = 999, cloudLon_ = 999;
+    std::vector<ModelPoint> fetchModelClouds(const FetchRequest& r, std::time_t now, std::string& note);
     std::time_t upTime_ = 0;
     double upLat_ = 0, upLon_ = 0;
     std::vector<AloftStation> fetchUpperAir(const FetchRequest& r, std::time_t now, std::string& note, const std::vector<Station>& known);

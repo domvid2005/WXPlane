@@ -299,4 +299,70 @@ std::vector<AloftStation> parseOpenMeteo(const std::string& body, const std::vec
     return out;
 }
 
+const std::vector<int>& modelCloudLevels() {
+    static const std::vector<int> L = {1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150};
+    return L;
+}
+
+std::string openMeteoCloudUrl(const std::vector<std::pair<double, double>>& pts) {
+    std::string la, lo, vars;
+    char b[64];
+    for (size_t i = 0; i < pts.size(); ++i) {
+        std::snprintf(b, sizeof b, "%.2f", pts[i].first); la += (i ? "," : "") + std::string(b);
+        std::snprintf(b, sizeof b, "%.2f", pts[i].second); lo += (i ? "," : "") + std::string(b);
+    }
+    for (int l : modelCloudLevels()) vars += (vars.empty() ? "" : ",") + std::string("cloud_cover_") + std::to_string(l) + "hPa,geopotential_height_" + std::to_string(l) + "hPa";
+    vars += ",temperature_2m,dew_point_2m,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,precipitation,snowfall,weather_code";
+    return "https://api.open-meteo.com/v1/gfs?latitude=" + la + "&longitude=" + lo + "&hourly=" + vars +
+           "&wind_speed_unit=kn&forecast_hours=2&timeformat=unixtime";
+}
+
+std::vector<ModelPoint> parseOpenMeteoClouds(const std::string& body, const std::vector<std::pair<double, double>>& pts, long long now, std::string* err) {
+    std::vector<ModelPoint> out;
+    Json root;
+    if (!parseJson(body, root)) { if (err) *err = "unreadable answer from open-meteo.com"; return out; }
+    std::vector<const Json*> locs;
+    if (root.type == Json::Arr) for (const auto& o : root.arr) locs.push_back(&o);
+    else if (root.type == Json::Obj) {
+        if (root.get("error")) { const Json* r = root.get("reason"); if (err) *err = "open-meteo.com: " + (r ? r->asString() : std::string("error")); return out; }
+        locs.push_back(&root);
+    }
+    for (size_t i = 0; i < locs.size() && i < pts.size(); ++i) {
+        const Json* h = locs[i]->get("hourly");
+        if (!h || h->type != Json::Obj) continue;
+        size_t idx = 0;
+        const Json* tm = h->get("time");
+        if (tm && tm->type == Json::Arr && !tm->arr.empty()) {
+            double best = 1e18;
+            for (size_t k = 0; k < tm->arr.size(); ++k) { const double d = std::fabs(tm->arr[k].asNum(0) - (double)now); if (d < best) { best = d; idx = k; } }
+        }
+        auto val = [&](const std::string& name, double& v) {
+            const Json* a = h->get(name);
+            if (!a || a->type != Json::Arr || idx >= a->arr.size() || a->arr[idx].type != Json::Num) return false;
+            v = a->arr[idx].num; return true;
+        };
+        ModelPoint p;
+        p.lat = pts[i].first; p.lon = pts[i].second;
+        { const Json* e = locs[i]->get("elevation"); if (e && e->type == Json::Num) p.elevM = e->num; }
+        for (int l : modelCloudLevels()) {
+            double cc = 0, gh = 0;
+            if (!val("cloud_cover_" + std::to_string(l) + "hPa", cc) || cc < 0) continue;
+            const double alt = val("geopotential_height_" + std::to_string(l) + "hPa", gh) ? gh / 0.3048 : isaAltFtFromHpa(l);
+            p.cloudLevels.push_back({alt, std::min(1.0, cc / 100.0)});
+        }
+        std::sort(p.cloudLevels.begin(), p.cloudLevels.end());
+        double v = 0;
+        p.sfc = val("temperature_2m", p.tempC) && val("pressure_msl", p.mslHpa) && val("wind_speed_10m", p.windKt) && val("wind_direction_10m", p.windDir);
+        if (val("dew_point_2m", v)) p.dewC = v; else p.dewC = p.tempC - 5;
+        if (val("wind_gusts_10m", v)) p.gustKt = v;
+        if (val("visibility", v)) p.visM = v;
+        if (val("precipitation", v)) p.precipMm = std::max(0.0, v);
+        if (val("snowfall", v)) p.snowCm = std::max(0.0, v);
+        if (val("weather_code", v)) p.weatherCode = (int)v;
+        if (!p.cloudLevels.empty() || p.sfc) out.push_back(std::move(p));
+    }
+    if (out.empty() && err && err->empty()) *err = "open-meteo.com answered without cloud levels";
+    return out;
+}
+
 } // namespace wx

@@ -747,7 +747,10 @@ void dryRunwayTick() {
     if (phase == kIdle) {
         const double agl = drAgl ? XPLMGetDataf(drAgl) / 0.3048 : 0.0;
         const wx::Station* best = nullptr; double bd = 1e9;
-        for (const auto& s : *src) { const double d = wx::distNm(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = &s; } }
+        for (const auto& s : *src) {
+            if (s.icao.compare(0, 3, "GFS") == 0) continue;   // the global model's open-water points are not airports
+            const double d = wx::distNm(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = &s; }
+        }
         if (!best || bd > 8.0 || agl > 3000.0) {
             logf("dry runway: loaded %s - no check this time", agl > 3000.0 ? "in the air above 3,000 ft AGL" : "more than 8 nm from any reporting airport");
             phase = kDone;
