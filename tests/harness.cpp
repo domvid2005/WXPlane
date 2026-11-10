@@ -7,6 +7,7 @@
 #include <ctime>
 #include <cmath>
 #include <string>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -156,7 +157,8 @@ void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* 
 // ---------------- mock libcurl ----------------
 struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
-static std::string g_pirepJson;   // HARNESS_TURB: pilot reports served for /api/data/pirep
+static std::string g_pirepJson;
+static bool g_ocean = false; static int g_oceanMetar = 0;   // HARNESS_OCEAN: METAR searches answer HTTP 204 (open water)   // HARNESS_TURB: pilot reports served for /api/data/pirep
 static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
 static std::vector<std::string> g_urls;
 static std::string g_mrmsRefl, g_mrmsTop, g_tilePng;
@@ -227,7 +229,7 @@ CURLcode curl_easy_perform(CURL* c) {
     Easy* e = (Easy*)c;
     ++g_netRequests;
     std::printf("  net: GET %s\n", e->url.c_str());
-    g_urls.push_back(e->url);
+    { static std::mutex m; std::lock_guard<std::mutex> l(m); g_urls.push_back(e->url); }   // several worker threads download at once
     if (!g_pirepJson.empty() && e->url.find("aviationweather.gov/api/data/") != std::string::npos &&
         (e->url.find("/pirep?") != std::string::npos || e->url.find("sigmet?") != std::string::npos || e->url.find("gairmet?") != std::string::npos)) {
         const std::string b = e->url.find("/pirep?") != std::string::npos ? g_pirepJson : std::string("[]");
@@ -282,6 +284,7 @@ CURLcode curl_easy_perform(CURL* c) {
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
     }
+    if (g_ocean && e->url.find("aviationweather.gov/api/data/metar?bbox") != std::string::npos) { ++g_oceanMetar; e->status = 204; return 0; }   // open water: no METARs
     bool fd = e->url.find("windtemp") != std::string::npos;
     bool ids = e->url.find("ids=KICT,KSLN,KFAR") != std::string::npos || e->url.find("ids=KFAR") != std::string::npos || e->url.find("ids=KICT") != std::string::npos;
     if (fd) ++g_fdRequests;
@@ -554,6 +557,36 @@ std::string ecMsg(std::time_t run, int step, bool isU, int hpa, int k) {
 } // namespace gen
 
 static bool nr(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+static int runOcean() {
+    // 2026-11-09 crash report: "[WXPlane] no METARs within search radius" then X-Plane crashed (the open ocean).
+    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\n", f); std::fclose(f); }
+    g_ocean = true;
+    g_loadingFlag = 0;
+    g_lat = 45.0; g_lon = -35.0; g_elev = 11000; g_agl = 11000;
+    char n[256], s[256], d[256];
+    CHECK(XPluginStart(n, s, d) == 1);
+    CHECK(XPluginEnable() == 1);
+    for (int i = 0; i < 600; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); if (g_logAll.find("no METARs within 600 nm") != std::string::npos) break; }
+    std::printf("[ocean] METAR searches: %d (120, 300, 600 nm)\n", g_oceanMetar);
+    CHECK(g_logAll.find("no METARs within 600 nm: the weather already set is kept") != std::string::npos);
+    CHECK(g_oceanMetar >= 3);   // 120, 300 and 600 nm (plus the dry-runway check's own quick look)
+    for (int i = 0; i < 100; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }   // still alive, no records sent
+    CHECK(g_calls.empty());
+    // the menu's refresh and the windows also cope with no stations
+    g_menuHandler(nullptr, (void*)(intptr_t)2);
+    for (int i = 0; i < 300; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    // back near land: weather as usual
+    g_ocean = false;
+    g_lat = 37.65; g_lon = -97.43;
+    g_menuHandler(nullptr, (void*)(intptr_t)2);
+    for (int i = 0; i < 600 && g_calls.empty(); ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    CHECK(!g_calls.empty());
+    XPluginDisable(); XPluginStop();
+    std::printf(g_fail ? "HARNESS_OCEAN FAILED (%d)\n" : "HARNESS_OCEAN OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 static int runTurb() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 1\nmax_turbulence = 1\ndiag_verbosity = 2\n", f); std::fclose(f); }
@@ -655,6 +688,7 @@ int main() {
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_TURB")) return runTurb();
+    if (std::getenv("HARNESS_OCEAN")) return runOcean();
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
     { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
@@ -716,7 +750,7 @@ int main() {
         CHECK(i.temp_layers[12] < i.temp_layers[0]);             // colder at the top level
         CHECK(i.temperature_alt < -273.5f);                      // surface offset not used alongside layers
     }
-    CHECK(g_fdRequests == 2);                                    // low + high product, once
+    CHECK(g_fdRequests == 0);                                    // NOAA FD tables discontinued (HTTP 400): not requested any more
     if (fake) CHECK(fake->elev == 300 && fake->info.pressure_alt == 0 && fake->info.pressure_sl > 101400 && fake->info.pressure_sl < 101600); // unknown airport -> location record, Q1015
 
     std::printf("[2] manual refresh via menu\n");
@@ -727,7 +761,7 @@ int main() {
     for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); } // let it apply
     CHECK(g_netRequests > reqBefore);
     CHECK(g_calls.size() - before < 4);   // identical data is NOT re-sent (re-sending makes the sim rebuild cloud layers)
-    CHECK(g_fdRequests == 2); // winds aloft cached for 30 min, not re-downloaded on a manual refresh
+    CHECK(g_fdRequests == 0); // FD tables discontinued
     std::printf("  menu status: '%s' / '%s'\n", g_menuNames[g_menuNames.size() - 2].c_str(), g_menuNames.back().c_str());
     CHECK(g_menuNames[g_menuNames.size() - 4] == "Max Turbulence..." && g_menuNames[g_menuNames.size() - 5] == "Enable Realistic Turbulence");   // after the toggles, above the status
 

@@ -1244,6 +1244,9 @@ void annotateMagneticVariation(wx::FetchResult& res) {
 }
 
 void applyResult(const wx::FetchResult& res, bool fromFetch) {
+    // Everything below assumes at least one station (the nearest one, blends between them). With none - the open ocean, 2026-11-09
+    // crash report - the weather already set is kept as it is.
+    if (res.stations.empty()) { logf("no stations to build weather from: the weather already set is kept"); return; }
     const auto applyT0 = Clock::now();   // this runs on the sim's main thread: logged when it takes long enough to cost a frame
     g_navLookupMs = 0;
     std::time_t now = std::time(nullptr);
@@ -1737,7 +1740,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     std::string fogNote = fogCount ? ", fog at " + std::to_string(fogCount) : "";
     std::snprintf(l1, sizeof l1, "Updated %s: %d METAR, %d ATIS%s", t, res.metarCount, res.atisCount, fogNote.c_str());
     std::string radarNote = !g_cfg.radar ? "Radar: off" : (res.radar.ok ? "Radar: " + std::to_string(stormCount) + " storm cells" : "Radar: " + (res.radar.note.empty() ? std::string("none") : res.radar.note));
-    std::string aloftNote = g_cfg.useAloft ? (aloftCount ? "Winds aloft: " + std::to_string(res.aloft.size()) + " NOAA stations"
+    std::string aloftNote = g_cfg.useAloft ? (aloftCount ? "Winds aloft: " + std::to_string(res.aloft.size()) + " model points"
                                                           : "Winds aloft: " + (res.aloftNote.empty() ? std::string("none") : res.aloftNote))
                                            : "Winds aloft: off";
     if (!res.stations.empty())
@@ -1755,7 +1758,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
     logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer; %d station(s) inside a storm took its cloud",
          (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash, stationStorms);
-    logf("applied %d stations (%d ATIS, %d fog, %d with cirrus from the global model, %d with winds/temps aloft from %zu FD stations) around %.2f,%.2f%s",
+    logf("applied %d stations (%d ATIS, %d fog, %d with cirrus from the global model, %d with winds/temps aloft from %zu global-model points) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, cirrusCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,
          reallyImmediate ? " [immediate: sim pauses while X-Plane rebuilds]" : " [fade-in]");
     if (g_cfg.useAloft && !res.aloftNote.empty()) logf("%s", res.aloftNote.c_str());
@@ -2278,8 +2281,8 @@ float flightLoop(float, float, int, void*) {
             if (g_cfg.updateMinutes * 60.0 > 30.0) g_lastRequest = Clock::now() - std::chrono::seconds((long)(g_cfg.updateMinutes * 60.0 - 30.0));
         } else if (g_cfg.enabled) {
             if (!res.error.empty()) logf("%s", res.error.c_str());
-            annotateMagneticVariation(res);
-            applyResult(res, true);
+            if (res.stations.empty()) setStatus("No airports within 600 nm", "keeping the last weather");
+            else { annotateMagneticVariation(res); applyResult(res, true); }
         }
     }
 

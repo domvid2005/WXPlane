@@ -116,23 +116,35 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
 
     // 1) METARs from NOAA's Aviation Weather Center, centred on the aircraft (not on any airport),
     //    so the weather below you stays current at cruise altitude too.
-    std::string body, err;
-    long status = 0;
-    if (!httpGet(awcMetarUrl(rq.lat, rq.lon, cfg.searchNm), body, status, err)) {
-        res.error = "NOAA METAR: " + err;
-        return res;
-    }
-    std::string perr;
-    std::vector<Station> all = parseAwcMetarJson(body, &perr);
-    if (!perr.empty()) { res.error = perr; return res; }
-
+    // Over the open ocean there is no airport within the search radius (NOAA answers HTTP 204, no data); a crash report of
+    // 2026-11-09 came from there. The search then widens to 300 and 600 nm, so the nearest coasts still give weather.
     std::time_t now = res.fetchedAt;
     std::vector<Station> keep;
-    for (auto& s : all) {
-        s.distNm = distNm(rq.lat, rq.lon, s.lat, s.lon);
-        if (s.distNm > cfg.searchNm * 1.05) continue;
-        if (reportAgeSeconds(s.report, now) > cfg.maxAgeHours * 3600.0) continue;
-        keep.push_back(std::move(s));
+    std::string widened;
+    double prevRadius = -1;
+    for (double radius : {cfg.searchNm, std::max(cfg.searchNm, 300.0), std::max(cfg.searchNm, 600.0)}) {
+        if (radius <= prevRadius) continue;
+        prevRadius = radius;
+        std::string body, err;
+        long status = 0;
+        if (!httpGet(awcMetarUrl(rq.lat, rq.lon, radius), body, status, err)) {
+            res.error = "NOAA METAR: " + err;
+            return res;
+        }
+        std::string perr;
+        std::vector<Station> all = parseAwcMetarJson(body, &perr);
+        if (!perr.empty() && !body.empty()) { res.error = perr; return res; }
+        for (auto& s : all) {
+            s.distNm = distNm(rq.lat, rq.lon, s.lat, s.lon);
+            if (s.distNm > radius * 1.05) continue;
+            if (reportAgeSeconds(s.report, now) > cfg.maxAgeHours * 3600.0) continue;
+            keep.push_back(std::move(s));
+        }
+        if (!keep.empty()) {
+            if (radius > cfg.searchNm) widened = "no METARs within " + std::to_string((int)cfg.searchNm) + " nm (open water?): the search was widened to " + std::to_string((int)radius) + " nm";
+            break;
+        }
+        if (radius >= 600.0) break;
     }
     std::sort(keep.begin(), keep.end(), [](const Station& a, const Station& b) { return a.distNm < b.distNm; });
     if ((int)keep.size() > cfg.maxStations) keep.resize((size_t)cfg.maxStations);
@@ -166,8 +178,10 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     }
 
     // 3) NOAA winds & temperatures aloft (FD winds), so the cruise levels follow real data too.
-    if (cfg.useAloft) res.aloft = fetchAloft(rq, now, res.aloftNote, res.stations);
-    if (cfg.useAloft && cfg.upperAir) {   // the global model: above FL390, and where no FD station is near
+    // NOAA's FD wind/temperature tables (fetchAloft) were discontinued with the NAM model: AWC answers HTTP 400 ("Wind/temp tables have
+    // been discontinued", SCN 26-47, seen 2026-11-09). The global model is now the source at every level.
+    if (cfg.useAloft) res.aloftNote = "NOAA wind/temperature tables discontinued (NAM retired)";
+    if (cfg.useAloft) {   // the global model at every level
         std::string upNote;
         std::vector<AloftStation> up = fetchUpperAir(rq, now, upNote, res.stations);
         for (auto& u : up) res.aloft.push_back(std::move(u));
@@ -182,7 +196,8 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     res.filledElements = fillMissing(keep, 80.0);   // elements neither the text nor NOAA's decoded fields had: from neighbouring stations
     res.stations = std::move(keep);
     res.ok = true;
-    if (res.stations.empty()) res.error = "no METARs within search radius";
+    if (res.stations.empty()) res.error = "no METARs within 600 nm: the weather already set is kept";
+    else if (!widened.empty()) res.error = widened;
     return res;
 }
 
@@ -401,23 +416,24 @@ RadarResult Fetcher::fetchRainViewer(const FetchRequest& rq, std::time_t now) {
 }
 
 std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::time_t now, std::string& note, const std::vector<Station>& known) {
-    if (!upCache_.empty() && now - upTime_ < 2700 && distNm(rq.lat, rq.lon, upLat_, upLon_) < 60.0) return upCache_;
-    // Up to 9 points spread over the stations (farthest-point order, at least 40 nm apart); one point at the aircraft if there are no stations.
+    // A fixed 1-degree lattice, 3 x 3 nodes around the aircraft (the aircraft is always inside the middle cell; 9 points as before, so
+    // the open-meteo.com cost is unchanged). NOAA's FD wind/temperature tables were discontinued with the NAM
+    // model (AWC answers HTTP 400, SCN 26-47), so this is now the only source of winds and temperatures aloft. Before, the points were
+    // picked from the stations - and the call came before the stations were known, so it was one point at the aircraft, refetched every
+    // 60 nm: the whole temperature column changed at once and the pressure surfaces with it (altitude fluctuations reported in cruise,
+    // 2026-11-09). On a fixed lattice the same place always uses the same nodes, so the profile changes smoothly along the route.
+    (void)known;
+    const double cLat = std::round(rq.lat), cLon = std::round(rq.lon);
+    if (!upCache_.empty() && now - upTime_ < 2700 && std::fabs(cLat - upLat_) < 0.5 && std::fabs(cLon - upLon_) < 0.5) return upCache_;
     std::vector<std::pair<double, double>> pts;
-    if (known.empty()) pts.push_back({rq.lat, rq.lon});
-    else {
-        pts.push_back({known[0].lat, known[0].lon});
-        while (pts.size() < 9) {
-            double bestD = 0; size_t bi = known.size();
-            for (size_t i = 0; i < known.size(); ++i) {
-                double md = 1e9;
-                for (const auto& p : pts) md = std::min(md, distNm(known[i].lat, known[i].lon, p.first, p.second));
-                if (md > bestD) { bestD = md; bi = i; }
-            }
-            if (bi == known.size() || bestD < 40.0) break;
-            pts.push_back({known[bi].lat, known[bi].lon});
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            double la = cLat + dy, lo = cLon + dx;
+            if (la > 89 || la < -89) continue;
+            if (lo > 180) lo -= 360;
+            if (lo < -180) lo += 360;
+            pts.push_back({la, lo});
         }
-    }
     const std::vector<int> full = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
     const std::vector<int> safe = {925, 850, 700, 500, 400, 300, 250, 200};   // if the endpoint refuses the highest levels
     std::vector<AloftStation> got;
@@ -440,11 +456,11 @@ std::vector<AloftStation> Fetcher::fetchUpperAir(const FetchRequest& rq, std::ti
         if (!upCache_.empty() && now - upTime_ < 3 * 3600) { note += ", using the earlier download"; return upCache_; }
         return {};
     }
-    upCache_ = got; upTime_ = now; upLat_ = rq.lat; upLon_ = rq.lon;
+    upCache_ = got; upTime_ = now; upLat_ = cLat; upLon_ = cLon;
     double top = 0;
     for (const auto& g : got) for (const auto& L : g.levels) if (L.hasWind) top = std::max(top, L.altFt);
     char b[160];
-    std::snprintf(b, sizeof b, "global-model winds aloft: %zu of %zu point(s), up to FL%.0f", got.size(), pts.size(), top / 100.0);
+    std::snprintf(b, sizeof b, "global-model winds aloft: %zu of %zu point(s) on the 1-degree lattice around %.0f,%.0f, up to FL%.0f", got.size(), pts.size(), cLat, cLon, top / 100.0);
     note = b;
     {   // what the global model says at the first point, level by level, so a wrong profile can be traced to its source
         std::string lv;
