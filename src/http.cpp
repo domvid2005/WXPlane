@@ -2,7 +2,9 @@
 
 #include <curl/curl.h>
 
+#if defined(__linux__)
 #include <sys/stat.h>
+#endif
 
 namespace wx {
 
@@ -20,8 +22,10 @@ size_t sink(char* ptr, size_t size, size_t nmemb, void* ud) {
 // one without the CURL_OPENSSL_4 symbol versions, and the plugin did not load). That OpenSSL looks for certificates where the build
 // machine (Ubuntu) keeps them, so the distribution's bundle is found here instead. Windows and macOS use the system's own store.
 static std::string g_caFile, g_caPath;
+#if defined(__linux__)
 static bool fileExists(const char* p) { struct stat st; return stat(p, &st) == 0 && S_ISREG(st.st_mode); }
 static bool dirExists(const char* p) { struct stat st; return stat(p, &st) == 0 && S_ISDIR(st.st_mode); }
+#endif
 void httpGlobalInit() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 #if defined(__linux__)
