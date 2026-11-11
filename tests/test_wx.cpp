@@ -308,6 +308,32 @@ int main() {
         NEAR(buildXp(v, cfg, now).visM, 6 * kSmToM, 1);
         parseReport("KDEN 301553Z 18008KT 4SM BR FEW008 BKN250 08/07 A3015", v.report);
         NEAR(buildXp(v, cfg, now).visM, 4 * kSmToM, 1);   // the KDEN case: 4 SM stays 6437 m
+        // "10 km or more" in precipitation or under a low ceiling is capped (2026-11-11, LEMD 2130Z: 40 km under drizzle)
+        v.elevM = 610;
+        parseReport("LEMD 112130Z 16012KT 130V190 9999 -DZ SCT010 BKN030 BKN055 14/13 Q0995 NOSIG", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 20000, 1);
+        parseReport("LEMD 111900Z 12005KT 9999 RA FEW008 BKN010 OVC020 12/12 Q0997", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 15000, 1);
+        parseReport("LEMD 112230Z 16009KT 9999 +DZRA SCT020 BKN030 14/13 Q0995", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 12000, 1);        // "+" applies to the whole group: heavy drizzle and rain
+        parseReport("EGLL 301500Z 00000KT 9999 +RA BKN012 10/09 Q1003", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 12000, 1);
+        parseReport("EFHK 301500Z 00000KT 9999 -SN BKN015 M02/M03 Q1003", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 12000, 1);
+        parseReport("KSEA 301500Z 20010KT 10SM -RA BKN040 11/09 A2999", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 20000, 1);        // the US "10 SM or more" too
+        parseReport("EGLL 301500Z 00000KT 9999 OVC008 10/09 Q1013", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 20000, 1);        // dry, ceiling below 1,000 ft
+        parseReport("EGLL 301500Z 00000KT 9999 BKN015 10/09 Q1013", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 25000, 1);        // dry, ceiling below 2,000 ft
+        parseReport("EGLL 301500Z 00000KT 9999 SCT008 BKN030 10/09 Q1013", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 40000, 1);        // scattered low cloud, ceiling at 3,000 ft: unchanged
+        parseReport("LEMD 112000Z 15006KT 6000 RA SCT007 OVC025 13/12 Q0996", v.report);
+        NEAR(buildXp(v, cfg, now).visM, 6000, 1);         // a measured value is never touched
+        Config nocap = cfg; nocap.visCapWeather = false;
+        parseReport("LEMD 112130Z 16012KT 9999 -DZ SCT010 BKN030 BKN055 14/13 Q0995", v.report);
+        NEAR(buildXp(v, nocap, now).visM, 40000, 1);
+        v.elevM = 0;
         Report ar; parseReport("KDEN ATIS INFO B 1553Z 18008KT 4SM BR FEW008 BKN250 08/07 A3015 (THREE ZERO ONE FIVE). ILS RWY 16R.", ar, true);
         CHECK(ar.hasVis && ar.mist);
         mergeAtis(v, ar, "x");

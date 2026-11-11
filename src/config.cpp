@@ -51,6 +51,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "aloft_fcst_hours" || k == "radar_global" || k == "upper_air") {}   // removed 2026-11-10 (NOAA FD tables, RainViewer): ignored
         else if (k == "aloft_stations") c.aloftStations = (int)(d < 1 ? 1 : (d > 8 ? 8 : d));
         else if (k == "clear_vis_m") c.clearVisM = d < 10000 ? 10000 : d;
+        else if (k == "vis_cap_weather") c.visCapWeather = toBool(v);
         else if (k == "vis_scale") c.visScale = d < 0.2 ? 0.2 : (d > 1.5 ? 1.5 : d);
         else if (k == "vis_autocal") c.visAutocal = toBool(v);
         else if (k == "rough_min_coverage") c.roughMinCoverage = d < 0.3 ? 0.3 : (d > 0.95 ? 0.95 : d);
@@ -205,6 +206,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "aloft_range_nm = " << c.aloftRangeNm << "\n"
       << "aloft_stations = " << c.aloftStations << "\n"
       << "clear_vis_m = " << c.clearVisM << "\n"
+      << "vis_cap_weather = " << (c.visCapWeather ? 1 : 0) << "\n"
       << "vis_scale = " << c.visScale << "\n"
       << "vis_autocal = " << (c.visAutocal ? 1 : 0) << "\n"
       << "manual_refresh_immediate = " << (c.manualRefreshImmediate ? 1 : 0) << "\n"

@@ -41,6 +41,7 @@ struct Config {
     double aloftRangeNm = 250;    // use global-model points up to this far from each weather report
     int aloftStations = 4;        // global-model points blended per report
     double clearVisM = 40000;     // visibility used for "10 SM / 9999 or more" and when a report gives none
+    bool visCapWeather = true;    // "10 km or more" with rain/drizzle/snow or a ceiling below 2,000 ft: 12-25 km instead of clear_vis_m
     double roughMinCoverage = 0.65; // layers at least this solid get rough-top records (0.65 = broken and overcast; 0.85 = overcast only)
     bool topBumps = false;        // EXPERIMENTAL: scatter records over thick overcasts that differ from the parent only by a slightly higher top
     int bumpCount = 10;           // rough-top records per overcast station

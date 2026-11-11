@@ -42,6 +42,10 @@ Settings are saved to `Output/preferences/WXPlane.cfg`.
 
 * Below 10 SM the METAR/ATIS value is used exactly (`4SM` = 6.4 km, `1/4SM` = 400 m).
 * "10 SM or more" (`10SM`, `9999`, CAVOK) maps to `clear_vis_m` (40 km), since those reports are a floor rather than a measurement.
+* **Except in weather** (`vis_cap_weather`, default on): "10 km or more" together with precipitation or a low ceiling is capped,
+  because 40 km under a drizzling broken deck is too clear (LEMD 2130Z, `9999 -DZ SCT010 BKN030 BKN055`). Snow or heavy
+  rain/drizzle 12 km, moderate 15 km, light (or thunder) 20 km; with nothing falling, a broken/overcast ceiling below 1,000 ft
+  20 km and below 2,000 ft 25 km. A measured value below 10 km is never changed, and CAVOK excludes both.
 * **Self-check:** about 100 s after each update (15 s after a manual refresh), when you are within 4 nm of a reporting airport, the plugin asks X-Plane what visibility it is *actually* using there and logs it (`visibility check ...` in `Log.txt`). If it differs from the report by more than 15 % (the sim blends in its own weather), the plugin adjusts what it sends and re-applies, up to 4 passes per download, and remembers the correction. Set `vis_autocal = 0` to turn this off.
 
 ### Fog, haze and the surface cloud layer

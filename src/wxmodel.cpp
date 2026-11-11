@@ -229,7 +229,26 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     // maps to clear_vis_m because those reports are a floor, not a measurement.
     double vis = r.hasVis ? r.visM : cfg.clearVisM;
     // 10 SM or more (16093 m) or the metric "9999" (10 km or more) means unlimited; 7, 8 and 9 SM are real values and stay exact.
-    if (r.cavok || (r.hasVis && (vis >= 16000.0 || (vis >= 9999.0 && vis <= 10000.5)))) vis = cfg.clearVisM;
+    const bool unlimited = r.cavok || !r.hasVis || vis >= 16000.0 || (vis >= 9999.0 && vis <= 10000.5);
+    if (unlimited) vis = cfg.clearVisM;
+    // "10 km or more" in rain, drizzle or snow, or under a low ceiling, is not 40 km (2026-11-11, LEMD "9999 -DZ SCT010 BKN030":
+    // 40 km of visibility under a drizzling broken deck). The report only gives the floor, so the value is capped by what is
+    // falling and how low the ceiling is; a measured value below 10 km is never touched, and CAVOK rules both out.
+    if (unlimited && !r.cavok && cfg.visCapWeather) {
+        double cap = 1e9;
+        if (r.snow && r.precip > 0) cap = 12000.0;
+        else if (r.precip >= 0.6) cap = 12000.0;
+        else if (r.precip >= 0.3) cap = 15000.0;
+        else if (r.precip > 0 || r.thunder) cap = 20000.0;
+        else {
+            double ceilFt = 1e9;
+            for (const auto& g : r.clouds)
+                if ((g.cover == CloudGroup::BKN || g.cover == CloudGroup::OVC) && g.baseFtAgl >= 0) ceilFt = std::min(ceilFt, (double)g.baseFtAgl);
+            if (ceilFt < 1000.0) cap = 20000.0;
+            else if (ceilFt < 2000.0) cap = 25000.0;
+        }
+        vis = std::min(vis, std::max(10000.0, cap));
+    }
     if (cfg.fogHaze) {
         // Fog must reduce visibility too, not only add a cloud layer.
         if (r.fog) vis = std::min(vis, 1000.0);
