@@ -2793,6 +2793,7 @@ PLUGIN_API void XPluginStop(void) {
 
 PLUGIN_API int XPluginEnable(void) {
     wx::httpGlobalInit();
+    logf("downloads: %s", wx::httpTlsInfo().c_str());
     g_fetcher.start();
     g_turbFetch.start();
     if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayers();

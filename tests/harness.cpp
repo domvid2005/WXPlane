@@ -330,6 +330,7 @@ CURLcode curl_easy_getinfo(CURL* c, int what, ...) {
 }
 void curl_easy_cleanup(CURL* c) { delete (Easy*)c; }
 const char* curl_easy_strerror(CURLcode) { return "mock"; }
+const curl_version_info_data* curl_version_info(CURLversion) { static curl_version_info_data d{0, "mock", 0, "mock", 0, "MockSSL"}; return &d; }
 
 // ---------------- scenario ----------------
 static bool pump(size_t wantCalls, int ms = 3000) {

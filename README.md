@@ -65,7 +65,12 @@ menu's second status line says "X-Plane's real-world weather is ON - turn it off
 ## Build
 
 1. Download **XPSDK420** (or newer) from <https://developer.x-plane.com/sdk/plugin-sdk-downloads/> and unzip it.
-2. Install libcurl development files: Linux `sudo apt install libcurl4-openssl-dev`; macOS needs nothing; Windows `vcpkg install curl:x64-windows-static`.
+2. Install the download library's build dependencies: Linux `sudo apt install libssl-dev zlib1g-dev` (libcurl 8.14.1 is downloaded and
+   built into the plugin together with OpenSSL and zlib, so the plugin needs no system libcurl: under Steam's Linux runtime the
+   system `libcurl.so.4` is swapped for one without the `CURL_OPENSSL_4` symbol versions and a plugin linked against it does not
+   load; `-DWX_BUNDLE_CURL=OFF` links the system libcurl instead); macOS needs nothing; Windows `vcpkg install curl:x64-windows-static`.
+   On Linux the certificate bundle is looked up when the plugin starts (Debian/Ubuntu/Arch/Steam runtime, Fedora/RHEL, openSUSE,
+   Alpine paths) and the log names it: `downloads: libcurl 8.14.1, OpenSSL/3.0.x, certificates /etc/ssl/certs/ca-certificates.crt`.
 3. ```
    cmake -S . -B build -DXPLANE_SDK=/path/to/SDK
    cmake --build build --config Release

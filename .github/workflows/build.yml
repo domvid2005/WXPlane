@@ -21,13 +21,14 @@ jobs:
           echo "SDK_DIR=$(find "$PWD/sdk" -type d -name CHeaders -exec dirname {} \; | head -1)" >> "$GITHUB_ENV"
       - name: Linux deps
         if: runner.os == 'Linux'
+        # libcurl itself is built from source (CMakeLists.txt, WX_BUNDLE_CURL); only OpenSSL's and zlib's static libraries are needed.
         # GitHub's Ubuntu runners use the Azure mirror under ubuntu.com. During Canonical's DNS outage (2026-11-11,
         # "Temporary failure resolving 'azure.archive.ubuntu.com'") every *.ubuntu.com mirror failed, so after two attempts the
         # sources are pointed at kernel.org's Ubuntu mirror, which does not depend on ubuntu.com. Skipped if the headers are there.
         run: |
-          if dpkg -s libcurl4-openssl-dev >/dev/null 2>&1; then echo "libcurl4-openssl-dev already installed"; exit 0; fi
+          if dpkg -s libssl-dev zlib1g-dev >/dev/null 2>&1; then echo "libssl-dev and zlib1g-dev already installed"; exit 0; fi
           for i in 1 2 3 4 5; do
-            if sudo apt-get -o Acquire::Retries=2 update && sudo apt-get -o Acquire::Retries=2 install -y libcurl4-openssl-dev; then exit 0; fi
+            if sudo apt-get -o Acquire::Retries=2 update && sudo apt-get -o Acquire::Retries=2 install -y libssl-dev zlib1g-dev; then exit 0; fi
             echo "apt attempt $i failed"
             if [ "$i" = 2 ]; then
               echo "switching to mirrors.edge.kernel.org"
