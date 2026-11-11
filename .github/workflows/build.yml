@@ -52,6 +52,14 @@ jobs:
         shell: bash
         run: cmake -S . -B build -DXPLANE_SDK="$SDK_DIR" -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
       - run: cmake --build build --config Release
+      - name: Check Linux plugin dependencies
+        if: runner.os == 'Linux'
+        # libcurl/OpenSSL/zlib are built in (Steam's runtime swaps libcurl.so.4): the plugin may only need libc, libm and the loader
+        run: |
+          X=build/package/WXPlane/lin_x64/WXPlane.xpl
+          objdump -p "$X" | grep NEEDED
+          if objdump -p "$X" | grep NEEDED | grep -vE 'libc\.so|libm\.so|ld-linux'; then echo "unexpected shared library dependency"; exit 1; fi
+          if objdump -T "$X" | grep -E 'curl_|SSL_|CRYPTO_'; then echo "curl/OpenSSL symbols visible"; exit 1; fi
       - run: ctest --test-dir build -C Release --output-on-failure
       - uses: actions/upload-artifact@v4
         with:
