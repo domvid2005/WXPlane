@@ -21,7 +21,19 @@ jobs:
           echo "SDK_DIR=$(find "$PWD/sdk" -type d -name CHeaders -exec dirname {} \; | head -1)" >> "$GITHUB_ENV"
       - name: Linux deps
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+        # Retried: GitHub's Ubuntu runners sometimes cannot resolve the Azure package mirror for a few minutes (2026-11-11,
+        # "Temporary failure resolving 'azure.archive.ubuntu.com'"). After two failed attempts the plain Ubuntu archive is used.
+        run: |
+          for i in 1 2 3 4 5; do
+            if sudo apt-get -o Acquire::Retries=3 update && sudo apt-get -o Acquire::Retries=3 install -y libcurl4-openssl-dev; then exit 0; fi
+            echo "apt attempt $i failed, retrying in 30 s"
+            if [ "$i" = 2 ]; then
+              echo "switching to archive.ubuntu.com"
+              sudo sed -i 's#mirror+file:/etc/apt/apt-mirrors.txt#http://archive.ubuntu.com/ubuntu/#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+            fi
+            sleep 30
+          done
+          exit 1
       - name: Windows deps
         if: runner.os == 'Windows'
         run: vcpkg install curl:x64-windows-static
