@@ -718,6 +718,7 @@ void dryRunwayTick() {
     // again (checked every 2 s). After that X-Plane wets and dries the ground with the weather itself (it held standing water in rain at
     // KORF on its own). A jump of more than 50 nm between two samples (a new flight, a reposition) is a new load.
     enum Phase { kIdle, kHold, kDone };
+    if (!g_cfg.enabled) return;   // WXPlane off: the ground is X-Plane's
     static Phase phase = kIdle;
     static Clock::time_point holdUntil{}, next{};
     static std::string icao, why;
@@ -899,6 +900,10 @@ void windshearTick() {
     static std::time_t lastRisk = 0;
     static std::string lastRiskLine;
     if (!g_haveLast || g_lastRes.stations.empty() || g_disableErase) return;
+    if (!g_cfg.enabled) {   // WXPlane off: its windshear records went with the rest (eraseAll); nothing is computed or sent again
+        if (!g_wsSent.empty() || !g_ws.fields().empty()) windshearForget();
+        return;
+    }
     const double simT = wsSimTime();
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
     if (!std::isfinite(lat) || !std::isfinite(lon) || !std::isfinite(simT)) return;
@@ -1897,9 +1902,47 @@ void logWindProfile(const wx::XpWx& x, const XPLMWeatherInfo_t& info, const char
 // the profile for the aircraft's position is written into the sim's own region wind arrays. Throttled, and only if writable.
 // Still needed (log 2026-11-04 13:26): with this off, X-Plane read 180 deg / 1 kt at every flight level from FL100 up, whatever the
 // records said; the winds aloft only reach the sim through its region arrays. region_winds = 0 turns it off.
+// What X-Plane's region arrays held before WXPlane first wrote them, so they can be given back when WXPlane is switched off
+// (2026-11-10 customer log, ENAT: after "weather off" the 20 s region writes went on, so X-Plane kept WXPlane's winds, temperatures
+// and tropopause with WXPlane off). The ramp starts again from the sim's values after a restore.
+struct RegionSaved {
+    bool w = false, t = false, tro = false;
+    float alt[XPLM_NUM_WIND_LAYERS], spd[XPLM_NUM_WIND_LAYERS], dir[XPLM_NUM_WIND_LAYERS];
+    float temp[XPLM_NUM_TEMPERATURE_LAYERS];
+    float troAlt = 0, troTemp = 0;
+};
+RegionSaved g_regionSaved;
+bool g_rwHaveW = false, g_rwHaveT = false, g_rwHaveTro = false;
+std::time_t g_rwLast = 0;
+
+void regionRestore(const char* why) {
+    const bool any = g_regionSaved.w || g_regionSaved.t || g_regionSaved.tro;
+    if (g_regionSaved.w) {
+        XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
+                    drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
+        if (drA && drS && drD) {
+            XPLMSetDatavf(drA, g_regionSaved.alt, 0, XPLM_NUM_WIND_LAYERS);
+            XPLMSetDatavf(drS, g_regionSaved.spd, 0, XPLM_NUM_WIND_LAYERS);
+            XPLMSetDatavf(drD, g_regionSaved.dir, 0, XPLM_NUM_WIND_LAYERS);
+        }
+    }
+    if (g_regionSaved.t) {
+        XPLMDataRef drT = XPLMFindDataRef("sim/weather/region/temperatures_aloft_deg_c");
+        if (drT) XPLMSetDatavf(drT, g_regionSaved.temp, 0, XPLM_NUM_TEMPERATURE_LAYERS);
+    }
+    if (g_regionSaved.tro) {
+        XPLMDataRef drTa = XPLMFindDataRef("sim/weather/region/tropo_alt_m"), drTt = XPLMFindDataRef("sim/weather/region/tropo_temp_c");
+        if (drTa && drTt) { XPLMSetDataf(drTa, g_regionSaved.troAlt); XPLMSetDataf(drTt, g_regionSaved.troTemp); }
+    }
+    g_regionSaved = RegionSaved();
+    g_rwHaveW = g_rwHaveT = g_rwHaveTro = false;
+    g_rwLast = 0;
+    if (any) logf("%s: X-Plane's region winds, temperatures and tropopause put back", why);
+}
+
 void pushRegionWinds(const wx::XpWx& xin) {
-    if (!g_cfg.regionWinds) return;
-    static std::time_t last = 0;
+    if (!g_cfg.regionWinds || !g_cfg.enabled || !g_pluginEnabled) return;   // WXPlane off: the region arrays are X-Plane's again
+    std::time_t& last = g_rwLast;
     static bool reported = false;
     const std::time_t now = std::time(nullptr);
     if (now - last < 20) return;
@@ -1922,7 +1965,7 @@ void pushRegionWinds(const wx::XpWx& xin) {
     // a change over a minute or two, not a step the autopilot and the ground speed feel at once.
     // low levels closer together (2026-11-06, windshear): vertical shear in the lowest 4,500 ft (low-level jets, inversions) is kept
     static const float kRegionFt[XPLM_NUM_WIND_LAYERS] = {1000, 2000, 3000, 4500, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000};
-    static bool haveW = false;
+    bool& haveW = g_rwHaveW;
     static float cu[XPLM_NUM_WIND_LAYERS], cv[XPLM_NUM_WIND_LAYERS];
     float al[XPLM_NUM_WIND_LAYERS], sp[XPLM_NUM_WIND_LAYERS], di[XPLM_NUM_WIND_LAYERS];
     const float rad = 3.14159265f / 180.0f, kStepMs = 3.0f;
@@ -1940,6 +1983,11 @@ void pushRegionWinds(const wx::XpWx& xin) {
         di[k] = sp[k] > 0.05f ? std::fmod(std::atan2(cu[k], cv[k]) / rad + 360.0f, 360.0f) : w.dir;
     }
     haveW = true;
+    if (!g_regionSaved.w) {
+        g_regionSaved.w = XPLMGetDatavf(drA, g_regionSaved.alt, 0, XPLM_NUM_WIND_LAYERS) == XPLM_NUM_WIND_LAYERS &&
+                          XPLMGetDatavf(drS, g_regionSaved.spd, 0, XPLM_NUM_WIND_LAYERS) == XPLM_NUM_WIND_LAYERS &&
+                          XPLMGetDatavf(drD, g_regionSaved.dir, 0, XPLM_NUM_WIND_LAYERS) == XPLM_NUM_WIND_LAYERS;
+    }
     XPLMSetDatavf(drA, al, 0, XPLM_NUM_WIND_LAYERS);
     XPLMSetDatavf(drS, sp, 0, XPLM_NUM_WIND_LAYERS);
     XPLMSetDatavf(drD, di, 0, XPLM_NUM_WIND_LAYERS);
@@ -1949,7 +1997,8 @@ void pushRegionWinds(const wx::XpWx& xin) {
     // Ramped too (2026-11-06): the pressure at FL350 depends on the temperature of the whole column below, so a column changed all at
     // once moves the altimeter all at once (by 4,000 ft near Creede). At most 1.5 C per level per write, starting from what the sim has.
     static XPLMDataRef drT = XPLMFindDataRef("sim/weather/region/temperatures_aloft_deg_c");
-    static bool tReported = false, haveT = false;
+    static bool tReported = false;
+    bool& haveT = g_rwHaveT;
     static float ct[XPLM_NUM_TEMPERATURE_LAYERS];
     if (drT && XPLMCanWriteDataRef(drT) && x.tempProfile.size() >= 2 && g_drLevels) {
         float lv[XPLM_NUM_TEMPERATURE_LAYERS], tc[XPLM_NUM_TEMPERATURE_LAYERS];
@@ -1969,6 +2018,7 @@ void pushRegionWinds(const wx::XpWx& xin) {
                 ct[k] += std::max(-1.5f, std::min(1.5f, d));
                 tc[k] = ct[k];
             }
+            if (!g_regionSaved.t) g_regionSaved.t = XPLMGetDatavf(drT, g_regionSaved.temp, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
             XPLMSetDatavf(drT, tc, 0, XPLM_NUM_TEMPERATURE_LAYERS);
             static std::time_t lastRampLog = 0;
             if (maxGap > 5.0f && now - lastRampLog > 60) {
@@ -1984,7 +2034,8 @@ void pushRegionWinds(const wx::XpWx& xin) {
     // The tropopause, if X-Plane has region datarefs for it (not documented; looked up, written only when they exist and are writable).
     // Ramped like the temperatures: at most 1.5 C and 300 m per write.
     static XPLMDataRef drTa = XPLMFindDataRef("sim/weather/region/tropo_alt_m"), drTt = XPLMFindDataRef("sim/weather/region/tropo_temp_c");
-    static bool troReported = false, haveTro = false;
+    static bool troReported = false;
+    bool& haveTro = g_rwHaveTro;
     static float cTa = 0, cTt = 0;
     float ta = 0, tt = 0;
     const bool canTro = drTa && drTt && XPLMCanWriteDataRef(drTa) && XPLMCanWriteDataRef(drTt);
@@ -2002,6 +2053,7 @@ void pushRegionWinds(const wx::XpWx& xin) {
         }
         cTa += std::max(-300.0f, std::min(300.0f, ta - cTa));
         cTt += std::max(-1.5f, std::min(1.5f, tt - cTt));
+        if (!g_regionSaved.tro) { g_regionSaved.troAlt = XPLMGetDataf(drTa); g_regionSaved.troTemp = XPLMGetDataf(drTt); g_regionSaved.tro = true; }
         XPLMSetDataf(drTa, cTa);
         XPLMSetDataf(drTt, cTt);
     }
@@ -2010,7 +2062,7 @@ void pushRegionWinds(const wx::XpWx& xin) {
 // Every 20 s, independent of the (much slower) weather watch: the profile for where the aircraft is now, so what the sim's region arrays
 // hold follows the aircraft in small steps instead of jumping every few minutes.
 void regionTick() {
-    if (!g_cfg.regionWinds || !g_haveLast || g_lastRes.stations.empty()) return;
+    if (!g_cfg.enabled || !g_cfg.regionWinds || !g_haveLast || g_lastRes.stations.empty()) return;
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
     wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
     wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, std::time(nullptr) < g_fogUntil);
@@ -2388,6 +2440,7 @@ float flightLoop(float, float, int, void*) {
         g_checkPending = false;
         g_watchOn = false;
         eraseAll();
+        regionRestore("weather off");
         g_haveCenter = false;
         setStatus("Disabled - X-Plane weather in control", "");
     }
@@ -2408,6 +2461,15 @@ float flightLoop(float, float, int, void*) {
             // Menu refreshes are coalesced: at most one per 60 s, so clicking Refresh right after a radar toggle cannot stack rebuilds.
             const bool manualHold = g_manualRefresh && g_everRequested && g_firstApplyDone && since < g_cfg.manualRefreshGapS;
             const bool manual = g_manualRefresh && !manualHold;
+            if (manualHold) {   // say so (2026-11-10 customer: "refresh weather, nothing changes" right after switching on)
+                static Clock::time_point lastHoldMsg{};
+                if (now - lastHoldMsg > std::chrono::seconds(5)) {
+                    lastHoldMsg = now;
+                    char b[96];
+                    std::snprintf(b, sizeof b, "Refresh queued: next download in %.0f s", std::max(1.0, g_cfg.manualRefreshGapS - since));
+                    setStatus(b, g_status2);
+                }
+            }
             const bool kick = g_radarKick && g_cfg.radar && g_firstApplyDone && !g_radarDeferred && !g_startupPhase;
             if (kick) g_radarKick = false;
             const bool radarDue = g_cfg.radar && g_firstApplyDone && !g_radarDeferred && !due && !moved && !manual && !g_startupPhase &&
@@ -2769,6 +2831,7 @@ PLUGIN_API void XPluginDisable(void) {
     g_fetcher.stop();
     g_turbFetch.stop();
     turbRestore("plugin disabled");
+    regionRestore("plugin disabled");
     destroyMapLayers();
     wx::httpGlobalCleanup();
     // Give weather back to X-Plane so our fog/cloud records don't outlive the plugin. The weather API may only be used from the

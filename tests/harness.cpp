@@ -874,6 +874,9 @@ int main() {
     int reqAfter = g_netRequests;
     for (int i = 0; i < 20; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     CHECK(g_netRequests == reqAfter);
+    // the sim's region winds/temperatures written while on are given back (2026-11-10 customer: they stayed with WXPlane off)
+    if (g_logAll.find("writing winds aloft into the sim's region") != std::string::npos)
+        CHECK(g_logAll.find("weather off: X-Plane's region winds, temperatures and tropopause put back") != std::string::npos);
 
     std::printf("[6] METAR/ATIS window\n");
     g_menuHandler(nullptr, (void*)(intptr_t)5 /*kShow*/);
