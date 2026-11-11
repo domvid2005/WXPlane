@@ -56,6 +56,12 @@ Settings are saved to `Output/preferences/WXPlane.cfg`.
 
 Copy the `WXPlane` folder (containing `lin_x64`, `mac_x64`, `win_x64`) into `X-Plane 12/Resources/plugins/`, then restart X-Plane. If you have the old `WeatherFix` folder, delete it.
 
+**Turn off X-Plane's own real-world weather** (X-Plane's weather settings). Left on, X-Plane keeps downloading and re-reading its own
+weather files every minute and blends them with WXPlane's. WXPlane checks `sim/weather/region/weather_source` (1 = real weather) and
+`change_mode` (7 = using real weather) every 10 s: when it is on, the log says so ("X-Plane's own real-world weather is ON"), the
+menu's second status line says "X-Plane's real-world weather is ON - turn it off", and WXPlane does not send its start-up
+`regen_weather`, which made X-Plane fetch and rebuild all of its weather again (a 19.7 s freeze during one customer's load).
+
 ## Build
 
 1. Download **XPSDK420** (or newer) from <https://developer.x-plane.com/sdk/plugin-sdk-downloads/> and unzip it.

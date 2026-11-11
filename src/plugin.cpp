@@ -120,10 +120,34 @@ std::string configPath() {
     return std::string(prefs) + XPLMGetDirectorySeparator() + "WXPlane.cfg";
 }
 
+bool g_xpRealWx = false;   // X-Plane's own real-world weather is on (it should be off while WXPlane runs)
+std::string g_status1, g_status2;
 void setStatus(const std::string& l1, const std::string& l2) {
+    g_status1 = l1; g_status2 = l2;
     if (!g_menu) return;
     XPLMSetMenuItemName(g_menu, g_idxStatus1, l1.c_str(), 0);
-    XPLMSetMenuItemName(g_menu, g_idxStatus2, l2.c_str(), 0);
+    XPLMSetMenuItemName(g_menu, g_idxStatus2, g_xpRealWx ? "X-Plane's real-world weather is ON - turn it off" : l2.c_str(), 0);
+}
+
+// X-Plane's own real-world weather (2026-11-10 customer log, ENGM): left on, X-Plane keeps downloading and re-reading its GRIB files
+// every minute and blends them with WXPlane's records, and the regen_weather WXPlane sends at start made it fetch everything again
+// (a 19.7 s freeze during the load, none on a machine with it off). sim/weather/region/weather_source is 1 ("Real Weather") and
+// change_mode 7 ("Using Real Weather") then. Checked every 10 s; logged when it changes; the menu says so.
+void realWeatherCheck() {
+    static XPLMDataRef drSrc = XPLMFindDataRef("sim/weather/region/weather_source"), drMode = XPLMFindDataRef("sim/weather/region/change_mode");
+    static Clock::time_point next{};
+    static int lastSrc = -99, lastMode = -99;
+    const auto nowC = Clock::now();
+    if (nowC < next) return;
+    next = nowC + std::chrono::seconds(10);
+    const int src = drSrc ? XPLMGetDatai(drSrc) : -1, mode = drMode ? XPLMGetDatai(drMode) : -1;
+    if (src == lastSrc && mode == lastMode) return;
+    const bool on = src == 1 || mode == 7;
+    logf("X-Plane weather source %d (0 preset, 1 real weather, 2 control pad, 3 plugin), change mode %d%s", src, mode,
+         on ? ": X-Plane's own real-world weather is ON - it should be off while WXPlane runs (X-Plane's weather settings), or the two are blended"
+            : "");
+    lastSrc = src; lastMode = mode;
+    if (on != g_xpRealWx) { g_xpRealWx = on; setStatus(g_status1, g_status2); }
 }
 
 void syncMenu() {
@@ -708,32 +732,46 @@ void dryRunwayTick() {
     static std::mutex earlyMx;
     static std::vector<wx::Station> early;
     static bool earlyStarted = false, earlyDone = false;
+    static int earlyGen = 0;          // a fetch started before a new load is thrown away when it lands
+    static std::time_t jumpWall = 0;  // when the last new load was seen (wall clock, to compare with the weather's fetch time)
+    // A new load is a jump between two samples 2 s apart (a reposition or a new flight): 50 nm in 2 s cannot be flown. (Measuring from
+    // where the decision was made re-ran the check every 50 nm of flight, seen in the 2026-11-07 cruise log.) A new load gets its own
+    // quick fetch at the new position: WXPlane's last weather is still the old place's (2026-11-10 customer log, ENGM -> ENAL:
+    // "loaded more than 8 nm from any reporting airport", the old airports were all that was known).
+    static double prevLat = 0, prevLon = 0;
+    static bool havePrev = false, afterJump = false;
+    if (havePrev && wx::distNm(lat, lon, prevLat, prevLon) > 50.0) {
+        if (phase != kIdle) phase = kIdle;
+        afterJump = true;
+        jumpWall = std::time(nullptr);
+        std::lock_guard<std::mutex> l(earlyMx);
+        ++earlyGen; earlyStarted = false; earlyDone = false; early.clear();
+    }
+    prevLat = lat; prevLon = lon; havePrev = true;
     const std::vector<wx::Station>* src = nullptr;
-    if (g_haveLast && !g_lastRes.stations.empty()) src = &g_lastRes.stations;
+    if (!afterJump && g_haveLast && !g_lastRes.stations.empty()) src = &g_lastRes.stations;
     else {
         if (!earlyStarted && (lat != 0.0 || lon != 0.0)) {
             earlyStarted = true;
             const std::string url = wx::awcMetarUrl(lat, lon, 15.0);
-            std::thread([url] {
+            int gen;
+            { std::lock_guard<std::mutex> l(earlyMx); gen = earlyGen; }
+            std::thread([url, gen] {
                 std::string body, err; long st = 0;
                 std::vector<wx::Station> v;
                 if (wx::httpGet(url, body, st, err, 12)) v = wx::parseAwcMetarJson(body);
                 std::lock_guard<std::mutex> l(earlyMx);
+                if (gen != earlyGen) return;   // a new load happened meanwhile: this answer is for the old place
                 early = std::move(v);
                 earlyDone = true;
             }).detach();
         }
         std::lock_guard<std::mutex> l(earlyMx);
         if (!earlyDone) return;
-        if (early.empty()) return;   // nothing came back: the decision waits for WXPlane's own weather
-        src = &early;
+        if (!early.empty()) src = &early;
+        else if (afterJump && g_haveLast && !g_lastRes.stations.empty() && g_lastRes.fetchedAt >= jumpWall) src = &g_lastRes.stations;   // WXPlane's weather for the new place
+        else return;   // nothing came back: the decision waits for WXPlane's own weather
     }
-    // A new load is a jump between two samples 2 s apart (a reposition or a new flight): 50 nm in 2 s cannot be flown. (Measuring from
-    // where the decision was made re-ran the check every 50 nm of flight, seen in the 2026-11-07 cruise log.)
-    static double prevLat = 0, prevLon = 0;
-    static bool havePrev = false;
-    if (havePrev && phase != kIdle && wx::distNm(lat, lon, prevLat, prevLon) > 50.0) phase = kIdle;
-    prevLat = lat; prevLon = lon; havePrev = true;
     if (phase == kDone) return;
     static XPLMDataRef drFr = XPLMFindDataRef("sim/weather/region/runway_friction"), drAgl = XPLMFindDataRef("sim/flightmodel/position/y_agl");
     if (!drFr || !XPLMCanWriteDataRef(drFr)) {
@@ -1015,6 +1053,10 @@ void windshearTick() {
 void windshearResend();
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
+    if (g_pendingStartup && g_cfg.regenWeatherOnStart && g_xpRealWx && !g_regenDone) {
+        g_regenDone = true;   // with X-Plane's real weather on, a regen only makes it download and rebuild all of it again
+        logf("not sending regen_weather: X-Plane's real-world weather is on (it would download and rebuild everything again)");
+    }
     if (g_pendingStartup && g_cfg.regenWeatherOnStart) {
         // Taking over: first have X-Plane throw away its previous weather (its clouds included), give that a few seconds to
         // take effect, and only then hand over ours, so none of the old clouds are blended into the new weather.
@@ -2210,6 +2252,7 @@ float flightLoop(float, float, int, void*) {
         return 0.0f;   // stop calling us until the plugin is enabled again
     }
     const auto nowT = Clock::now();
+    realWeatherCheck();
     if (g_firstApplyDone) altitudeWatch();
     if (!g_loopStarted) {
         // X-Plane does not run flight loops while it is still loading (this can be well over a minute after the plugin was

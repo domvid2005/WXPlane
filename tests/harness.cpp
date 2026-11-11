@@ -55,7 +55,7 @@ XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t* p) { g_cb = p->cal
 void XPLMDestroyFlightLoop(XPLMFlightLoopID) {}
 void XPLMScheduleFlightLoop(XPLMFlightLoopID, float, int) {}
 static float g_turbArr[13] = {0}; static int g_turbWrites = 0;
-XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/turbulence")) return (void*)79; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
+XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
 int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
     if (r == (void*)79) { if (!out) return 13; for (int i = 0; i < n && off + i < 13; ++i) out[i] = g_turbArr[off + i]; return n; }
     static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};
@@ -131,7 +131,8 @@ static std::vector<std::string> g_mapLabels;
 static XPLMMapCreatedCallback_f g_mapHook = nullptr;
 static int g_loadingFlag = 1;
 static int g_realWx = 0, g_realWxSets = 0;
-int XPLMGetDatai(XPLMDataRef r) { return r == (void*)77 ? g_realWx : g_loadingFlag; }
+static int g_xpWxSource = 0;   // sim/weather/region/weather_source (1 = X-Plane's real weather)
+int XPLMGetDatai(XPLMDataRef r) { return r == (void*)80 ? g_xpWxSource : r == (void*)77 ? g_realWx : g_loadingFlag; }
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) { return r == (void*)77 ? xplmType_Int : xplmType_Int | xplmType_Float | xplmType_Double; }
 int XPLMCanWriteDataRef(XPLMDataRef) { return 1; }
 void XPLMSetDataf(XPLMDataRef, float) {}
@@ -407,6 +408,8 @@ static int runStaged() {
 static int runOneShot() {
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
+    const bool realWx = std::getenv("HARNESS_REALWX") != nullptr;   // X-Plane's own real weather left on
+    if (realWx) g_xpWxSource = 1;
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -418,7 +421,12 @@ static int runOneShot() {
     CHECK(g_maxBatch == g_calls.size());
     CHECK(g_lastSentVis > 390 && g_lastSentVis < 415);   // default vis_scale 1: KICT reports 402 m and exactly that is sent
     CHECK(g_lastIncr == 1 && g_lastImm == 1);   // the start-up update skips X-Plane's slow fade-in
-    CHECK(g_regenCalls == 1 && g_logAll.find("cleared X-Plane's previous weather") != std::string::npos);   // X-Plane's old weather is regenerated away first
+    if (!realWx) CHECK(g_regenCalls == 1 && g_logAll.find("cleared X-Plane's previous weather") != std::string::npos);   // X-Plane's old weather is regenerated away first
+    else {   // with X-Plane's real weather on: no regen (it would fetch everything again), a warning in the log
+        CHECK(g_regenCalls == 0 && g_logAll.find("not sending regen_weather") != std::string::npos);
+        CHECK(g_logAll.find("X-Plane's own real-world weather is ON") != std::string::npos);
+    }
+    if (!realWx) CHECK(g_logAll.find("X-Plane weather source 0") != std::string::npos && g_logAll.find("real-world weather is ON") == std::string::npos);
     XPluginDisable();
     XPluginStop();
     std::printf("%s (%d failures)\n", g_fail ? "ONESHOT FAILED" : "ONESHOT OK", g_fail);
