@@ -125,7 +125,7 @@ Overview, Map, Airports, Winds & Temps, Turbulence, Services, Settings. The user
   points, click to decode), Clouds (the records sent to X-Plane, outlined, darker grey for deeper layers), PIREPs (UUA red, UA
   orange, click for details), AIRMET (G-AIRMETs) and SIGMET (SIGMETs, international and convective), coloured by hazard and clickable;
   info windows stay inside the map and off the point clicked. Turb, Winds and Clouds are drawn at the altitude slider beside the
-  map (follows the aircraft until moved; greyed out without those layers); barbs, clouds and turbulence change smoothly with it. Titled "Map · US" (MRMS) or "Map · Europe" (OPERA). The strongest cells are listed beside it.
+  map (ACFT follows the aircraft, SFC shows airport winds and the lowest clouds, clicking either again returns to the chosen level; greyed out without those layers); barbs, clouds and turbulence change smoothly with it. Radar echoes are a smoothed reflectivity field, not dots. Winds show °T with the magnetic direction (°M) boxed beside them. Titled "Map · US" (MRMS) or "Map · Europe" (OPERA). The strongest cells are listed beside it.
 * **Airports** - worldwide METAR/ATIS search (display only), then every station in use. Column headers sort (one way, the other,
   off); ties nearest first. Select a station for its report, ATIS and what was sent to X-Plane.
 * **Winds & Temps** - the profile up to FL600 with ISA deviation and the tropopause.

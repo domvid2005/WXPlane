@@ -128,9 +128,21 @@ MAP
     validity, movement and text. Airports and pilot reports inside an area
     can still be clicked.
   * Altitude slider (right of the map): sets the level for Turb, Winds
-    and Clouds, from the surface to FL500. It follows your aircraft until
-    you move it; "ACFT" makes it follow again. It is greyed out while none
-    of those three layers is on.
+    and Clouds, from the surface to FL500. It is greyed out while none of
+    those three layers is on.
+        ACFT - the slider follows your aircraft as it climbs and descends.
+        SFC  - the surface: the slider goes to the bottom ("SFC"), Winds
+               shows the airports' reported winds and Clouds the lowest
+               layer.
+    Click ACFT or SFC again to go back to the altitude you chose with the
+    slider. Dragging the slider ends ACFT or SFC.
+  * Radar echoes are drawn as a radar picture: green edges into yellow,
+    orange and red cores.
+  * True and magnetic: winds are given in degrees true (°T) as METARs and
+    winds aloft report them, with the magnetic direction (°M) in a small
+    box next to them. ATIS winds are magnetic; METAR winds are true.
+  * Click the dot of an airport for its METAR and ATIS, and a wind barb's
+    staff for its decode (the selected barb turns amber).
   * The map title shows the radar region: "Map - US" (NOAA MRMS) or
     "Map - Europe" (EUMETNET OPERA). There is no radar elsewhere.
   * The list next to the map shows the strongest storm cells (strength,

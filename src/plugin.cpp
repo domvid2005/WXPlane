@@ -1433,7 +1433,9 @@ void fillInfo(XPLMWeatherInfo_t& info, const wx::XpWx& x) {
 // X-Plane weather API) are true. Each ATIS wind is turned into true here, once, with X-Plane's own magnetic variation at the airport.
 // The SDK does not document the sign of XPLMGetMagneticVariation, so it is calibrated once against XPLMDegMagneticToDegTrue at the
 // aircraft (whose result is the east variation); with both under 1 deg the declination convention (east positive) is assumed.
-void annotateMagneticVariation(wx::FetchResult& res) {
+// Magnetic variation (degrees, east positive) at a point. X-Plane's sign convention is checked once against its own magnetic-to-true
+// conversion, and flipped if it turns out to be west positive.
+double magVarEastAt(double lat, double lon) {
     static int sign = 0;
     if (sign == 0) {
         const double alat = XPLMGetDatad(g_drLat), alon = XPLMGetDatad(g_drLon);
@@ -1445,10 +1447,14 @@ void annotateMagneticVariation(wx::FetchResult& res) {
             logf("magnetic variation: X-Plane gives %.1f at the aircraft, true heading of magnetic north %.1f: %s", v, t, sign > 0 ? "east positive" : "west positive, sign flipped");
         }
     }
+    return (sign ? sign : 1) * (double)XPLMGetMagneticVariation(lat, lon);
+}
+
+void annotateMagneticVariation(wx::FetchResult& res) {
     for (auto& s : res.stations) {
         wx::Report& r = s.report;
         if (!r.hasWind || !r.windMagnetic) continue;
-        const double var = (sign ? sign : 1) * (double)XPLMGetMagneticVariation(s.lat, s.lon);
+        const double var = magVarEastAt(s.lat, s.lon);
         const bool calmOrVrb = r.windVariable || r.windKt < 0.5 || r.windDir == 0;
         const int mag = r.windDir, tru = wx::magneticToTrue(mag, var, calmOrVrb);
         r.windDir = tru;
@@ -2980,6 +2986,8 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence;
     d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
     d.turbGridAltFt = g_uiTs.gridAltFt; d.turbGridSeq = g_uiTs.gridSeq;
+    d.magVarAt = magVarEastAt;
+    if (d.havePos) d.magVarEast = magVarEastAt(d.lat, d.lon);
     uiCloudsTick();
     d.clouds = g_uiClouds;
     d.loadingS = g_loadS; d.loadingWhat = g_load.what();

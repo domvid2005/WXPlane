@@ -39,6 +39,9 @@ struct UiData {
     bool havePos = false;
     double lat = 0, lon = 0, altFt = 0, trackDeg = 0, gsKt = 0;
     double headingDeg = 0;              // true heading (the wind dial turns with it, and the components use it)
+    // magnetic variation, degrees east positive (magnetic = true - variation): at a point (nullptr: use magVarEast everywhere)
+    double (*magVarAt)(double lat, double lon) = nullptr;
+    double magVarEast = 0;
     // update state
     bool busy = false;                  // a download is running
     double nextUpdateS = -1;            // seconds to the next scheduled update, -1 unknown
@@ -70,6 +73,7 @@ struct UiData {
     int forceAdv = -1;                  // 1: AIRMET and SIGMET layers on, 0: off
     int forceAloftLayers = -1;          // bit 1 wind barbs, bit 2 clouds (map layers)
     double forceMapAltFt = -1;          // the map's altitude slider
+    int forceMapMode = -1;              // the slider's mode: 0 chosen altitude, 1 ACFT (follows the aircraft), 2 SFC
     int forceWindSel = -1;              // open this winds-aloft point's decode window on the Map tab
     // the airport search (Airports tab)
     bool searchBusy = false;

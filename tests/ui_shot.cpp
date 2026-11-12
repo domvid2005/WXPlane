@@ -323,9 +323,13 @@ int main(int argc, char** argv) {
     }
     d.forceDial = 0; d.forceLayers = 1; d.forcePirep = -1; d.forceAdv = 0;
     // winds aloft and clouds at FL180 (the altitude slider), one wind barb decoded; then clouds alone low down
-    for (int pass = 0; pass < 2; ++pass) {
-        d.forceLayers = pass == 0 ? 1 : 3; d.forceAloftLayers = pass == 0 ? 3 : 2; d.forceMapAltFt = pass == 0 ? 18000 : 3000; d.forceWindSel = pass == 0 ? 9 : -1;
+    // (pass 2: the surface - SFC: airport winds and the lowest clouds, one airport's wind decoded)
+    d.magVarEast = -14.5;   // Boston: 14.5 degrees west
+    for (int pass = 0; pass < 3; ++pass) {
+        d.forceLayers = pass == 0 ? 1 : (pass == 1 ? 3 : 1); d.forceAloftLayers = pass == 1 ? 2 : 3; d.forceMapAltFt = pass == 0 ? 18000 : (pass == 1 ? 3000 : -1);
+        d.forceMapMode = pass == 2 ? 2 : -1;
         for (int fr = 0; fr < 40; ++fr) {
+            d.forceWindSel = (pass == 0 && fr == 0) ? 9 : ((pass == 2 && fr == 20) ? 3 : -1);
             io.DeltaTime = 1.0f / 30.0f;
             ImGui::NewFrame();
             d.forceTab = fr == 0 ? 2 : -1;
@@ -333,15 +337,15 @@ int main(int argc, char** argv) {
             uiDraw(d, f, W, H, false, act);
             ImGui::Render();
             ++frames;
-            if (fr == 0) d.forceWindSel = -1;
         }
+        d.forceWindSel = -1;
         Canvas cv((int)(W * scale), (int)(H * scale));
         raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
-        const std::string p = out + (pass == 0 ? "/ui_map_aloft.png" : "/ui_map_clouds_low.png");
+        const std::string p = out + (pass == 0 ? "/ui_map_aloft.png" : (pass == 1 ? "/ui_map_clouds_low.png" : "/ui_map_sfc.png"));
         if (!writePng(cv, p)) return 1;
         std::printf("wrote %s\n", p.c_str());
     }
-    d.forceAloftLayers = 0; d.forceMapAltFt = -1; d.forceLayers = 1;
+    d.forceAloftLayers = 0; d.forceMapAltFt = -1; d.forceMapMode = 1; d.forceLayers = 1;
     // a full reset: the countdown in the header
     d.loadingS = 83; d.loadingWhat = "Loading weather";
     for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 0 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
