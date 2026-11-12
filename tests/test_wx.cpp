@@ -277,6 +277,28 @@ int main() {
         std::vector<Station> g = {v[0], v[2], gap};
         int filled = fillMissing(g, 80.0);
         CHECK(filled >= 2 && g[2].report.hasWind && g[2].report.hasAltim && g[2].filled.find("wind from") != std::string::npos);
+        // high cloud from a manned report spreads to automatic neighbours (OVC200 at KBOS was a 6 nm circle of overcast cirrus)
+        {
+            auto mk = [](const char* id, double lat, double lon, double elevM, const char* raw) { Station x; x.icao = id; x.lat = lat; x.lon = lon; x.elevM = elevM; x.rawMetar = raw; parseReport(raw, x.report); return x; };
+            std::vector<Station> h = {
+                mk("KBOS", 42.36, -71.01, 6, "KBOS 120054Z 03006KT 10SM OVC200 10/03 A2988"),
+                mk("KBED", 42.47, -71.29, 40, "KBED 120052Z AUTO 00000KT 10SM CLR 08/02 A2989"),          // 14 nm: same cover
+                mk("KORH", 42.27, -71.88, 300, "KORH 120054Z AUTO 31005KT 10SM CLR 07/01 A2990"),         // 39 nm: one step thinner
+                mk("KPVD", 41.72, -71.43, 17, "KPVD 120051Z AUTO 32004KT 10SM FEW050 09/02 A2989"),       // 42 nm, low cloud only
+                mk("KEWB", 41.68, -70.96, 24, "KEWB 120053Z AUTO 00000KT 10SM CLR 08/03 A2988"),          // 41 nm
+                mk("KCON", 43.20, -71.50, 104, "KCON 120051Z AUTO 00000KT 10SM CLR 03/M01 A2990"),        // 55 nm: two steps thinner
+                mk("KXSK", 42.40, -71.10, 10, "KXSK 120053Z 00000KT 10SM SKC 08/02 A2989"),               // SKC: an observer saw nothing
+                mk("KMAN", 42.30, -71.20, 30, "KMAN 120053Z 00000KT 10SM FEW030 08/02 A2989")};           // manned, low cloud only
+            const int n = spreadHighCloud(h, 80.0);
+            auto high = [](const Station& x) { for (const auto& g : x.report.clouds) if (g.baseFtAgl >= 12000) return g.cover; return -1; };
+            CHECK(n == 5);
+            CHECK(high(h[1]) == CloudGroup::OVC && h[1].filled.find("high cloud from KBOS") != std::string::npos);
+            CHECK(high(h[2]) == CloudGroup::BKN && high(h[3]) == CloudGroup::BKN && high(h[4]) == CloudGroup::BKN && high(h[5]) == CloudGroup::SCT);
+            CHECK(high(h[6]) == -1 && high(h[7]) == -1 && h[0].report.clouds.size() == 1);
+            for (const auto& g : h[2].report.clouds) if (g.baseFtAgl >= 12000) CHECK(std::abs(g.baseFtAgl - (20000 + 20 - 984)) <= 2);   // same height above sea level
+            CHECK(h[3].report.clouds.size() == 2 && h[3].report.clouds[0].baseFtAgl == 5000);
+            CHECK(!h[1].report.clearSky);
+        }
         // smooth blend: the closest station dominates and values change gradually between two stations
         std::vector<Station> two = {v[2], v[1]};          // 4 SM at lat 30.2, clear-ish at 30.5
         two[1].report.visM = 16093; two[0].report.visM = 6437;

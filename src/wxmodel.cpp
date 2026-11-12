@@ -564,6 +564,53 @@ double effectiveVisM(const Report& r) { return r.cavok ? 40000.0 : (r.visM >= 16
 bool hasVisAny(const Report& r) { return r.hasVis || r.cavok; }
 } // namespace
 
+int spreadHighCloud(std::vector<Station>& st, double rangeNm) {
+    const int kHighFt = 12000;
+    struct Src { size_t i; CloudGroup g; double baseMslFt; };
+    std::vector<Src> src;
+    for (size_t i = 0; i < st.size(); ++i)
+        for (const auto& g : st[i].report.clouds)
+            if (g.baseFtAgl >= kHighFt && g.cover <= CloudGroup::OVC) src.push_back({i, g, st[i].elevM / kFtToM + g.baseFtAgl});
+    if (src.empty()) return 0;
+    int got = 0;
+    for (size_t i = 0; i < st.size(); ++i) {
+        Station& a = st[i];
+        Report& r = a.report;
+        if (r.skyClearAll || a.icao.compare(0, 3, "GFS") == 0) continue;
+        bool high = false;
+        for (const auto& g : r.clouds) if (g.baseFtAgl >= kHighFt) high = true;
+        if (high) continue;
+        const bool automatic = a.rawMetar.find(" AUTO") != std::string::npos;
+        if (!automatic && !r.clearSky) continue;   // a manned report with low cloud only saw no high cloud
+        // the nearest source station, and its high layers
+        double bd = rangeNm + 1; size_t bi = st.size();
+        for (const auto& s : src) { const double d = distNm(a.lat, a.lon, st[s.i].lat, st[s.i].lon); if (d < bd) { bd = d; bi = s.i; } }
+        if (bi == st.size() || bd > rangeNm) continue;
+        const int drop = bd <= 25.0 ? 0 : (bd <= 50.0 ? 1 : 2);
+        int added = 0;
+        for (const auto& s : src) {
+            if (s.i != bi || added >= 2) continue;
+            const int cover = s.g.cover - drop;
+            if (cover < CloudGroup::FEW) continue;
+            CloudGroup g;
+            g.cover = cover;
+            g.kind = 0;
+            g.baseFtAgl = (int)std::lround(s.baseMslFt - a.elevM / kFtToM);
+            if (g.baseFtAgl < kHighFt) continue;
+            r.clouds.push_back(g);
+            ++added;
+        }
+        if (added) {
+            std::sort(r.clouds.begin(), r.clouds.end(), [](const CloudGroup& x, const CloudGroup& y) { return x.baseFtAgl < y.baseFtAgl; });
+            if (r.clearSky && !r.cavok) r.clearSky = false;
+            if (!a.filled.empty()) a.filled += ", ";
+            a.filled += "high cloud from " + st[bi].icao;
+            ++got;
+        }
+    }
+    return got;
+}
+
 int fillMissing(std::vector<Station>& st, double rangeNm) {
     int filled = 0;
     for (size_t i = 0; i < st.size(); ++i) {

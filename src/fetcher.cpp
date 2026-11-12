@@ -253,6 +253,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     res.noaaFixes = 0;
     for (const auto& k : keep) if (!k.filled.empty()) ++res.noaaFixes;
     res.filledElements = fillMissing(keep, 80.0);   // elements neither the text nor NOAA's decoded fields had: from neighbouring stations
+    res.filledElements += spreadHighCloud(keep, 80.0);   // high cloud the automatic stations cannot see
     res.stations = std::move(keep);
     res.ok = true;
     if (res.stations.empty()) res.error = "no METARs within 600 nm: the weather already set is kept";

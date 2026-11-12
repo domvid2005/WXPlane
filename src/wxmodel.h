@@ -117,6 +117,12 @@ void mergeAtis(Station& st, const Report& atis, const std::string& atisText);
 // Gaps in a station's report (no wind, temperature, dew point, pressure or visibility) are filled from the nearest stations that
 // have the element (inverse-distance weighted, within rangeNm). Returns how many elements were filled; notes go to Station::filled.
 int fillMissing(std::vector<Station>& stations, double rangeNm = 80.0);
+// High cloud (base 12,000 ft AGL or more) that one station reports and its automatic neighbours cannot see (their sensors stop at
+// 12,000 ft; CLR/NCD/CAVOK say nothing about higher cloud): the nearest such layer within `rangeNm` is copied to those neighbours at
+// the same height above sea level, one coverage step thinner beyond 25 nm and two beyond 50 nm. Without this an OVC200 at KBOS was a
+// round 6 nm patch of overcast cirrus in a clear sky (2026-11-12). Not over SKC (an observer saw no cloud at any height).
+// Returns the number of stations that got a layer.
+int spreadHighCloud(std::vector<Station>& stations, double rangeNm = 80.0);
 
 // Smooth weather at any point: scalar elements (wind, visibility, temperature, dew point, pressure) are an inverse-distance
 // (power 3) blend of the nearest stations, so the closest station dominates and borders blend gradually instead of stepping.
