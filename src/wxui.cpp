@@ -408,7 +408,9 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
     if (st.hasAtis) sub += "  · ATIS " + (st.atisLetter.empty() ? std::string("?") : st.atisLetter);
     muted(sub.c_str());
     badgeRight(f, flightCategory(r), lineY + 1);
-    // raw report
+    // raw report, labelled with its source and which north its winds use
+    ImGui::PushFont(f.bold); ImGui::TextUnformatted("METAR"); ImGui::PopFont();
+    ImGui::SameLine(0, 8); muted("winds true");
     ImGui::PushStyleColor(ImGuiCol_ChildBg, v4(cInset));
     ImGui::PushFont(f.mono);
     const float w = ImGui::GetContentRegionAvail().x;
@@ -465,23 +467,14 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
     }
     ImGui::EndGroup();
     muted("Clouds"); ImGui::SameLine(); ImGui::TextUnformatted(cloudText(r).c_str());
-    {   // which north each source's winds are given in
-        const char* ref = st.hasAtis ? "METAR winds true · ATIS winds magnetic" : "METAR winds true";
-        const float rw = ImGui::CalcTextSize(ref).x;
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 12, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - rw));
-        muted(ref);
-    }
     if (!st.filled.empty()) mutedWrapped("Completed: " + st.filled);
     if (full && st.hasAtis) {
         ImGui::Spacing();
+        ImGui::PushFont(f.bold); ImGui::TextUnformatted(("ATIS " + st.atisLetter).c_str()); ImGui::PopFont();
+        ImGui::SameLine(0, 8); muted("winds magnetic");
         ImGui::PushFont(f.mono);
         ImGui::PushStyleColor(ImGuiCol_Text, v4(IM_COL32(255, 217, 128, 255)));
         ImGui::TextWrapped("%s", st.atisText.c_str());
-        ImGui::PopStyleColor();
-        ImGui::PopFont();
-        muted("ATIS winds are magnetic; METAR winds are true.");
-        ImGui::PushFont(f.mono);
-        ImGui::PushStyleColor(ImGuiCol_Text, v4(IM_COL32(255, 217, 128, 255)));
         ImGui::PopStyleColor();
         ImGui::PopFont();
     }
@@ -1261,9 +1254,14 @@ void infoWindow(const UiData& d, const UiFonts& f) {
                 infoRow("From you", fmt("%.0f nm", distTo(d, *st)));
                 ImGui::EndTable();
             }
+            ImGui::Spacing();
+            ImGui::PushFont(f.bold); ImGui::TextUnformatted("METAR"); ImGui::PopFont(); ImGui::SameLine(0, 8); muted("winds true");
             infoText(f, st->rawMetar.empty() ? std::string("(no report text)") : st->rawMetar, cMetar);
-            muted("METAR: winds true");
-            if (st->hasAtis) { infoText(f, "ATIS " + st->atisLetter + ": " + st->atisText, IM_COL32(255, 217, 128, 255)); muted("ATIS: winds magnetic"); }
+            if (st->hasAtis) {
+                ImGui::Spacing();
+                ImGui::PushFont(f.bold); ImGui::TextUnformatted(("ATIS " + st->atisLetter).c_str()); ImGui::PopFont(); ImGui::SameLine(0, 8); muted("winds magnetic");
+                infoText(f, st->atisText, IM_COL32(255, 217, 128, 255));
+            }
         } else if (av) {
             title(av->name, advColor(*av, 255));
             if (ImGui::BeginTable("ad", 2, ImGuiTableFlags_SizingFixedFit)) {
