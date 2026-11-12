@@ -64,7 +64,11 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "bump_height_m") c.bumpHeightM = d < 50 ? 50 : (d > 1500 ? 1500 : d);
         else if (k == "bump_radius_factor") c.bumpRadiusFactor = d < 0.05 ? 0.05 : (d > 0.8 ? 0.8 : d);
         else if (k == "vis_check_s") c.visCheckS = (int)(d < 1 ? 1 : d);
-        else if (k == "radar") c.radar = toBool(v);
+#ifdef WX_HARNESS
+        else if (k == "radar") c.radar = toBool(v);   // the test harness only: radar is always on in the plugin (the toggle was removed 2026-11-11)
+#else
+        else if (k == "radar") {}
+#endif
         else if (k == "radar_range_nm") c.radarRangeNm = d < 30 ? 30 : (d > 300 ? 300 : d);
         else if (k == "radar_cell_nm") c.radarCellNm = d < 3 ? 3 : (d > 30 ? 30 : d);
         else if (k == "radar_max_cells") c.radarMaxCells = (int)(d < 10 ? 10 : (d > 400 ? 400 : d));
@@ -217,7 +221,9 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "bump_height_m = " << c.bumpHeightM << "\n"
       << "bump_radius_factor = " << c.bumpRadiusFactor << "\n"
       << "vis_check_s = " << c.visCheckS << "\n"
+#ifdef WX_HARNESS
       << "radar = " << (c.radar ? 1 : 0) << "\n"
+#endif
       << "radar_range_nm = " << c.radarRangeNm << "\n"
       << "radar_cell_nm = " << c.radarCellNm << "\n"
       << "radar_max_cells = " << c.radarMaxCells << "\n"

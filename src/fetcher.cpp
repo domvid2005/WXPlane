@@ -330,9 +330,95 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
         r.note = "MRMS download failed (" + lastErr + "), reusing the radar picture from " + std::to_string((now - lastMrmsAt_) / 60) + " min ago";
         return r;
     }
+    // Europe: the EUMETNET OPERA composite
+    if (!mrmsArea && operaCovers(rq.lat, rq.lon)) {
+        RadarResult eu;
+        std::string euErr;
+        if (fetchOpera(rq, now, stations, eu, euErr)) return eu;
+        if (lastOpera_.ok && now - lastOperaAt_ < 20 * 60 && distNm(rq.lat, rq.lon, lastOperaLat_, lastOperaLon_) < 30.0) {
+            RadarResult r = lastOpera_;
+            r.note = "OPERA download failed (" + euErr + "), reusing the radar picture from " + std::to_string((now - lastOperaAt_) / 60) + " min ago";
+            return r;
+        }
+        out.ok = false;
+        out.note = "European radar (OPERA): " + euErr;
+        return out;
+    }
     out.ok = false;
-    out.note = lastErr.empty() ? std::string("no NOAA radar coverage here (US only)") : lastErr;
+    out.note = lastErr.empty() ? std::string("no radar composite covers this area (radar covers the US and Europe)") : lastErr;
     return out;
+}
+
+// One OPERA composite: the newest 5-minute slot that is published, then older ones up to 20 minutes back. The header (the first
+// 5.5 kB) and only the tiles under the 150 nm window are downloaded; tiles are kept for as long as the slot is current.
+bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vector<Station>* stations, RadarResult& out, std::string& err) {
+    const Config& cfg = rq.cfg;
+    const GribWindow win = windowFor(rq.lat, rq.lon, cfg.radarRangeNm);
+    const std::time_t newest = operaNewestSlot(now);
+    for (int k = 0; k < 4; ++k) {
+        const std::time_t slot = newest - k * 300;
+        const std::string url = operaUrl(slot);
+        if (slot != operaSlot_) {
+            std::string head, e;
+            long st = 0;
+            OperaHeader h;
+            size_t need = 0;
+            bool ok = httpGetRange(url, "0-8191", head, st, e, 15, 1u << 20) && (st == 206 || st == 200);
+            if (ok && !operaParseHeader(head, h, e, need) && need > head.size() && need < (4u << 20)) {
+                head.clear();
+                ok = httpGetRange(url, "0-" + std::to_string(need - 1), head, st, e, 20, 8u << 20) && (st == 206 || st == 200) && operaParseHeader(head, h, e, need);
+            } else if (ok) {
+                ok = operaParseHeader(head, h, e, need);
+            }
+            if (!ok) {
+                err = e.empty() ? ("HTTP " + std::to_string(st)) : e;
+                if (st == 404 || st == 403) {
+                    char tb[80];
+                    std::snprintf(tb, sizeof tb, "no composite for %02d:%02dZ (HTTP %ld)", (int)((slot / 3600) % 24), (int)((slot / 60) % 60), st);
+                    err = tb;
+                }
+                continue;
+            }
+            operaSlot_ = slot; operaHead_ = h; operaTiles_.clear();
+        }
+        int fetched = 0;
+        GribField refl;
+        std::string e;
+        auto get = [&](uint64_t off, uint64_t len, std::string& data, std::string& ge) {
+            long st = 0;
+            const bool ok = httpGetRange(url, std::to_string(off) + "-" + std::to_string(off + len - 1), data, st, ge, 20, (size_t)len + 1024);
+            if (ok && st != 206 && !(st == 200 && data.size() == len)) { ge = "HTTP " + std::to_string(st); return false; }
+            return ok && data.size() == len;
+        };
+        if (!operaWindow(operaHead_, win, 0.01, get, operaTiles_, refl, fetched, e)) {
+            err = e;
+            operaSlot_ = 0; operaTiles_.clear();
+            return false;
+        }
+        refl.refTime = slot;
+        GribField conv;
+        std::string typeNote;
+        if (cfg.radarPrecipType && stations) {
+            int capped = 0;
+            conv = convectiveMask(refl, nullptr, stations, (float)cfg.radarStratiformMaxDbz, capped);
+            char b[200];
+            std::snprintf(b, sizeof b, "convection only within 60 nm of an airport reporting it; %d pixel(s) capped at %.0f dBZ", capped, cfg.radarStratiformMaxDbz);
+            typeNote = b;
+        }
+        out = buildRadarCells(refl, nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr);
+        radarPrev_.clear();
+        for (const auto& c : out.cells) radarPrev_.insert(c.key);
+        out.source = "EUMETNET OPERA (Europe)";
+        out.dataTime = slot;
+        char b[120];
+        std::snprintf(b, sizeof b, "OPERA: %d tile(s) downloaded, %zu cached", fetched, operaTiles_.size());
+        out.note = b;
+        if (!typeNote.empty()) out.note += "; " + typeNote;
+        if (out.ok) { lastOpera_ = out; lastOperaAt_ = now; lastOperaLat_ = rq.lat; lastOperaLon_ = rq.lon; }
+        return true;
+    }
+    if (err.empty()) err = "no recent composite";
+    return false;
 }
 
 // The 3x3 GFS lattice shared by the winds and the clouds. Nodes sit on whole degrees of latitude and on multiples of `step` degrees

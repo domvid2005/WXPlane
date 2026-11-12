@@ -56,7 +56,7 @@ wx::Fetcher g_fetcher;
 std::string g_cfgPath;
 
 XPLMMenuID g_menu = nullptr;
-int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxRadar = -1, g_idxWindshear = -1, g_idxTurbulence = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
+int g_idxEnabled = -1, g_idxRefresh = -1, g_idxShow = -1, g_idxAtis = -1, g_idxAloft = -1, g_idxWindshear = -1, g_idxTurbulence = -1, g_idxStatus1 = -1, g_idxStatus2 = -1;
 XPLMFlightLoopID g_loop = nullptr;
 
 bool g_radarDeferred = false;                 // first update went out without radar; storms are still to come
@@ -155,7 +155,6 @@ void syncMenu() {
     XPLMCheckMenuItem(g_menu, g_idxEnabled, g_cfg.enabled ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxAtis, g_cfg.useAtis ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     XPLMCheckMenuItem(g_menu, g_idxAloft, g_cfg.useAloft ? xplm_Menu_Checked : xplm_Menu_Unchecked);
-    XPLMCheckMenuItem(g_menu, g_idxRadar, g_cfg.radar ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxWindshear >= 0) XPLMCheckMenuItem(g_menu, g_idxWindshear, g_cfg.windshear ? xplm_Menu_Checked : xplm_Menu_Unchecked);
     if (g_idxTurbulence >= 0) XPLMCheckMenuItem(g_menu, g_idxTurbulence, g_cfg.realisticTurbulence ? xplm_Menu_Checked : xplm_Menu_Unchecked);
 }
@@ -2725,10 +2724,12 @@ void menuHandler(void*, void* item) {
             g_cfg.windshear = !g_cfg.windshear;
             g_wsCmd = g_cfg.windshear ? 1 : -1;   // applied in the pre-flight-model loop (weather API)
             break;
-        case kRadar:
+#ifdef WX_HARNESS
+        case kRadar:   // radar is always on in the plugin (NOAA MRMS in the US, EUMETNET OPERA in Europe); the test harness can still switch it
             g_cfg.radar = !g_cfg.radar;
             if (g_cfg.enabled) { if (g_cfg.radar && g_haveLast) g_radarKick = true; else g_manualRefresh = true; }
             break;
+#endif
         case kAloft:
             g_cfg.useAloft = !g_cfg.useAloft;
             if (g_cfg.enabled) g_manualRefresh = true;
@@ -2767,7 +2768,6 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     XPLMAppendMenuSeparator(g_menu);
     g_idxAtis = XPLMAppendMenuItem(g_menu, "Use ATIS", (void*)(intptr_t)kAtis, 0);
     g_idxAloft = XPLMAppendMenuItem(g_menu, "Global Winds/Temps & Clouds Aloft (GFS)", (void*)(intptr_t)kAloft, 0);
-    g_idxRadar = XPLMAppendMenuItem(g_menu, "Radar Storms (NOAA MRMS)", (void*)(intptr_t)kRadar, 0);
     g_idxWindshear = XPLMAppendMenuItem(g_menu, "Enable Realistic Windshear", (void*)(intptr_t)kWindshear, 0);
     g_idxTurbulence = XPLMAppendMenuItem(g_menu, "Enable Realistic Turbulence", (void*)(intptr_t)kTurbulence, 0);
     XPLMAppendMenuItem(g_menu, "Max Turbulence...", (void*)(intptr_t)kSettings, 0);   // below every toggle, above the status lines

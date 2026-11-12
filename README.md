@@ -6,6 +6,7 @@ Replaces X-Plane 12's flawed weather with live **NOAA** data, refreshed every **
 * **ATIS** (D-ATIS) merged over the METAR for airports near you
 * **Winds aloft and temperatures aloft** from the GFS global model (via Open-Meteo), applied from the surface to FL600 (60,000 ft) instead of X-Plane's own
 * **Clouds aloft** the airports cannot see (GFS cloud cover on pressure levels), and **weather over open water** from the same model where no airport is in range
+* **Radar storms**, always on: NOAA MRMS over the US and the EUMETNET OPERA composite over Europe
 
 Requires **X-Plane 12.3 or newer** (it uses the `XPLMWeather` plugin API, SDK 4.2.0).
 
@@ -16,7 +17,6 @@ Requires **X-Plane 12.3 or newer** (it uses the `XPLMWeather` plugin API, SDK 4.
 | **Enabled** | On/off. Off removes all of the plugin's weather and gives control back to X-Plane. |
 | **Refresh Weather Data Now** | Downloads fresh data and applies it without freezing the sim; X-Plane fades it in over 1–2 minutes (`manual_refresh_immediate = 1` makes it appear at once, at the cost of a freeze of several seconds). Also turns the plugin on if it was off. |
 | **Show Local METAR/ATIS Data...** | Opens a scrollable, resizable window listing every nearby station: raw METAR, ATIS text and letter, what WXPlane applied to the sim (visibility, fog, clouds, wind), and the global-model (GFS) points in use. Mouse wheel scrolls. |
-| **Radar Storms (NOAA MRMS)** | Turns the NOAA radar mosaic into storm cells (see Radar below). On by default. |
 | **Use ATIS** | Merge D-ATIS data for airports near you. |
 | **Global Winds/Temps & Clouds Aloft (GFS)** | On (default): winds and temperatures at every level, clouds above what airports report, and the weather over open water come from the GFS model (Open-Meteo). Off: only the lowest 10,000 ft is touched, X-Plane's own winds/temps are used above, and nothing is set where no airport reports. |
 
@@ -120,7 +120,9 @@ Every update (`update_minutes`, 5 by default) a background thread downloads:
   CB, TCU or lightning. The radar log line counts both ("N convective at 40+ dBZ = cumulonimbus, M steady rain/snow").
 * **EchoTop_18**, the height in km MSL of the 18 dBZ echo, used as the storm top.
 
-Both are gzipped GRIB2 files. WXPlane decodes them itself (no extra libraries) and only keeps the area around the aircraft (`radar_range_nm`). The CONUS, Alaska, Hawaii, Caribbean and Guam products are used by position.
+In Europe (no MRMS) it downloads the **EUMETNET OPERA** maximum-reflectivity composite instead (see "Europe" below).
+
+The MRMS files are gzipped GRIB2 files. WXPlane decodes them itself (no extra libraries) and only keeps the area around the aircraft (`radar_range_nm`). The CONUS, Alaska, Hawaii, Caribbean and Guam products are used by position.
 
 The echoes are grouped into blocks of about `radar_cell_nm`; the strongest and nearest `radar_max_cells` become location records on top of the weather of the nearest METAR station:
 
@@ -133,10 +135,27 @@ Only cells that changed are re-sent, and cells with no echo left are erased, so 
 
 **Limits:** radar mosaics are 2D, so the base height and the shape of a storm are estimated; reflectivity above 70 dBZ is capped (hail and clutter); the API is limited to a few hundred records; the data is a few minutes old when you get it; and cells are only applied where at least one METAR station is within the search radius. The MRMS file layout (grid, PNG/simple packing) was built from the GRIB2 specification and tested with generated files; it has since decoded live NOAA CONUS data in real X-Plane sessions (the log showed e.g. 122 echo blocks, 120 cells, echo tops up to 12 000 m from radar). Not yet seen live: the Alaska/Hawaii/Caribbean/Guam products.
 
-### Outside the US
+### Europe (EUMETNET OPERA)
 
-There is no radar storm system outside NOAA's coverage. The experimental RainViewer option was removed (2026-11-10): no free global feed
-offers radar values, only coloured pictures, and reading intensity from colours produced storms that were not there. Outside the US,
+Over Europe WXPlane uses the OPERA composite from EUMETNET's Open Radar Data (CC BY 4.0): the strongest echo in the column from the
+national radar networks of the OPERA members (most of Europe, Spain to Finland), at 1 km, every 5 minutes, about 4 minutes after its
+time. The file is a Cloud-Optimised GeoTIFF (Lambert azimuthal equal-area, 512 x 512 km deflate tiles): WXPlane reads its header
+(5.5 kB) and only the tiles under `radar_range_nm`, usually 2 to 6, and keeps them until the next 5-minute composite. If the newest
+composite is not published yet it takes the one before, up to 20 minutes back; if a download fails the last picture is kept for up
+to 20 minutes while you stay within 30 nm.
+
+OPERA has no precipitation type and no echo tops, so:
+
+* an echo counts as convective only within 60 nm of an airport reporting thunder, showers, hail, CB, TCU or lightning; elsewhere it
+  is capped at `radar_stratiform_max_dbz` like MRMS steady rain (the melting-layer bright band would otherwise make cumulonimbus);
+* storm tops are estimated from reflectivity.
+
+The radar log line names the source ("EUMETNET OPERA (Europe)") and counts the tiles downloaded.
+
+### Elsewhere
+
+There is no radar outside the US and Europe. The experimental RainViewer option was removed (2026-11-10): no free global feed
+offers radar values, only coloured pictures, and reading intensity from colours produced storms that were not there. There,
 thunderstorms come from the METARs (TS, CB) and from the GFS weather codes over open water.
 
 ## Tests
@@ -151,7 +170,8 @@ thunderstorms come from the METARs (TS, CB) and from the GFS weather codes over 
 | ATIS | D-ATIS | 1 per airport, at most `atis_max_airports` (2) within `atis_range_nm` | every update; airports with no ATIS are skipped for 1 hour |
 | Winds/temps aloft | Open-Meteo GFS | 1 request for 9 points (a 3x3 lattice about 60 nm apart around the aircraft) | every 45 minutes; when the aircraft moves on to a new node, at most every 15 minutes |
 | Clouds aloft and open-water weather | Open-Meteo GFS | 1 request for the same 9 points | every 30 minutes, and whenever the winds' lattice moves |
-| Radar | NOAA MRMS | 3 files (reflectivity + echo tops, a few MB each, + precipitation type, about 130 KB) | every update |
+| Radar (US) | NOAA MRMS | 3 files (reflectivity + echo tops, a few MB each, + precipitation type, about 130 KB) | every update |
+| Radar (Europe) | EUMETNET OPERA | the header (5.5 kB) + 2-6 tiles (a few kB to a few hundred kB each) of the 5-minute composite | every update, tiles once per composite |
 
 An update also happens early when you move more than `refetch_move_nm` (40 nm; at most once a minute), and when you press "Refresh Weather Data Now" or toggle a data option. Applying is incremental: only records that changed are sent to X-Plane.
 
@@ -176,7 +196,7 @@ Every weather update makes X-Plane rebuild what changed, so WXPlane tries to cha
 * The visibility self-check only runs near the ground, makes at most 2 corrections, and ignores differences under 25%.
 * Everything slow (downloads, unzipping, decoding) runs on a low-priority background thread.
 
-If you still see hitches, set `radar_max_cells` lower (30), or turn radar off from the menu to check whether the storms are the cause, and send me the `[WXPlane]` lines from `Log.txt`.
+If you still see hitches, set `radar_max_cells` lower (30) to check whether the storms are the cause, and send me the `[WXPlane]` lines from `Log.txt`.
 
 ## Visibility self-check
 
@@ -297,7 +317,7 @@ A radar storm record stops sharply at its circle, so a full-height block at the 
 
 ## Menu refreshes
 
-Refresh Weather and the menu toggles are coalesced: at most one download per 60 s (`manual_refresh_gap_s`, advanced key). Turning radar on fetches only the radar and fades it in; stations and winds are kept. The log line after each update says `[fade-in]` or `[immediate: sim pauses while X-Plane rebuilds]`.
+Refresh Weather and the menu toggles are coalesced: at most one download per 60 s (`manual_refresh_gap_s`, advanced key). Radar is always on (NOAA MRMS in the US, EUMETNET OPERA in Europe); the menu toggle was removed. The log line after each update says `[fade-in]` or `[immediate: sim pauses while X-Plane rebuilds]`.
 
 `storm_radius_factor` (advanced key, default 0.9, 0.6-2.0): storm record radius as a multiple of the radar cell size. Raise it (1.2-1.5) to make neighbouring storm cells overlap more; X-Plane then blends their edges instead of showing square steps. Untested in the sim.
 

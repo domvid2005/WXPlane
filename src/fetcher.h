@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "config.h"
+#include "opera.h"
 #include "radar.h"
 #include "wxmodel.h"
 
@@ -89,6 +90,14 @@ private:
     std::time_t lastTopsAt_ = 0;      // when it was downloaded
     std::vector<Station> radarStations_; // the last full update's reports (worker thread only)
     std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
+    // European radar (EUMETNET OPERA): the composite's header and the tiles already downloaded, for the slot they belong to
+    std::time_t operaSlot_ = 0;
+    OperaHeader operaHead_;
+    std::map<int, std::vector<float>> operaTiles_;
+    RadarResult lastOpera_;
+    std::time_t lastOperaAt_ = 0;
+    double lastOperaLat_ = 0, lastOperaLon_ = 0;
+    bool fetchOpera(const FetchRequest& rq, std::time_t now, const std::vector<Station>* stations, RadarResult& out, std::string& err);
 };
 
 } // namespace wx

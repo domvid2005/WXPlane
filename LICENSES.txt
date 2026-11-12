@@ -14,6 +14,8 @@ Data used by WXPlane (not included in the plugin, downloaded while flying):
     precipitation type), GTGN turbulence nowcast (GTG developed by NCAR for the FAA). Public domain.
   * Open-Meteo.com, CC BY 4.0 (https://open-meteo.com): NOAA NCEP GFS model data - winds and temperatures aloft, clouds aloft
     and the weather over open water.
+  * EUMETNET OPERA radar composite (Open Radar Data), CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/):
+    radar over Europe. Contains data from the national weather services of the OPERA members.
   * ECMWF Open Data, (c) ECMWF, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/): turbulence outside the US.
   * D-ATIS by clowd.io (ATIS text).
 

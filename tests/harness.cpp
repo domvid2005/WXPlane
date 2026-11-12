@@ -21,6 +21,8 @@
 #include "stubs/XPLMUtilities.h"
 #include "stubs/XPLMWeather.h"
 #include "stubs/curl/curl.h"
+#include "opera.h"
+#include <zlib.h>
 #include "../src/turbulence.h"
 
 extern "C" {
@@ -227,11 +229,26 @@ CURLcode curl_easy_setopt(CURL* c, int opt, ...) {
     va_end(ap);
     return 0;
 }
+// European radar mock (HARNESS_OPERA): the real composite header, tiles made here (a 50 dBZ block over LEMD in 20 dBZ rain)
+static std::string g_operaHead;
+static int g_operaTiles = 0;
+static std::string operaTileFor(uint64_t off);
 CURLcode curl_easy_perform(CURL* c) {
     Easy* e = (Easy*)c;
     ++g_netRequests;
     std::printf("  net: GET %s\n", e->url.c_str());
     { static std::mutex m; std::lock_guard<std::mutex> l(m); g_urls.push_back(e->url); }   // several worker threads download at once
+    if (!g_operaHead.empty() && e->url.find("cloudferro.com/openradar-24h/") != std::string::npos) {
+        if (e->range.empty()) { e->status = 403; return 0; }
+        const uint64_t a = std::strtoull(e->range.c_str(), nullptr, 10), b = std::strtoull(e->range.c_str() + e->range.find('-') + 1, nullptr, 10);
+        if (a == 0) { const size_t n = (size_t)std::min<uint64_t>(b + 1, g_operaHead.size()); e->status = 206; e->wf((char*)g_operaHead.data(), 1, n, e->wd); return 0; }
+        const std::string t = operaTileFor(a);
+        if (t.empty()) { e->status = 416; return 0; }
+        ++g_operaTiles;
+        e->status = 206;
+        e->wf((char*)t.data(), 1, t.size(), e->wd);
+        return 0;
+    }
     if (!g_pirepJson.empty() && e->url.find("aviationweather.gov/api/data/") != std::string::npos &&
         (e->url.find("/pirep?") != std::string::npos || e->url.find("sigmet?") != std::string::npos || e->url.find("gairmet?") != std::string::npos)) {
         const std::string b = e->url.find("/pirep?") != std::string::npos ? g_pirepJson : std::string("[]");
@@ -307,6 +324,12 @@ CURLcode curl_easy_perform(CURL* c) {
         e->status = 200;
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
+    }
+    if (!g_operaHead.empty() && e->url.find("aviationweather.gov/api/data/metar?") != std::string::npos) {   // Madrid
+        static std::string b;
+        b = "[{\"icaoId\":\"LEMD\",\"lat\":40.4722,\"lon\":-3.5608,\"elev\":609,\"rawOb\":\"LEMD " + utcStamp(90) + " 24012KT 9999 -RA BKN020 OVC040 12/10 Q1008\"},"
+            "{\"icaoId\":\"LETO\",\"lat\":40.4967,\"lon\":-3.4458,\"elev\":617,\"rawOb\":\"LETO " + utcStamp(90) + " 23010KT 9999 -RA BKN025 12/10 Q1008\"}]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
     }
     if (g_ocean && e->url.find("aviationweather.gov/api/data/metar?bbox") != std::string::npos) { ++g_oceanMetar; e->status = 204; return 0; }   // open water: no METARs
     bool fd = e->url.find("windtemp") != std::string::npos;
@@ -589,6 +612,62 @@ std::string ecMsg(std::time_t run, int step, bool isU, int hpa, int k) {
 } // namespace gen
 
 static bool nr(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+static std::string operaTileFor(uint64_t off) {
+    wx::OperaHeader h; std::string err; size_t need = 0;
+    if (!wx::operaParseHeader(g_operaHead, h, err, need)) return {};
+    int t = -1;
+    for (size_t k = 0; k < h.tileOff.size(); ++k) if (h.tileOff[k] == off) t = (int)k;
+    if (t < 0) return {};
+    std::string raw((size_t)h.tileW * h.tileH * h.spp * 4, '\0');
+    const int tc = t % h.tilesAcross(), tr = t / h.tilesAcross();
+    double x, y; wx::operaForward(h, 40.4722, -3.5608, x, y);
+    const int lc = (int)((x - h.x0) / h.dx), lr = (int)((h.y0 - y) / h.dy);
+    for (int p = 0; p < h.tileW * h.tileH; ++p) {
+        const int col = tc * h.tileW + p % h.tileW, row = tr * h.tileH + p / h.tileW;
+        const int dc = col - lc, dr = row - lr;
+        float v = NAN;
+        if (std::abs(dc) <= 6 && std::abs(dr) <= 6) v = 50.0f;                 // a 13 km storm over the airport
+        else if (std::abs(dc) <= 60 && std::abs(dr) <= 60) v = 20.0f;          // steady rain around it
+        std::memcpy(&raw[(size_t)p * h.spp * 4], &v, 4);
+    }
+    // real deflate (zlib), padded to the tile's length in the real header: the fetcher insists on getting exactly the bytes it asked for
+    uLongf zn = compressBound(raw.size());
+    std::string z(zn, '\0');
+    if (compress2((Bytef*)&z[0], &zn, (const Bytef*)raw.data(), raw.size(), 9) != Z_OK || zn > h.tileLen[t]) { std::printf("[opera] mock tile %d does not fit (%lu > %llu)\n", t, (unsigned long)zn, (unsigned long long)h.tileLen[t]); return {}; }
+    z.resize(zn);
+    z.resize(h.tileLen[t], '\0');
+    return z;
+}
+
+static int runOpera() {
+    // Madrid: no MRMS, the European composite gives the storms (tiles downloaded once per 5-minute slot)
+    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nmanual_refresh_gap_s = 0\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\n", f); std::fclose(f); }
+    g_operaHead = readFile("tests/data/opera_head.bin");
+    CHECK(g_operaHead.size() == 5469);
+    g_loadingFlag = 0;
+    g_lat = 40.4722; g_lon = -3.5608; g_elev = 1500; g_agl = 900;
+    char n[256], s[256], d[256];
+    CHECK(XPluginStart(n, s, d) == 1);
+    CHECK(XPluginEnable() == 1);
+    for (int i = 0; i < 1500 && g_logAll.find("radar: EUMETNET OPERA") == std::string::npos && g_logAll.find("radar: none") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    const size_t at = g_logAll.find("radar: ");
+    if (at != std::string::npos) std::printf("[opera] %s\n", g_logAll.substr(at, g_logAll.find('\n', at) - at).c_str());
+    CHECK(g_logAll.find("radar: EUMETNET OPERA (Europe)") != std::string::npos);
+    const int tiles1 = g_operaTiles;
+    std::printf("[opera] tiles downloaded: %d\n", tiles1);
+    CHECK(tiles1 >= 1 && tiles1 <= 6);
+    // a refresh in the same slot downloads no tile again
+    const size_t mark = g_logAll.size();
+    g_menuHandler(nullptr, (void*)(intptr_t)2);
+    for (int i = 0; i < 1500 && g_logAll.find("radar: ", mark) == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    CHECK(g_logAll.find("radar: EUMETNET OPERA (Europe)", mark) != std::string::npos);
+    CHECK(g_operaTiles == tiles1 || (std::time(nullptr) % 300) < 20);   // unless a new slot began meanwhile
+    XPluginDisable(); XPluginStop();
+    std::printf(g_fail ? "HARNESS_OPERA FAILED (%d)\n" : "HARNESS_OPERA OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 static int runOcean() {
     // 2026-11-09 crash report: "[WXPlane] no METARs within search radius" then X-Plane crashed (the open ocean).
     const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
@@ -742,6 +821,7 @@ int main() {
     if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_TURB")) return runTurb();
     if (std::getenv("HARNESS_OCEAN")) return runOcean();
+    if (std::getenv("HARNESS_OPERA")) return runOpera();
     if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
     { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
     const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
