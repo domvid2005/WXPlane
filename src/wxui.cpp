@@ -2140,7 +2140,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
         if (r.hasT) {
             const long dv = isaDevIn(r.tempC - isaTempC(r.ft * 0.3048f));
             const std::string t = fmt("%.0f%s  ", tempIn(r.tempC), tempUnit()) + (dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld", dv));
-            magBox(t.c_str(), cSoft);
+            ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); ImGui::TextUnformatted(t.c_str()); ImGui::PopStyleColor();   // plain text, no bubble
         } else muted("—");
         ImGui::PopID();
     }
@@ -2199,7 +2199,8 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
         int withTurb = 0, total = 0;
         if (d.reports) for (const auto& p : d.reports->pireps) { ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }
         statRow(f, "At the aircraft", d.turbOn ? turbWord(d.turbEdr) : std::string("Off"), d.turbOn && d.turbEdr >= 0 ? fmt("EDR %.2f · %s", d.turbEdr, d.turbSource.c_str()) : std::string());
-        statRow(f, "Pilot reports", d.reports ? fmt("%d", total) : std::string("—"), d.reports ? fmt("%d with turbulence", withTurb) : std::string());
+        (void)total;
+        statRow(f, "Pilot reports", d.reports ? fmt("%d", withTurb) : std::string("—"), d.reports ? std::string("with turbulence") : std::string());
         const char* risk = !d.wsOn ? "Off" : (d.wsHigh > 0 ? "High" : (d.wsMed > 0 ? "Medium" : (d.wsSources > 0 ? "Low" : "None")));
         const ImU32 rc = !d.wsOn ? cMuted : (d.wsHigh > 0 ? IM_COL32(245, 70, 70, 255) : (d.wsMed > 0 ? IM_COL32(245, 150, 50, 255) : (d.wsSources > 0 ? IM_COL32(240, 210, 80, 255) : IM_COL32(255, 255, 255, 255))));
         statRow(f, "Windshear risk", risk, d.wsOn ? fmt("%d source(s)", d.wsSources) : std::string(), rc);
@@ -2300,9 +2301,10 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
     ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
     ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
-    ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind###wind", ImGuiTableColumnFlags_WidthStretch, textColW("000/00 G00"), kSortWind);
+    // the wind gets the room for a gusting wind and its reference (true or magnetic in the header)
+    ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind °T###wind", ImGuiTableColumnFlags_WidthFixed, textColW("000/00 G00 "), kSortWind);
     ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
-    ImGui::TableSetupColumn("Ceil.", ImGuiTableColumnFlags_WidthFixed, textColW("00,000"), kSortCeil);
+    ImGui::TableSetupColumn("Ceil.", ImGuiTableColumnFlags_WidthStretch, textColW("00,000"), kSortCeil);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
     ImGui::TableHeadersRow();

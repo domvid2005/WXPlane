@@ -2529,6 +2529,9 @@ float flightLoop(float, float, int, void*) {
         return 0.0f;   // stop calling us until the plugin is enabled again
     }
     const auto nowT = Clock::now();
+#ifndef WX_HARNESS
+    wx::xpui::tick();   // a pending pop-out / pop-in of the weather window, made here and never inside the window's own drawing
+#endif
     realWeatherCheck();
     if (g_firstApplyDone) altitudeWatch();
     if (!g_loopStarted) {

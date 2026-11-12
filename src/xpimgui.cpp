@@ -385,13 +385,25 @@ void hide() {
     XPLMSetWindowIsVisible(g_win, 0);
 }
 
-void togglePopOut() {
-    if (!g_win) return;
+// Popping out and back in is only asked for here (the button is pressed while the window is being drawn); the change itself is
+// made by tick(), from the flight loop. Changing a window's positioning mode inside its own draw callback crashed X-Plane on
+// pop-in (a customer's Log.txt, 2026-11-12: the crash came right after X-Plane rebuilt the popped-out window's swapchain).
+bool g_popPending = false;
+void togglePopOut() { if (g_win) g_popPending = true; }
+
+void tick() {
+    if (!g_popPending || !g_win) return;
+    g_popPending = false;
+    if (g_ctx) {   // the click that pressed the button never gets its mouse-up in the old window: release it
+        ImGui::SetCurrentContext(g_ctx);
+        ImGui::GetIO().AddMouseButtonEvent(0, false);
+        ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+    }
     if (XPLMWindowIsPoppedOut(g_win)) {
         XPLMSetWindowPositioningMode(g_win, xplm_WindowPositionFree, -1);
         int sl, st, sr, sb;
         XPLMGetScreenBoundsGlobal(&sl, &st, &sr, &sb);
-        const int w = std::min(1240, sr - sl - 80), h = std::min(820, st - sb - 120);
+        const int w = std::max(400, std::min(1240, sr - sl - 80)), h = std::max(300, std::min(820, st - sb - 120));
         XPLMSetWindowGeometry(g_win, sl + 40, st - 70, sl + 40 + w, st - 70 - h);
     } else {
         XPLMSetWindowPositioningMode(g_win, xplm_WindowPopOut, -1);
