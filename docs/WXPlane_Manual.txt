@@ -154,6 +154,10 @@ MAP
     to swap true and magnetic. The °T / °M switch above the airport lists
     sets the lists (Overview and Airports tab together). ATIS winds are
     magnetic; METAR winds are true.
+  * Popups can be moved: drag a popup by its background. Two can be open
+    at once and they never touch.
+  * "TIME" (Zulu) is at the top left of the map; "Center on aircraft" and
+    North Lock / Heading Lock are at its top right.
   * Click the circle of an airport for its METAR, ATIS and surface wind,
     and a wind barb's staff or feathers for its decode (the selected barb
     turns amber). Barbs are blue, deeper the stronger the wind; a calm

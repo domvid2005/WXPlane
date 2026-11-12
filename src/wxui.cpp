@@ -111,7 +111,12 @@ std::string hhmm(std::time_t t) {
 // Column headers for tables that cannot be sorted: plain text, no hover highlight (only sortable headers react to the mouse)
 void plainHeaders() {
     ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-    for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) { ImGui::TableSetColumnIndex(c); ImGui::TextUnformatted(ImGui::TableGetColumnName(c)); }
+    for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) {   // the label only (an "###id" suffix keeps a column's identity, not shown)
+        ImGui::TableSetColumnIndex(c);
+        const char* n = ImGui::TableGetColumnName(c);
+        const char* id = n ? std::strstr(n, "##") : nullptr;
+        ImGui::TextUnformatted(n, id);
+    }
 }
 
 // Column widths from their widest expected text, so nothing is cut off at any UI scale (plus room for the sort arrow)
@@ -439,7 +444,7 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
         const float bw = ts.x + 14, bh = ts.y + 6, x0 = p.x + (size - bw) * 0.5f;
         ImDrawList* dl2 = ImGui::GetWindowDrawList();
         dl2->AddRectFilled(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), cInset, 4.0f);
-        dl2->AddRect(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), dialHeadingUp() ? cAccentDim : IM_COL32(58, 62, 70, 255), 4.0f);
+        dl2->AddRect(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), IM_COL32(58, 62, 70, 255), 4.0f);
         dl2->AddText(f.body, sfs, ImVec2(x0 + 7, q.y + 3), dialHeadingUp() ? IM_COL32(150, 195, 255, 255) : cSoft, mode);
         ImGui::InvisibleButton("dialmode", ImVec2(size, bh));
         if (ImGui::IsItemClicked()) dialHeadingUp() = !dialHeadingUp();
@@ -515,12 +520,14 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
             bool est = false;
             const double off = localOffsetAt(d, st.lat, st.lon, est);
             const std::string zn = zoneText(st.lat, st.lon, off, d.now);
-            ImGui::TableNextColumn(); field(f, "Local time", (est ? "~" : "") + clockText(d.now + (std::time_t)off, false) + " " + zn);
-            ImGui::TableNextColumn(); field(f, "Zulu", clockText(d.now, false) + "Z  UTC");
-            if (full) {   // the airport page: sunrise and sunset today (local)
+            if (full) {   // the airport page: local time and Zulu (the home page has them in the box below the card)
+                ImGui::TableNextColumn(); field(f, "Local time", (est ? "~" : "") + clockText(d.now + (std::time_t)off, false) + " " + zn);
+                ImGui::TableNextColumn(); field(f, "Zulu", clockText(d.now, false) + "Z  UTC");
+            }
+            {   // sunrise and sunset today (local; with Zulu on the airport page)
                 std::time_t rise = 0, set = 0;
                 const int sun = sunTimes(st.lat, st.lon, d.now + (std::time_t)off, rise, set);
-                auto loc = [&](std::time_t t) { return clockText(t + (std::time_t)off, false) + " " + zn + "  (" + clockText(t, false) + "Z)"; };
+                auto loc = [&](std::time_t t) { return clockText(t + (std::time_t)off, false) + " " + zn + (full ? "  (" + clockText(t, false) + "Z)" : std::string()); };
                 ImGui::TableNextColumn(); field(f, "Sunrise", sun > 0 ? loc(rise) : (sun == 0 ? std::string("sun up all day") : std::string("no sunrise today")));
                 ImGui::TableNextColumn(); field(f, "Sunset", sun > 0 ? loc(set) : (sun == 0 ? std::string("no sunset today") : std::string("sun down all day")));
             }
@@ -603,7 +610,8 @@ double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k
 // What is open in the radar page's info window: a pilot report, an airport or an advisory, identified by a key that survives the
 // lists being rebuilt at every update (text + time, the ICAO code, name + start time)
 // Up to two of them can be open at once (the oldest closes when a third is clicked), and they never overlap each other.
-struct SelItem { int kind = 0; std::string key; ImVec2 at; ImVec2 lastSize = ImVec2(300, 200); ImVec2 pos, size; bool shown = false; };   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
+struct SelItem { int kind = 0; std::string key; ImVec2 at; ImVec2 lastSize = ImVec2(300, 200); ImVec2 pos, size; bool shown = false;
+                 bool dragged = false, dragging = false; };   // dragged: moved by hand, it stays where it was put (inside the map, off the other window)   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
 struct MapSel { std::vector<SelItem> items; ImVec2 mapMin, mapMax; };
 MapSel& mapSel() { static MapSel s; return s; }
 SelItem* selFind(int kind, const std::string& key) { for (auto& it : mapSel().items) if (it.kind == kind && it.key == key) return &it; return nullptr; }
@@ -1066,29 +1074,64 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         const double cell = d.cfg ? d.cfg->radarCellNm : 6.0;
         const float step = std::max(4.0f, size / 120.0f);
         const int n = (int)std::ceil(size / step) + 1;
-        static std::vector<float> v;
-        v.assign((size_t)n * (size_t)n, 0.0f);
+        // Each echo block is spread as a soft square (a rounded superellipse, aligned with north like the radar's own grid) and
+        // neighbouring blocks are blended by weight rather than stacked as discs; then a fine-grained texture tied to the ground
+        // (it does not crawl when the map moves) breaks up the smooth blobs the way real reflectivity is speckled.
+        static std::vector<float> v, sw, swv;
+        v.assign((size_t)n * (size_t)n, 0.0f); sw.assign(v.size(), 0.0f); swv.assign(v.size(), 0.0f);
         bool any = false;
         for (const auto& k : d.res->radar.cells) {
             if (k.dbz < 10) continue;
             const double sz = k.natural && k.sizeNm > 0 ? k.sizeNm : cell;
-            const float r0 = std::max(1.5f, (float)(sz * 0.45 * px)), r1 = std::max(step * 1.2f, (float)(sz * 0.85 * px));
+            const float half = std::max(1.0f, (float)(sz * 0.5 * px)), r1 = std::max(step * 1.5f, half * 1.45f), r0 = half * 0.7f;
             const ImVec2 q = at(k.lat, k.lon);
-            if (!inside(q, r1)) continue;
+            if (!inside(q, r1 * 1.42f)) continue;
             const float dbz = k.synthetic ? k.dbz * 0.85f : k.dbz;
-            const int x0 = std::max(0, (int)std::floor((q.x - r1 - p.x) / step)), x1 = std::min(n - 1, (int)std::ceil((q.x + r1 - p.x) / step));
-            const int y0 = std::max(0, (int)std::floor((q.y - r1 - p.y) / step)), y1 = std::min(n - 1, (int)std::ceil((q.y + r1 - p.y) / step));
+            const float ext = r1 * 1.42f;
+            const int x0 = std::max(0, (int)std::floor((q.x - ext - p.x) / step)), x1 = std::min(n - 1, (int)std::ceil((q.x + ext - p.x) / step));
+            const int y0 = std::max(0, (int)std::floor((q.y - ext - p.y) / step)), y1 = std::min(n - 1, (int)std::ceil((q.y + ext - p.y) / step));
             for (int iy = y0; iy <= y1; ++iy)
                 for (int ix = x0; ix <= x1; ++ix) {
-                    const float dx = p.x + ix * step - q.x, dy = p.y + iy * step - q.y, dd = std::sqrt(dx * dx + dy * dy);
+                    const float sx = p.x + ix * step - q.x, sy = p.y + iy * step - q.y;
+                    const float gx = sx * cr + (-sy) * sr, gy = -sx * sr + (-sy) * cr;   // east / north of the block's centre
+                    const float ax = gx * gx, ay = gy * gy;
+                    const float dd = std::sqrt(std::sqrt(ax * ax + ay * ay));   // superellipse (p = 4): a square with rounded corners
                     if (dd >= r1) continue;
-                    const float t = dd <= r0 ? 1.0f : 1.0f - (dd - r0) / (r1 - r0);
-                    const float val = dbz * (0.55f + 0.45f * t * t * (3 - 2 * t)) * (dd <= r0 ? 1.0f : std::min(1.0f, t * 3.0f));
-                    float& g = v[(size_t)iy * n + ix];
-                    if (val > g) { g = val; any = true; }
+                    float t = dd <= r0 ? 1.0f : 1.0f - (dd - r0) / (r1 - r0);
+                    t = t * t * (3 - 2 * t);
+                    const size_t c = (size_t)iy * n + ix;
+                    sw[c] += t; swv[c] += t * dbz; any = true;
                 }
         }
+        const ImVec2 c0 = c;   // the map's centre on the screen
         if (any) {
+            // ground-tied value noise: two octaves, about 1.6 nm and 0.6 nm across
+            auto hash = [](int x, int y) { uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u; h = (h ^ (h >> 13)) * 1274126177u; return ((h ^ (h >> 16)) & 0xffff) / 65535.0f; };
+            auto vnoise = [&](double gx, double gy) {
+                const double fx = std::floor(gx), fy = std::floor(gy);
+                const int ix = (int)fx, iy = (int)fy;
+                float tx = (float)(gx - fx), ty = (float)(gy - fy);
+                tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+                const float a = hash(ix, iy), b = hash(ix + 1, iy), c2 = hash(ix, iy + 1), e = hash(ix + 1, iy + 1);
+                return (a + (b - a) * tx) + ((c2 + (e - c2) * tx) - (a + (b - a) * tx)) * ty;
+            };
+            for (int iy = 0; iy < n; ++iy)
+                for (int ix = 0; ix < n; ++ix) {
+                    const size_t c = (size_t)iy * n + ix;
+                    if (sw[c] <= 0) continue;
+                    const float cov = std::min(1.0f, sw[c]);
+                    float val = swv[c] / sw[c];
+                    // the ground position of this grid point (inverse of at()), in nm east / north of the map's centre
+                    const float X = ix * step + p.x - c0.x, Yp = c0.y - (iy * step + p.y);
+                    const double ex = (X * cr + Yp * sr) / px, ny = (-X * sr + Yp * cr) / px;
+                    const double gx = (cLon * 60.0 * kx + ex), gy = (cLat * 60.0 + ny);
+                    const float nz = 0.65f * (vnoise(gx / 1.6, gy / 1.6) - 0.5f) + 0.35f * (vnoise(gx / 0.6 + 17.3, gy / 0.6 - 4.1) - 0.5f);
+                    val += nz * 9.0f * cov;
+                    // the edge: weak and ragged where the coverage runs out
+                    val *= 0.55f + 0.45f * cov;
+                    if (cov < 0.6f) val -= (0.6f - cov) * 18.0f * (0.6f + nz);
+                    v[c] = val;
+                }
             // the NWS-like colour ramp, see-through at its weak end
             auto ramp = [](float z) {
                 static const float st[][5] = {{10, 20, 150, 70, 0}, {15, 30, 165, 72, 95}, {22, 55, 190, 72, 170}, {32, 235, 215, 60, 195},
@@ -1249,13 +1292,28 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
     dl->AddTriangleFilled(ImVec2(ac.x + dir.x * 10, ac.y + dir.y * 10), ImVec2(ac.x - dir.x * 7 + n.x * 6, ac.y - dir.y * 7 + n.y * 6),
                           ImVec2(ac.x - dir.x * 7 - n.x * 6, ac.y - dir.y * 7 - n.y * 6), IM_COL32(255, 255, 255, 255));
-    if (interactive) {   // the time, top left of the Map tab's map
-        const std::string z = clockText(d.now, false) + "Z";
-        const ImVec2 ts = ImGui::CalcTextSize(z.c_str());
-        const ImVec2 b0(p.x + 8, p.y + 8), b1(p.x + 8 + ts.x + 12, p.y + 8 + ts.y + 6);
-        dl->AddRectFilled(b0, b1, IM_COL32(20, 22, 26, 220), 4.0f);
-        dl->AddRect(b0, b1, IM_COL32(60, 64, 72, 255), 4.0f);
-        dl->AddText(ImVec2(b0.x + 6, b0.y + 3), cSoft, z.c_str());
+    // bubbles on the Map tab's map: the time (top left), Center on aircraft and North / Heading Lock (top right, clickable)
+    int bubbleHit = 0;   // 1 center, 2 lock
+    if (interactive) {
+        auto bubble = [&](ImVec2 b0, const char* label, const char* text, bool active, bool dim) {
+            const ImVec2 ls = label ? ImGui::CalcTextSize(label) : ImVec2(0, 0), ts = ImGui::CalcTextSize(text);
+            const float lw = label ? ls.x * 0.82f + 6 : 0;
+            const ImVec2 b1(b0.x + lw + ts.x + 12, b0.y + ts.y + 6);
+            const bool hov = !dim && mouse.x >= b0.x && mouse.x <= b1.x && mouse.y >= b0.y && mouse.y <= b1.y;
+            dl->AddRectFilled(b0, b1, hov ? IM_COL32(34, 38, 46, 235) : IM_COL32(20, 22, 26, 220), 4.0f);
+            dl->AddRect(b0, b1, active ? IM_COL32(90, 96, 106, 255) : IM_COL32(60, 64, 72, 255), 4.0f);
+            if (label) dl->AddText(f.bold, ImGui::GetFontSize() * 0.82f, ImVec2(b0.x + 6, b0.y + 3 + ts.y * 0.09f), cIdle, label);
+            dl->AddText(ImVec2(b0.x + 6 + lw, b0.y + 3), dim ? cIdle : cSoft, text);
+            return std::make_pair(hov, b1.x - b0.x);
+        };
+        bubble(ImVec2(p.x + 8, p.y + 8), "TIME", (clockText(d.now, false) + "Z").c_str(), false, false);
+        const char* lk = dialHeadingUp() ? "Heading Lock" : "North Lock";
+        const char* ce = "Center on aircraft";
+        const float wl = ImGui::CalcTextSize(lk).x + 12, wc = ImGui::CalcTextSize(ce).x + 12;
+        const bool panned = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
+        if (bubble(ImVec2(p.x + size - 8 - wl, p.y + 8), nullptr, lk, dialHeadingUp(), false).first) bubbleHit = 2;
+        if (bubble(ImVec2(p.x + size - 8 - wl - 6 - wc, p.y + 8), nullptr, ce, false, !panned).first && panned) bubbleHit = 1;
+        if (bubbleHit) { hitKind = 0; }
     }
     dl->PopClipRect();
     ImGui::InvisibleButton("radarclick", ImVec2(size, size));
@@ -1277,7 +1335,10 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             mapPan().y -= -sx * sr + sy * cr;
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         } else if (hov && hitKind) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        if (ImGui::IsItemDeactivated() && !dragged && hov) {
+        if (bubbleHit && hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (ImGui::IsItemDeactivated() && !dragged && hov && bubbleHit) {   // a bubble: re-centre, or switch North / Heading Lock
+            if (bubbleHit == 1) recentering() = true; else dialHeadingUp() = !dialHeadingUp();
+        } else if (ImGui::IsItemDeactivated() && !dragged && hov) {
             if (hitKind) selOpen(hitKind, hitKey, hitAt);   // a second window opens next to the first (two at most)
             else mapSel().items.clear();
         }
@@ -1301,6 +1362,25 @@ std::string levelText(double ft) { return ft < 0 ? std::string("?") : (ft == 0 ?
 
 // One info window. `other`: the rectangle of the window already placed this frame (none: zero size), which this one must not
 // overlap; `otherPt`: that window's point, kept clear too. Returns false when there is no room for it beside the other.
+// A dragged window, kept inside the map and pushed off the other window (with a gap) by the shortest way that stays inside
+ImVec2 keepClear(ImVec2 pos, ImVec2 sz, ImVec2 mn, ImVec2 mx, ImVec2 oMin, ImVec2 oMax) {
+    auto clampIn = [&](ImVec2 q) { return ImVec2(std::max(mn.x + 4, std::min(q.x, mx.x - 4 - sz.x)), std::max(mn.y + 4, std::min(q.y, mx.y - 4 - sz.y))); };
+    pos = clampIn(pos);
+    if (!(oMax.x > oMin.x)) return pos;
+    const float g = 8;
+    auto hits = [&](ImVec2 q) { return q.x < oMax.x + g && q.x + sz.x > oMin.x - g && q.y < oMax.y + g && q.y + sz.y > oMin.y - g; };
+    if (!hits(pos)) return pos;
+    const ImVec2 opts[4] = {ImVec2(oMin.x - g - sz.x, pos.y), ImVec2(oMax.x + g, pos.y), ImVec2(pos.x, oMin.y - g - sz.y), ImVec2(pos.x, oMax.y + g)};
+    ImVec2 best = pos; float bestD = 1e30f;
+    for (const ImVec2& o : opts) {
+        const ImVec2 c = clampIn(o);
+        if (hits(c)) continue;
+        const float dd = std::fabs(c.x - pos.x) + std::fabs(c.y - pos.y);
+        if (dd < bestD) { bestD = dd; best = c; }
+    }
+    return best;
+}
+
 bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 otherMin, ImVec2 otherMax, ImVec2 otherPt) {
     const hz::Pirep* p = nullptr; const Station* st = nullptr; const hz::Advisory* av = nullptr;
     if (sel.kind == 1 && d.reports && showPireps()) for (const auto& q : d.reports->pireps) if (pirepKey(q) == sel.key) p = &q;
@@ -1309,7 +1389,12 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
     const WindPt* wp = nullptr;
     if (sel.kind == 4 && showWinds()) for (const auto& q : windPts()) if (q.key == sel.key) wp = &q;
     if (!p && !st && !av && !wp) { sel.kind = 0; return true; }
-    {   // inside the map, clear of its own point (and the other window's point) and never over the other window: tries right of the
+    if (sel.dragged) {   // put somewhere by hand: it stays there (inside the map, never touching the other window)
+        const MapSel& ms = mapSel();
+        sel.pos = keepClear(sel.pos, sel.lastSize, ms.mapMin, ms.mapMax, otherMin, otherMax);
+        ImGui::SetNextWindowPos(sel.pos);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, ms.mapMax.x - ms.mapMin.x - 8), std::max(120.0f, ms.mapMax.y - ms.mapMin.y - 8)));
+    } else {   // inside the map, clear of its own point (and the other window's point) and never over the other window: tries right of the
         // point, left, below, above, then beside the other window and in the map's corners; the first spot that fits wins, else
         // the one that covers the points least. No spot clear of the other window: false (the caller closes the older window).
         const MapSel& ms = mapSel();
@@ -1348,6 +1433,15 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
     const ImGuiWindowFlags fl = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     if (ImGui::Begin(("##mapinfo" + std::to_string(sel.kind) + sel.key).c_str(), nullptr, fl)) {
+        // dragged by its background (not by its buttons): it follows the mouse, and keeps that place afterwards
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) sel.dragging = true;
+        if (sel.dragging) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                const ImVec2 dlt = ImGui::GetIO().MouseDelta;
+                if (dlt.x != 0 || dlt.y != 0) { sel.pos.x += dlt.x; sel.pos.y += dlt.y; sel.dragged = true; }
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            } else sel.dragging = false;
+        }
         auto title = [&](const std::string& t, ImU32 col) {   // the close button top left, then the title
             if (ImGui::SmallButton("x")) sel.kind = 0;
             ImGui::SameLine(0, 10);
@@ -1430,9 +1524,12 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
                 ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); muted("Wind"); ImGui::TableSetColumnIndex(1);
                 if (kt < 2.5f) ImGui::TextUnformatted("calm");
                 else {
-                    ImGui::Text("%03.0f°T / %.0f kt%s", dir, kt, wp->gustKt > kt + 1 ? fmt(" G%.0f", wp->gustKt).c_str() : "");
+                    // true or magnetic, swapped (with the airports' cards and popups) by a click on the small box
+                    const bool mag = cardWindMagnetic();
+                    const int dm = toMagnetic(dir, magVar(d, wp->lat, wp->lon)), dt = (int)std::lround(dir) == 0 ? 360 : (int)std::lround(dir);
+                    ImGui::Text(mag ? "%03d°M / %.0f kt%s" : "%03d°T / %.0f kt%s", mag ? dm : dt, kt, wp->gustKt > kt + 1 ? fmt(" G%.0f", wp->gustKt).c_str() : "");
                     ImGui::SameLine(0, 8);
-                    magBox(fmt("%03d°M", toMagnetic(dir, magVar(d, wp->lat, wp->lon))).c_str());
+                    if (magBox(fmt(mag ? "%03d°T" : "%03d°M", mag ? dt : dm).c_str(), IM_COL32(196, 200, 207, 255), true)) cardWindMagnetic() = !mag;
                 }
                 int pn = 0, fu = 0, ha = 0;
                 barbCounts(kt, pn, fu, ha);
@@ -1484,11 +1581,16 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
 void infoWindow(const UiData& d, const UiFonts& f) {
     auto& v = mapSel().items;
     if (v.empty()) return;
-    if (!infoWindowOne(d, f, v[0], ImVec2(0, 0), ImVec2(0, 0), v.size() > 1 ? v[1].at : ImVec2(-1e6f, -1e6f))) v[0].kind = 0;   // clear of both points
+    // the older one is placed first; dragged by hand, it also keeps off the newer one (where that was last frame)
+    const bool second = v.size() > 1 && v[1].shown;
+    const ImVec2 n0 = v[0].dragged && second ? v[1].pos : ImVec2(0, 0), n1 = v[0].dragged && second ? ImVec2(v[1].pos.x + v[1].lastSize.x, v[1].pos.y + v[1].lastSize.y) : ImVec2(0, 0);
+    if (!infoWindowOne(d, f, v[0], n0, n1, v.size() > 1 ? v[1].at : ImVec2(-1e6f, -1e6f))) v[0].kind = 0;   // clear of both points
+    v[0].shown = v[0].kind != 0;
     if (v.size() > 1) {
         const bool firstUp = v[0].kind != 0;
         const ImVec2 o0 = firstUp ? v[0].pos : ImVec2(0, 0), o1 = firstUp ? ImVec2(v[0].pos.x + v[0].lastSize.x, v[0].pos.y + v[0].lastSize.y) : ImVec2(0, 0);
-        if (!infoWindowOne(d, f, v[1], o0, o1, firstUp ? v[0].at : ImVec2(-1e6f, -1e6f))) { v[0].kind = 0; }   // no room beside it: the older one makes way
+        if (!infoWindowOne(d, f, v[1], o0, o1, firstUp ? v[0].at : ImVec2(-1e6f, -1e6f))) { v[0].kind = 0; v[1].shown = false; }   // no room beside it: the older one makes way
+        else v[1].shown = v[1].kind != 0;
     }
     v.erase(std::remove_if(v.begin(), v.end(), [](const SelItem& it) { return it.kind == 0; }), v.end());
 }
@@ -1580,15 +1682,7 @@ void layerButtons(bool lockButton) {
     toggleButton("AIRMET", showAirmets());
     wrapBefore("SIGMET", 4);
     toggleButton("SIGMET", showSigmets());
-    if (lockButton) {   // the Map tab: re-centre after dragging, and (it has no wind dial) the North / Airplane Heading Lock switch
-        wrapBefore("Center on aircraft", 12);
-        const bool off = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
-        if (!off) ImGui::BeginDisabled();
-        if (ImGui::SmallButton("Center on aircraft")) recentering() = true;
-        if (!off) ImGui::EndDisabled();
-        wrapBefore("Heading Lock", 4);
-        if (ImGui::SmallButton(dialHeadingUp() ? "Heading Lock###lock" : "North Lock###lock")) dialHeadingUp() = !dialHeadingUp();
-    }
+    (void)lockButton;   // Center on aircraft and North / Heading Lock are bubbles on the map itself (radarCanvas)
 }
 
 // The range: the mouse wheel over the map, or these buttons (VR, no wheel)
@@ -1680,6 +1774,44 @@ void radarPanel(const UiData& d, const UiFonts& f, bool big) {
         statBox(f, "40+ dBZ", r.ok ? fmt("%d", cb) : std::string("—"), "", bw);
         ImGui::SameLine(0, 8);
         statBox(f, "Nearest echo", nearest < 0 ? std::string("—") : fmt("%.0f nm", nearest), "", bw);
+        // every pilot report, nearest first, in the space left under the map (scrolls like the airport list)
+        ImGui::Spacing();
+        sectionTitle(f, "Pilot reports");
+        if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", d.reports->pireps.size()).c_str()); }
+        const float lh = ImGui::GetContentRegionAvail().y - 4;
+        if (!d.reports || d.reports->pireps.empty()) mutedWrapped("No pilot reports in the last 90 minutes.");
+        else if (lh > 40 && ImGui::BeginTable("homepireps", 6, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX, ImVec2(0, lh))) {
+            ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"));
+            ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, textColW("FL000"));
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, textColW("UUA"));
+            ImGui::TableSetupColumn("Turb.", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Acft", ImGuiTableColumnFlags_WidthFixed, textColW("B77W"));
+            ImGui::TableSetupColumn("Age", ImGuiTableColumnFlags_WidthFixed, textColW("00 min"));
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
+            plainHeaders();
+            ImGui::PopStyleColor();
+            std::vector<const hz::Pirep*> v;
+            for (const auto& q : d.reports->pireps) v.push_back(&q);
+            auto dd = [&](const hz::Pirep* q) { return d.havePos ? distNm(d.lat, d.lon, q->lat, q->lon) : 0.0; };
+            std::sort(v.begin(), v.end(), [&](const hz::Pirep* x, const hz::Pirep* y) { return dd(x) < dd(y); });
+            for (const hz::Pirep* q : v) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); ImGui::Text("%.0f", dd(q));
+                ImGui::TableSetColumnIndex(1); if (q->altFt > 0) ImGui::Text("FL%03.0f", q->altFt / 100.0); else muted("—");
+                ImGui::TableSetColumnIndex(2);
+                ImGui::PushStyleColor(ImGuiCol_Text, v4(q->urgent ? IM_COL32(235, 64, 64, 255) : IM_COL32(240, 150, 40, 255)));
+                ImGui::TextUnformatted(q->urgent ? "UUA" : (q->kind == "AIREP" ? "ARP" : "UA"));
+                ImGui::PopStyleColor();
+                ImGui::TableSetColumnIndex(3);
+                const double e = hz::edrForIntensity(q->intensity, q->acType);
+                if (q->intensity.empty()) muted(q->llws ? "LLWS" : (q->icing.empty() ? "—" : ("ice " + q->icing).c_str()));
+                else { ImGui::PushStyleColor(ImGuiCol_Text, v4(e >= 0.22 ? cWarn : (e > 0 ? cSoft : cMuted))); ImGui::TextUnformatted((q->intensity + (q->tbType.empty() ? "" : " " + q->tbType)).c_str()); ImGui::PopStyleColor(); }
+                ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(q->acType.empty() ? "—" : q->acType.c_str());
+                ImGui::TableSetColumnIndex(5); if (q->obsTime > 0) ImGui::Text("%ld min", (long)((d.now - q->obsTime) / 60)); else muted("—");
+            }
+            ImGui::EndTable();
+        }
     }
 }
 
@@ -1741,8 +1873,11 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
     if (!ImGui::BeginTable("aloft", 7, fl)) return;
     ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, textColW("00000 ft"));
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 18);
-    ImGui::TableSetupColumn("Wind °T", ImGuiTableColumnFlags_WidthFixed, textColW("Wind °T  "));
-    ImGui::TableSetupColumn("°M", ImGuiTableColumnFlags_WidthFixed, textColW("000°M") + 10);
+    // winds in degrees true or magnetic: a click on a row's wind (or its small box) swaps them for the whole table
+    static bool aloftMag = false;
+    bool flipMag = false;
+    ImGui::TableSetupColumn(aloftMag ? "Wind °M###w" : "Wind °T###w", ImGuiTableColumnFlags_WidthFixed, textColW("Wind °T  "));
+    ImGui::TableSetupColumn(aloftMag ? "°T###b" : "°M###b", ImGuiTableColumnFlags_WidthFixed, textColW("000°M") + 10);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Temp", ImGuiTableColumnFlags_WidthFixed, textColW("-00°"));
     ImGui::TableSetupColumn("ISA", ImGuiTableColumnFlags_WidthFixed, textColW("ISA +00"));
@@ -1766,14 +1901,24 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0); ImGui::PushFont(f.bold); ImGui::Text(r.ft >= 18000 ? "FL%03.0f" : "%.0f ft", r.ft >= 18000 ? r.ft / 100.0f : r.ft); ImGui::PopFont();
         ImGui::TableSetColumnIndex(1); windArrow(r.dir, 16);
-        ImGui::TableSetColumnIndex(2); ImGui::Text("%03.0f/%.0f", r.dir, r.kt);
-        ImGui::TableSetColumnIndex(3); magBox(fmt("%03d°M", toMagnetic(r.dir, magVar(d, d.lat, d.lon))).c_str(), cMuted);
+        {
+            const int dT = (int)std::lround(r.dir) % 360 == 0 ? 360 : (int)std::lround(r.dir) % 360, dM = toMagnetic(r.dir, magVar(d, d.lat, d.lon));
+            ImGui::TableSetColumnIndex(2);
+            ImGui::PushID(i);
+            const std::string w = fmt("%03d/%.0f", aloftMag ? dM : dT, r.kt);
+            if (ImGui::Selectable(w.c_str(), false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(w.c_str()).x, 0))) flipMag = true;
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::TableSetColumnIndex(3);
+            if (magBox(fmt(aloftMag ? "%03d°T" : "%03d°M", aloftMag ? dT : dM).c_str(), cMuted, true)) flipMag = true;
+            ImGui::PopID();
+        }
         ImGui::TableSetColumnIndex(4); speedBar(r.kt, maxKt);
         ImGui::TableSetColumnIndex(5); if (r.hasT) ImGui::Text("%.0f°", r.tempC); else muted("—");
         ImGui::TableSetColumnIndex(6);
         if (r.hasT) { const float dev = r.tempC - isaTempC(r.ft * 0.3048f); ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); const long dv = std::lround(dev); if (dv == 0) ImGui::TextUnformatted("ISA 0"); else ImGui::Text("ISA %+ld", dv); ImGui::PopStyleColor(); }
     }
     ImGui::EndTable();
+    if (flipMag) aloftMag = !aloftMag;
 }
 
 std::string turbWord(double edr) {
@@ -1813,9 +1958,12 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
     if (!slider && d.cfg && !d.cfg->realisticTurbulence && !d.cfg->windshear) {   // the home page with both off: say where to switch them on
         const ImVec2 av = ImGui::GetContentRegionAvail();
         const char* t = "Turbulence/Windshear Disabled in Settings.";
+        ImGui::PushFont(f.title);
         const ImVec2 ts = ImGui::CalcTextSize(t);
         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.0f, (av.x - ts.x) * 0.5f), ImGui::GetCursorPosY() + std::max(0.0f, (av.y - ts.y) * 0.4f)));
-        muted(t);
+        if (ts.x > av.x) { ImGui::PushTextWrapPos(0); ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted)); ImGui::TextWrapped("%s", t); ImGui::PopStyleColor(); ImGui::PopTextWrapPos(); }
+        else muted(t);
+        ImGui::PopFont();
         return;
     }
     if (!d.turbData.empty()) { ImGui::SameLine(); muted(d.turbData.c_str()); }
@@ -2003,11 +2151,25 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     ImGui::SameLine(0, gap);
     ImGui::BeginGroup();
     const float rowH = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
-    const float aloftH = std::min(bodyH - 230.0f, 24.0f + 12.0f + ImGui::GetTextLineHeightWithSpacing() + rowH * 10.0f + 20.0f);   // title, header, 8 levels, tropopause
+    // the turbulence card just fits its three rows; winds & temps aloft takes the rest, with as many levels as fit
+    const float turbH = 3.0f * (ImGui::GetFrameHeight() + 22.0f + ImGui::GetStyle().ItemSpacing.y) + ImGui::GetTextLineHeightWithSpacing() + 34.0f;
+    const float aloftH = std::max(160.0f, bodyH - turbH - gap);
     if (panelBegin("aloft", ImVec2(col3, aloftH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
         sectionTitle(f, "Winds & temps aloft");
         ImGui::SameLine(); muted("GFS");
-        aloftTable(d, f, {5000, 10000, 18000, 24000, 30000, 34000, 39000, 45000}, false);
+        const int fit = std::max(4, (int)((ImGui::GetContentRegionAvail().y - 6) / rowH) - 2);   // header and tropopause rows
+        static const float kAll[] = {3000, 5000, 7000, 10000, 12000, 15000, 18000, 21000, 24000, 27000, 30000, 32000, 34000, 36000, 39000, 41000, 45000, 50000};
+        static const int kPick[][18] = {{1, 3, 6, 8, 10, 12, 14, 16}, {1, 3, 6, 8, 10, 12, 14, 15, 16}, {0, 1, 3, 6, 8, 10, 12, 14, 15, 16},
+                                        {0, 1, 3, 5, 6, 8, 10, 12, 14, 15, 16}, {0, 1, 3, 5, 6, 8, 10, 11, 12, 14, 15, 16},
+                                        {0, 1, 2, 3, 5, 6, 8, 10, 11, 12, 14, 15, 16}, {0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 14, 15, 16},
+                                        {0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16}, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16},
+                                        {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}};
+        static const int kLen[] = {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18};
+        int row = 0;
+        for (int k = 0; k < 11; ++k) if (kLen[k] <= fit) row = k;
+        std::vector<float> lv;
+        for (int i = 0; i < kLen[row]; ++i) lv.push_back(kAll[kPick[row][i]]);
+        aloftTable(d, f, lv, false);
     }
     panelEnd();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + gap);   // exactly `gap` between stacked panels, so every column ends level
@@ -2592,7 +2754,11 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             if (vis < 0) vis = want ? 1.0f : 0.0f;
             vis = want ? std::min(1.0f, vis + ImGui::GetIO().DeltaTime * 4.0f) : std::max(0.0f, vis - ImGui::GetIO().DeltaTime * 4.0f);
             if (vis > 0.0f) {
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * vis);
+                // the tab narrows as it fades (and widens as it comes back), so the tabs after it slide over instead of jumping
+                const float full = ImGui::CalcTextSize("Turbulence").x + 2 * ImGui::GetStyle().FramePadding.x;
+                const float e = vis * vis * (3 - 2 * vis);
+                if (vis < 1.0f) ImGui::SetNextItemWidth(std::max(1.0f, full * e));
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * e);
                 const bool open = ImGui::BeginTabItem("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
                 ImGui::PopStyleVar();
                 if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
