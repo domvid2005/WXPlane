@@ -120,9 +120,9 @@ Overview, Map, Airports, Winds & Temps, Turbulence, Services, Settings. The user
 * **Overview** - the nearest airport decoded, the wind dial (click: North Lock / Airplane Heading Lock, with H/T and crosswind
   components in the middle), nearby airports, a map with the Map tab's layers, winds and temperatures aloft, turbulence and windshear
   (risk coloured white to red). It never scrolls.
-* **Map** - eased zoom 1-320 nm (mouse wheel, - / +), drag to pan, "Center on aircraft", North Lock / Heading Lock button. Layers:
+* **Map** - eased zoom 1-320 nm (mouse wheel, - / +), drag to pan (a small + marks the centre, and the LOCAL time bubble follows it), "Center on aircraft", North Lock / Heading Lock button. Layers:
   Radar, Map (Natural Earth, embedded), Airports (click for METAR/ATIS), Turb (12 nm grid), Winds (barbs from FD stations and GFS
-  points, click to decode), Clouds (the records sent to X-Plane, outlined, darker grey for deeper layers), PIREPs (UUA red, UA
+  points, click to decode), Clouds (the records sent to X-Plane, outlined, darker grey for deeper layers), Time Zone (the zone boundaries, dashed; local time away from the aircraft comes from the same Natural Earth zones plus US/Canada, European, Australian and New Zealand daylight time), PIREPs (UUA red, UA
   orange, click for details), AIRMET (G-AIRMETs) and SIGMET (SIGMETs, international and convective), coloured by hazard and clickable;
   info windows stay inside the map and off the point clicked. Turb, Winds and Clouds are drawn at the altitude slider beside the
   map (ACFT follows the aircraft, SFC shows airport winds and the lowest clouds, clicking either again returns to the chosen level; greyed out without those layers); barbs, clouds and turbulence change smoothly with it. Radar echoes are a smoothed reflectivity field, not dots. Winds show °T with the magnetic direction (°M) boxed beside them. Titled "Map · US" (MRMS) or "Map · Europe" (OPERA). The strongest cells are listed beside it.

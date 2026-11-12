@@ -58,5 +58,17 @@ inline void run() {
     // the US change days: 8 March 2026 (2:00 EST = 07:00Z) and 1 November 2026 (2:00 EDT = 06:00Z)
     CHECK(!usDst(utcOf(2026, 3, 8, 6), -5) && usDst(utcOf(2026, 3, 8, 7), -5));
     CHECK(usDst(utcOf(2026, 11, 1, 5), -5) && !usDst(utcOf(2026, 11, 1, 6), -5));
+    // daylight time added to a standard offset (quarter hours) by place
+    const std::time_t jul1 = utcOf(2026, 7, 1, 12);
+    CHECK(dstShiftS(42.36, -71.0, -20, jul1) == 3600 && dstShiftS(42.36, -71.0, -20, nov12) == 0);   // Boston
+    CHECK(dstShiftS(33.4, -112.0, -28, jul1) == 0);    // Phoenix
+    CHECK(dstShiftS(21.3, -157.9, -40, jul1) == 0);    // Honolulu
+    CHECK(dstShiftS(19.4, -99.1, -24, jul1) == 0);     // Mexico City
+    CHECK(dstShiftS(25.8, -80.3, -20, jul1) == 3600);  // Miami
+    CHECK(dstShiftS(50.03, 8.57, 4, jul1) == 3600 && dstShiftS(55.75, 37.6, 12, jul1) == 0);   // Frankfurt, Moscow
+    CHECK(dstShiftS(-33.9, 151.2, 40, utcOf(2026, 1, 10, 0)) == 3600 && dstShiftS(-33.9, 151.2, 40, jul1) == 0);   // Sydney
+    CHECK(dstShiftS(-27.4, 153.0, 40, utcOf(2026, 1, 10, 0)) == 0);   // Brisbane
+    CHECK(dstShiftS(-37.0, 174.8, 48, utcOf(2026, 1, 10, 0)) == 3600);  // Auckland
+    CHECK(zoneName(-33.9, 151.2, 11 * 3600, utcOf(2026, 1, 10, 0)) == "AEDT");
 }
 } // namespace tsun

@@ -358,6 +358,18 @@ int main(int argc, char** argv) {
         std::printf("wrote %s\n", p.c_str());
     }
     d.forceAloftLayers = 0; d.forceMapAltFt = -1; d.forceMapMode = 1; d.forceLayers = 1; d.forcePirep = -1;
+    // the time zone lines, zoomed out and moved west of the aircraft: the + in the middle, local time there
+    d.forceAloftLayers = 4; d.forceRange = 8; d.forcePanEastNm = -420; d.forcePanNorthNm = 60; d.forceLocalTime = 1;
+    for (int fr = 0; fr < 40; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+    {
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        if (!writePng(cv, out + "/ui_map_tz.png")) return 1;
+        std::printf("wrote %s\n", (out + "/ui_map_tz.png").c_str());
+    }
+    d.forceAloftLayers = 0; d.forceRange = 6; d.forcePanEastNm = d.forcePanNorthNm = 0; d.forceLocalTime = 0;   // back to 80 nm, on the aircraft
+    for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+    d.forceLocalTime = -1; d.forceRange = -1;
     // a full reset: the countdown in the header
     d.loadingS = 83; d.loadingWhat = "Loading weather";
     for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 0 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }

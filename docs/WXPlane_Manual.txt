@@ -96,7 +96,9 @@ MAP
   A larger map around your aircraft.
   * Zoom with the mouse wheel or the - / + buttons: 1, 2, 5, 10, 20, 40, 80,
     160 and 320 nm. The zoom eases smoothly between steps.
-  * Drag to pan. "Center on aircraft" glides back to you.
+  * Drag to pan. "Center on aircraft" glides back to you. While the map is
+    moved off the aircraft a small dark + marks its centre, and the LOCAL
+    time bubble shows the local time at the +.
   * North Lock / Airplane Heading Lock button (the same as clicking the
     wind dial).
   * Layer buttons:
@@ -115,6 +117,8 @@ MAP
         Clouds    - the clouds WXPlane gave X-Plane at the slider's level,
                     outlined. Thin layers are light grey; the deeper the
                     layer, the darker the grey.
+        Time Zone - the time zone boundaries as dashed violet lines
+                    (Natural Earth time zones).
         PIREPs    - pilot reports as triangles: urgent (UUA) red, routine
                     (UA) orange. Click one for its time, aircraft, level,
                     turbulence, icing, sky, weather, temperature, wind and

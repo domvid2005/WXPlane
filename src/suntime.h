@@ -71,6 +71,39 @@ inline bool euDst(std::time_t utc) {
     return utc >= utcOf(y, 3, d1, 1) && utc < utcOf(y, 10, d2, 1);
 }
 
+// Southern hemisphere: south-east Australia (1st Sunday of October 2:00 standard to 1st Sunday of April 3:00 daylight time) and
+// New Zealand (last Sunday of September to 1st Sunday of April)
+inline bool auDst(std::time_t utc, double stdOffsetH, bool nz) {
+    const int y = yearOf(utc);
+    int d1 = 1; while (dayOfWeek(y, 10, d1) != 0) ++d1;
+    if (nz) { d1 = 30; while (dayOfWeek(y, 9, d1) != 0) --d1; }
+    int d2 = 1; while (dayOfWeek(y, 4, d2) != 0) ++d2;
+    const std::time_t on = utcOf(y, nz ? 9 : 10, d1, 2) - (std::time_t)(stdOffsetH * 3600), off = utcOf(y, 4, d2, 3) - (std::time_t)((stdOffsetH + 1) * 3600);
+    return utc >= on || utc < off;
+}
+
+// Daylight saving time added (seconds) to a place's standard UTC offset (in quarter hours) at a moment: the US and Canada,
+// Europe, south-east Australia and New Zealand (the places that do not change are left out: Hawaii, Arizona, Saskatchewan,
+// Mexico, Iceland, Russia, Turkey, Queensland, the Northern Territory, Western Australia ...); 0 elsewhere.
+inline double dstShiftS(double lat, double lon, int stdQ, std::time_t utc) {
+    if (lat > 14 && lon < -50 && lon > -180) {   // North America
+        if (stdQ < -36 || stdQ > -14) return 0;                                           // Hawaii
+        if (!(lat > 31.3 || (lon > -97.2 && lat > 24.3))) return 0;                        // Mexico, Central America, the Caribbean
+        if (stdQ == -28 && lat > 31 && lat < 37 && lon > -114.8 && lon < -109.0) return 0;  // Arizona
+        if (stdQ == -24 && lat > 49 && lat < 60 && lon > -110 && lon < -101.4) return 0;   // Saskatchewan
+        return usDst(utc, stdQ / 4.0) ? 3600 : 0;
+    }
+    if (lat > 35.9 && lat < 72 && lon > -32 && lon < 45) {   // Europe
+        if (stdQ != 0 && stdQ != 4 && stdQ != 8) return 0;                                 // Turkey, Belarus, Russia
+        if (lon < -13 && lat > 62) return 0;                                                // Iceland
+        if (stdQ == 8 && lat > 54.3 && lat < 55.4 && lon > 19.6 && lon < 22.9) return 0;   // Kaliningrad
+        return euDst(utc) ? 3600 : 0;
+    }
+    if (lat < -28.2 && lat > -44 && lon > 129 && lon < 154 && (stdQ == 40 || stdQ == 38)) return auDst(utc, stdQ / 4.0, false) ? 3600 : 0;
+    if (lat < -33 && lat > -48 && lon > 165 && lon < 179.9 && stdQ == 48) return auDst(utc, 12, true) ? 3600 : 0;
+    return 0;
+}
+
 // A time zone's usual name for a UTC offset at a place and moment (EST, CDT, GMT, BST, CET ...); "" where none is known (the
 // caller shows UTC+x). North America and Europe are named; Hawaii, Alaska, Atlantic, Newfoundland too.
 inline std::string zoneName(double lat, double lon, double offS, std::time_t utc) {
@@ -100,6 +133,14 @@ inline std::string zoneName(double lat, double lon, double offS, std::time_t utc
         if (q == 8) return dst ? "CEST" : "EET";
         if (q == 12) return dst && lon < 40 ? "EEST" : "MSK";
     }
+    if (lat < -10 && lat > -45 && lon > 112 && lon < 155) {   // Australia
+        if (q == 32) return "AWST";
+        if (q == 38) return "ACST";
+        if (q == 42) return "ACDT";
+        if (q == 40) return "AEST";
+        if (q == 44) return "AEDT";
+    }
+    if (lat < -33 && lat > -48 && lon > 165 && lon < 179.9) return q == 48 ? "NZST" : (q == 52 ? "NZDT" : "");
     return "";
 }
 

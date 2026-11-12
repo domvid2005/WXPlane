@@ -26,6 +26,7 @@ extern const unsigned char wx_font_plex_semibold[]; extern const unsigned int wx
 extern const unsigned char wx_font_plex_bold[]; extern const unsigned int wx_font_plex_bold_size;
 extern const unsigned char wx_font_mono[]; extern const unsigned int wx_font_mono_size;
 extern const unsigned char wx_font_basemap[]; extern const unsigned int wx_font_basemap_size;
+extern const unsigned char wx_font_tzones[]; extern const unsigned int wx_font_tzones_size;
 extern const unsigned char wx_font_logo[]; extern const unsigned int wx_font_logo_size;
 }
 
@@ -80,10 +81,15 @@ std::string fmt(const char* f, ...) {
     return b;
 }
 
-// Local time at a point: X-Plane's time zone near the aircraft (within 250 nm), else an estimate from the longitude (marked ~)
+bool tzStdQuarterHours(double lat, double lon, int& q);   // the time zone map (below)
+// Local time at a point: X-Plane's time zone near the aircraft (within 250 nm); else the time zone map's standard offset there
+// plus daylight time where it is kept (suntime.h); else, off the map, an estimate from the longitude (marked ~)
 double localOffsetAt(const UiData& d, double lat, double lon, bool& estimate) {
-    estimate = !(d.haveLocalOffset && (!d.havePos || distNm(d.lat, d.lon, lat, lon) < 250.0));
-    if (!estimate) return d.localOffsetS;
+    estimate = false;
+    if (d.haveLocalOffset && (!d.havePos || distNm(d.lat, d.lon, lat, lon) < 250.0)) return d.localOffsetS;
+    int q = 0;
+    if (tzStdQuarterHours(lat, lon, q)) return q * 900.0 + dstShiftS(lat, lon, q, d.now);
+    estimate = true;
     return std::round(lon / 15.0) * 3600.0;
 }
 std::string utcOffsetText(double offS) {
@@ -687,6 +693,79 @@ const std::vector<MapLine>& basemap() {
     return lines;
 }
 
+// The time zones (Natural Earth 1:10m, public domain; tools/make_tzones.py): the boundary lines for the map's "Time Zone" layer and
+// each zone's polygons with its standard UTC offset, for the local time at a point. Decoded once.
+struct TzZone { int q; float lo0, la0, lo1, la1; std::vector<std::vector<ImVec2>> rings; };   // q: quarter hours; points (lon, lat)
+struct TzData { std::vector<MapLine> lines; std::vector<TzZone> zones; };
+const TzData& tzData() {
+    static TzData t;
+    static bool done = false;
+    if (done) return t;
+    done = true;
+    const unsigned char* b = wx_font_tzones;
+    const size_t n = wx_font_tzones_size;
+    if (n < 12 || std::memcmp(b, "WXTZ", 4) != 0) return t;
+    size_t at = 8;
+    auto u32 = [&](uint32_t& v) { if (at + 4 > n) return false; v = (uint32_t)b[at] | ((uint32_t)b[at + 1] << 8) | ((uint32_t)b[at + 2] << 16) | ((uint32_t)b[at + 3] << 24); at += 4; return true; };
+    auto varint = [&](uint64_t& v) { v = 0; int sh = 0; while (at < n) { const unsigned char c = b[at++]; v |= (uint64_t)(c & 0x7F) << sh; if (!(c & 0x80)) return true; sh += 7; if (sh > 63) return false; } return false; };
+    auto points = [&](std::vector<ImVec2>& out, float& lo0, float& la0, float& lo1, float& la1) {
+        uint64_t np = 0;
+        if (!varint(np) || np > 1000000) return false;
+        out.reserve((size_t)np);
+        int64_t x = 0, y = 0;
+        for (uint64_t k = 0; k < np; ++k) {
+            uint64_t ux = 0, uy = 0;
+            if (!varint(ux) || !varint(uy)) return false;
+            x += (int64_t)(ux >> 1) ^ -(int64_t)(ux & 1);
+            y += (int64_t)(uy >> 1) ^ -(int64_t)(uy & 1);
+            const ImVec2 q((float)(x / 2000.0), (float)(y / 2000.0));
+            out.push_back(q);
+            lo0 = std::min(lo0, q.x); lo1 = std::max(lo1, q.x); la0 = std::min(la0, q.y); la1 = std::max(la1, q.y);
+        }
+        return true;
+    };
+    uint32_t nl = 0;
+    if (!u32(nl)) return t;
+    t.lines.reserve(nl);
+    for (uint32_t i = 0; i < nl; ++i) {
+        MapLine L; L.kind = 4; L.lo0 = L.la0 = 1e9f; L.lo1 = L.la1 = -1e9f;
+        if (!points(L.pts, L.lo0, L.la0, L.lo1, L.la1)) { t.lines.clear(); return t; }
+        t.lines.push_back(std::move(L));
+    }
+    uint32_t nz = 0;
+    if (!u32(nz)) return t;
+    for (uint32_t i = 0; i < nz && at < n; ++i) {
+        TzZone z; z.q = (int)(signed char)b[at++]; z.lo0 = z.la0 = 1e9f; z.lo1 = z.la1 = -1e9f;
+        uint64_t nr = 0;
+        if (!varint(nr) || nr > 100000) break;
+        z.rings.resize((size_t)nr);
+        bool ok = true;
+        for (auto& r : z.rings) if (!(ok = points(r, z.lo0, z.la0, z.lo1, z.la1))) break;
+        if (!ok) break;
+        t.zones.push_back(std::move(z));
+    }
+    return t;
+}
+// The standard UTC offset (quarter hours) of the time zone at a point; false off the map (the data has none there)
+bool tzStdQuarterHours(double lat, double lon, int& q) {
+    static double lastLat = 1e9, lastLon = 1e9; static int lastQ = 0; static bool lastOk = false;
+    if (std::fabs(lat - lastLat) < 0.002 && std::fabs(lon - lastLon) < 0.002) { q = lastQ; return lastOk; }   // the same point again
+    lastLat = lat; lastLon = lon; lastOk = false;
+    if (lon > 180) lon -= 360; else if (lon < -180) lon += 360;
+    const float x = (float)lon, y = (float)lat;
+    for (const TzZone& z : tzData().zones) {
+        if (x < z.lo0 || x > z.lo1 || y < z.la0 || y > z.la1) continue;
+        bool in = false;
+        for (const auto& r : z.rings)
+            for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
+                if ((r[i].y > y) != (r[j].y > y) && x < (r[j].x - r[i].x) * (y - r[i].y) / (r[j].y - r[i].y) + r[i].x) in = !in;
+        if (in) { lastQ = z.q; lastOk = true; break; }
+    }
+    q = lastQ;
+    return lastOk;
+}
+bool& showTimeZones() { static bool v = false; return v; }   // the map's "Time Zone" layer
+
 bool& showMap() { static bool v = true; return v; }
 bool& showTurb() { static bool v = false; return v; }
 bool& showPireps() { static bool v = false; return v; }
@@ -710,7 +789,8 @@ double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k
 // lists being rebuilt at every update (text + time, the ICAO code, name + start time)
 // Up to two of them can be open at once (the oldest closes when a third is clicked), and they never overlap each other.
 struct SelItem { int kind = 0; std::string key; ImVec2 at; ImVec2 lastSize = ImVec2(300, 200); ImVec2 pos, size; bool shown = false;
-                 bool dragged = false, dragging = false; };   // dragged: moved by hand, it stays where it was put (inside the map, off the other window)   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
+                 bool dragged = false, dragging = false;
+                 bool fixed = false; int frames = 0; };   // fixed: placed once (after it was measured), it stays on that spot   // dragged: moved by hand, it stays where it was put (inside the map, off the other window)   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
 struct MapSel { std::vector<SelItem> items; ImVec2 mapMin, mapMax; };
 MapSel& mapSel() { static MapSel s; return s; }
 SelItem* selFind(int kind, const std::string& key) { for (auto& it : mapSel().items) if (it.kind == kind && it.key == key) return &it; return nullptr; }
@@ -1088,6 +1168,34 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                 dl->AddPolyline(pts.data(), (int)pts.size(), kCol[L.kind & 3], ImDrawFlags_None, kW[L.kind & 3]);
             }
     }
+    if (showTimeZones()) {   // the time zone boundaries: dashed violet lines over the map
+        const double spanLat = rangeNm * 1.5 / 60.0, spanLon = spanLat / std::max(0.15, kx);
+        const float la0 = (float)(cLat - spanLat), la1 = (float)(cLat + spanLat), lo0 = (float)(cLon - spanLon), lo1 = (float)(cLon + spanLon);
+        const ImU32 col = IM_COL32(190, 140, 235, 200);
+        for (const MapLine& L : tzData().lines) {
+            if (L.lo1 < lo0 || L.lo0 > lo1 || L.la1 < la0 || L.la0 > la1) continue;
+            float run = 0;   // dashes 7 px on, 5 px off, continuing along the line
+            ImVec2 a = at(L.pts[0].y, L.pts[0].x);
+            for (size_t k = 1; k < L.pts.size(); ++k) {
+                const ImVec2 bq = at(L.pts[k].y, L.pts[k].x);
+                const float len = std::hypot(bq.x - a.x, bq.y - a.y);
+                if (len > size * 3) { a = bq; continue; }   // across the date line
+                if ((a.x < p.x && bq.x < p.x) || (a.y < p.y && bq.y < p.y) || (a.x > p.x + size && bq.x > p.x + size) || (a.y > p.y + size && bq.y > p.y + size)) {
+                    run += len; a = bq; continue;   // off the map: nothing to draw (the dashes keep their rhythm)
+                }
+                float s0 = 0;
+                while (s0 < len) {
+                    const float ph = std::fmod(run, 12.0f), step = std::min(len - s0, ph < 7 ? 7 - ph : 12 - ph);
+                    if (ph < 7) {
+                        const float t0 = s0 / std::max(len, 1e-3f), t1 = (s0 + step) / std::max(len, 1e-3f);
+                        dl->AddLine(ImVec2(a.x + (bq.x - a.x) * t0, a.y + (bq.y - a.y) * t0), ImVec2(a.x + (bq.x - a.x) * t1, a.y + (bq.y - a.y) * t1), col, 1.4f);
+                    }
+                    s0 += step; run += step;
+                }
+                a = bq;
+            }
+        }
+    }
     // clouds at the map's altitude: filled where a layer is (darker grey the deeper the layer), with its outline; drawn from the
     // grid's corners by marching squares, so the edges are smooth lines rather than steps
     if (showClouds() && d.clouds && d.clouds->nx > 1 && d.clouds->ny > 1) {
@@ -1409,10 +1517,19 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         return std::make_pair(hov, b1.x - b0.x);
     };
     if (interactive) {
-        {   // the time: Zulu, or (clicked: blue) local time where the aircraft is
+        const bool movedOff = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
+        if (movedOff && !recentering()) {   // the map moved off the aircraft: a small dark + marks its centre (the local time's place)
+            const float a = 6.0f;
+            dl->AddLine(ImVec2(c.x - a - 1, c.y), ImVec2(c.x + a + 1, c.y), IM_COL32(130, 136, 146, 110), 3.5f);
+            dl->AddLine(ImVec2(c.x, c.y - a - 1), ImVec2(c.x, c.y + a + 1), IM_COL32(130, 136, 146, 110), 3.5f);
+            dl->AddLine(ImVec2(c.x - a, c.y), ImVec2(c.x + a, c.y), IM_COL32(18, 20, 24, 255), 2.0f);
+            dl->AddLine(ImVec2(c.x, c.y - a), ImVec2(c.x, c.y + a), IM_COL32(18, 20, 24, 255), 2.0f);
+        }
+        {   // the time: Zulu, or (clicked: blue) local time at the aircraft, or at the + in the middle while the map is moved off it
             bool est = false;
-            const double off = localOffsetAt(d, d.lat, d.lon, est);
-            const std::string t = mapLocalTime() ? clockText(d.now + (std::time_t)off, false) + " " + (est ? "~" : "") + zoneText(d.lat, d.lon, off, d.now) : clockText(d.now, false) + "Z";
+            const double tLat = movedOff ? cLat : d.lat, tLon = movedOff ? cLon : d.lon;
+            const double off = localOffsetAt(d, tLat, tLon, est);
+            const std::string t = mapLocalTime() ? clockText(d.now + (std::time_t)off, false) + " " + (est ? "~" : "") + zoneText(tLat, tLon, off, d.now) : clockText(d.now, false) + "Z";
             if (bubble(ImVec2(p.x + 8, p.y + 8), mapLocalTime() ? "LOCAL" : "TIME", t.c_str(), mapLocalTime(), false).first) bubbleHit = 3;
         }
         const char* lk = dialHeadingUp() ? "Heading Lock" : "North Lock";
@@ -1519,7 +1636,8 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
         for (const Rect& o : others) if (cx < o.second.x + 4 && cx + sz.x > o.first.x - 4 && cy < o.second.y + 4 && cy + sz.y > o.first.y - 4) return true;
         return false;
     };
-    if (sel.dragged) {   // put somewhere by hand: it stays there (inside the map, pushed off every other window)
+    const bool measuring = !sel.dragged && !sel.fixed;   // its first frames: drawn unseen until its size settles, then placed once
+    if (sel.dragged || sel.fixed) {   // put somewhere by hand, or placed when it opened: it stays there (inside the map, off the others)
         ImVec2 q = keepClear(sel.pos, sz, mn, mx, ImVec2(0, 0), ImVec2(0, 0));   // inside the map always, other windows or not
         for (int pass = 0; pass < 3; ++pass) for (const Rect& o : others) q = keepClear(q, sz, mn, mx, o.first, o.second);
         if (overlapsAny(q.x, q.y)) return false;
@@ -1555,15 +1673,17 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
         }
         if (!found) return false;
         sel.pos = ImVec2(x, y);
+        if (++sel.frames >= 3) sel.fixed = true;
         ImGui::SetNextWindowPos(ImVec2(x, y));
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, mx.x - mn.x - 8), std::max(120.0f, mx.y - mn.y - 8)));
     }
     ImGui::SetNextWindowBgAlpha(0.97f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, measuring ? 0.0f : ImGui::GetStyle().Alpha);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, v4(IM_COL32(28, 30, 34, 255)));
     const ImGuiWindowFlags fl = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
-                                ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+                                ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | (measuring ? ImGuiWindowFlags_NoInputs : 0);
     if (ImGui::Begin(("##mapinfo" + std::to_string(sel.kind) + sel.key).c_str(), nullptr, fl)) {
         // dragged by its background (not by its buttons): it follows the mouse, and keeps that place afterwards
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) sel.dragging = true;
@@ -1704,19 +1824,19 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
     }
     ImGui::End();
     ImGui::PopStyleColor();
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(3);
     return true;
 }
 
 // The open info windows, as many as fit: placed oldest first, each clear of the windows already placed and of every window's point.
-// Windows dragged by hand are placed first (they keep their spot). When the newest finds no room, it does not open ("MAX AMOUNT
+// Windows already on their spot (placed once when they opened, or dragged by hand) go first and stay put. When the newest finds no room, it does not open ("MAX AMOUNT
 // OF POPUPS" shows over the map for a moment).
 void infoWindow(const UiData& d, const UiFonts& f) {
     auto& v = mapSel().items;
     if (v.empty()) return;
     std::vector<size_t> order;
-    for (size_t i = 0; i < v.size(); ++i) if (v[i].dragged) order.push_back(i);
-    for (size_t i = 0; i < v.size(); ++i) if (!v[i].dragged) order.push_back(i);
+    for (size_t i = 0; i < v.size(); ++i) if (v[i].dragged || v[i].fixed) order.push_back(i);   // the ones already on their spot first
+    for (size_t i = 0; i < v.size(); ++i) if (!v[i].dragged && !v[i].fixed) order.push_back(i);
     std::vector<Rect> placed;
     bool noRoom = false;
     for (size_t i : order) {
@@ -1814,6 +1934,8 @@ void layerButtons(bool lockButton) {
     toggleButton("Winds", showWinds());
     wrapBefore("Clouds", 4);
     toggleButton("Clouds", showClouds());
+    wrapBefore("Time Zone", 4);
+    toggleButton("Time Zone", showTimeZones());
     wrapBefore("PIREPs", 4);
     toggleButton("PIREPs", showPireps());
     wrapBefore("AIRMET", 4);
@@ -2370,8 +2492,14 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
 
 // The tabs along the top: a little larger (padding, the bold font) and clearer than ImGui's defaults
 ImFont*& tabFont() { static ImFont* f = nullptr; return f; }
+ImFont*& tabFontBig() { static ImFont* f = nullptr; return f; }   // the semibold face a size up (loaded with the others)
+const ImVec2 kTabPad(17, 9);
+float tabWidth(const char* label) {
+    ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
+    return tf->CalcTextSizeA(tf->FontSize, FLT_MAX, 0.0f, label).x + 2 * kTabPad.x;
+}
 bool bigTab(const char* label, bool* open, ImGuiTabItemFlags flags) {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 7));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, kTabPad);
     if (tabFont()) ImGui::PushFont(tabFont());
     const bool r = ImGui::BeginTabItem(label, open, flags);
     if (tabFont()) ImGui::PopFont();
@@ -2827,9 +2955,9 @@ void uiStyle() {
     c[ImGuiCol_Header] = v4(IM_COL32(43, 69, 102, 160));
     c[ImGuiCol_HeaderHovered] = v4(IM_COL32(52, 82, 120, 180));
     c[ImGuiCol_HeaderActive] = v4(IM_COL32(60, 96, 140, 200));
-    c[ImGuiCol_Tab] = v4(IM_COL32(32, 34, 40, 255));
-    c[ImGuiCol_TabHovered] = v4(IM_COL32(52, 58, 70, 255));
-    c[ImGuiCol_TabSelected] = v4(IM_COL32(40, 52, 72, 255));
+    c[ImGuiCol_Tab] = v4(IM_COL32(40, 44, 52, 255));            // the tabs stand out from the background
+    c[ImGuiCol_TabHovered] = v4(IM_COL32(60, 68, 84, 255));
+    c[ImGuiCol_TabSelected] = v4(IM_COL32(46, 64, 94, 255));
     c[ImGuiCol_TabSelectedOverline] = v4(cAccent);
     c[ImGuiCol_TabDimmed] = v4(IM_COL32(19, 20, 23, 255));
     c[ImGuiCol_TabDimmedSelected] = v4(cBg);
@@ -2869,6 +2997,7 @@ UiFonts uiLoadFonts(float pixelScale) {
     f.bold = io.Fonts->AddFontFromMemoryTTF((void*)wx_font_plex_semibold, (int)wx_font_plex_semibold_size, 14.5f * s, &cfg, ranges);
     f.title = io.Fonts->AddFontFromMemoryTTF((void*)wx_font_plex_bold, (int)wx_font_plex_bold_size, 20.0f * s, &cfg, ranges);
     f.mono = io.Fonts->AddFontFromMemoryTTF((void*)wx_font_mono, (int)wx_font_mono_size, 13.0f * s, &cfg, ranges);
+    tabFontBig() = io.Fonts->AddFontFromMemoryTTF((void*)wx_font_plex_semibold, (int)wx_font_plex_semibold_size, 16.0f * s, &cfg, ranges);
     io.FontDefault = f.body;
     io.FontGlobalScale = 1.0f / s;
     return f;
@@ -2884,7 +3013,9 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     if (d.forceLayers >= 0) { showMap() = (d.forceLayers & 1) != 0; showTurb() = (d.forceLayers & 2) != 0; showPireps() = (d.forceLayers & 4) != 0; }
     if (d.forceDial >= 0) dialHeadingUp() = d.forceDial == 1;
     if (d.forceAdv >= 0) showAirmets() = showSigmets() = d.forceAdv == 1;
-    if (d.forceAloftLayers >= 0) { showWinds() = (d.forceAloftLayers & 1) != 0; showClouds() = (d.forceAloftLayers & 2) != 0; }
+    if (d.forceAloftLayers >= 0) { showWinds() = (d.forceAloftLayers & 1) != 0; showClouds() = (d.forceAloftLayers & 2) != 0; showTimeZones() = (d.forceAloftLayers & 4) != 0; }
+    if (d.forceRange >= 0) { radarRange() = d.forceRange; mapPan() = ImVec2((float)d.forcePanEastNm, (float)d.forcePanNorthNm); recentering() = false; }
+    if (d.forceLocalTime >= 0) mapLocalTime() = d.forceLocalTime == 1;
     updateViewRot(d);
     updateShownRange();
     updateMapAlt(d);
@@ -2970,7 +3101,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     }
     int bad = 0;
     for (const auto& s : allServices(d)) if (s.state == SvcState::Down || s.state == SvcState::Degraded) ++bad;
-    tabFont() = f.bold;
+    tabFont() = tabFontBig() ? tabFontBig() : f.bold;
     if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_None)) {
         if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
         if (bigTab("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
@@ -2983,7 +3114,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             vis = want ? std::min(1.0f, vis + ImGui::GetIO().DeltaTime * 4.0f) : std::max(0.0f, vis - ImGui::GetIO().DeltaTime * 4.0f);
             if (vis > 0.0f) {
                 // the tab narrows as it fades (and widens as it comes back), so the tabs after it slide over instead of jumping
-                const float full = ImGui::CalcTextSize("Turbulence").x + 2 * ImGui::GetStyle().FramePadding.x;
+                const float full = tabWidth("Turbulence");
                 const float e = vis * vis * (3 - 2 * vis);
                 if (vis < 1.0f) ImGui::SetNextItemWidth(std::max(1.0f, full * e));
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * e);

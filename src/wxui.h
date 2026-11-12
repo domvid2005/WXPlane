@@ -74,7 +74,10 @@ struct UiData {
     int forceLayers = -1;               // map layers: 1 map, 2 turbulence, 4 pilot reports
     int forcePirep = -1;                // open this pilot report's info window on the Map tab
     int forceAdv = -1;                  // 1: AIRMET and SIGMET layers on, 0: off
-    int forceAloftLayers = -1;          // bit 1 wind barbs, bit 2 clouds (map layers)
+    int forceAloftLayers = -1;          // bit 1 wind barbs, bit 2 clouds, bit 4 time zones (map layers)
+    int forceRange = -1;                // the map's range step (0 = 1 nm .. 8 = 320 nm)
+    int forceLocalTime = -1;            // the map's time bubble: 1 local time, 0 Zulu
+    double forcePanEastNm = 0, forcePanNorthNm = 0;   // with forceRange: move the map off the aircraft by this much
     double forceMapAltFt = -1;          // the map's altitude slider
     int forceMapMode = -1;              // the slider's mode: 0 chosen altitude, 1 ACFT (follows the aircraft), 2 SFC, 3 composite (all altitudes)
     int forceWindSel = -1;              // open this winds-aloft point's decode window on the Map tab
