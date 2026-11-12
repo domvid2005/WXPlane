@@ -211,6 +211,14 @@ int main(int argc, char** argv) {
     snap->fetched = now - 600;
     const char* ints[] = {"LGT", "", "MOD", "LGT-MOD", "NEG"};
     for (int k = 0; k < 5; ++k) { hz::Pirep p; p.lat = 42 + 0.4 * k; p.lon = -72 + 0.5 * k; p.altFt = 9000 + 6000 * k; p.intensity = ints[k]; p.urgent = k == 2; p.kind = "PIREP"; p.tbType = k == 2 ? "CAT" : ""; p.baseFt = k == 2 ? 19000 : -1; p.topFt = k == 2 ? 23000 : -1; p.acType = k % 2 ? "B738" : "A321"; p.obsTime = now - 900 * (k + 1); p.raw = std::string(k == 2 ? "UUA" : "UA") + " /OV ORW270020/TM 0215/FL" + std::to_string((int)(p.altFt / 100)) + "/TP " + p.acType + "/TB " + std::string(ints[k]); snap->pireps.push_back(p); }
+    {   // reports without turbulence: icing, sky and weather, wind and temperature
+        hz::Pirep a; a.lat = 42.9; a.lon = -71.6; a.altFt = 7000; a.kind = "PIREP"; a.acType = "DH8D"; a.obsTime = now - 1200; a.icing = "MOD RIME FL060-FL080";
+        a.raw = "UA /OV MHT180010/TM 0230/FL070/TP DH8D/IC MOD RIME 060-080"; snap->pireps.push_back(a);
+        hz::Pirep b; b.lat = 41.9; b.lon = -70.6; b.altFt = 3000; b.kind = "PIREP"; b.acType = "C172"; b.obsTime = now - 2400; b.sky = "OVC 025"; b.wx = "-RA";
+        b.raw = "UA /OV PVC270015/TM 0210/FL030/TP C172/SK OVC025/WX -RA"; snap->pireps.push_back(b);
+        hz::Pirep c; c.lat = 42.6; c.lon = -72.4; c.altFt = 35000; c.kind = "AIREP"; c.acType = "B763"; c.obsTime = now - 300; c.windDir = 255; c.windKt = 82; c.tempC = -54;
+        c.raw = "ARP UAL123 4236N 07224W 0245 F350 MS54 255/082KT"; snap->pireps.push_back(c);
+    }
     {   // advisories around Boston: a convective SIGMET line, a turbulence SIGMET, AIRMETs for IFR and icing
         hz::Advisory c; c.cls = hz::Advisory::Convective; c.hazard = "CONVECTIVE"; c.name = "Convective SIGMET 12E"; c.line = false;
         c.raw = "CONVECTIVE SIGMET 12E\nVALID UNTIL 0455Z\nMA CT NY\nFROM 20W ALB-30N BDL-40W PVD-20W ALB\nAREA EMBD TS MOV FROM 24025KT. TOPS TO FL380.";
@@ -286,6 +294,7 @@ int main(int argc, char** argv) {
         std::printf("wrote %s\n", p.c_str());
     }
     // the wind dial turned with the aircraft: KBOS 030/06 on a heading of 220 (runway 22) and of 040
+    res.stations[0].report.gustKt = 17;   // a gusty wind, so the dial shows the gusts (blue)
     for (double hdg : {220.0, 40.0}) {
         d.headingDeg = hdg;
         for (int fr = 0; fr < 3; ++fr) {
@@ -305,6 +314,7 @@ int main(int argc, char** argv) {
         if (!writePng(cv, p)) return 1;
         std::printf("wrote %s\n", p.c_str());
     }
+    res.stations[0].report.gustKt = 0;
     // the radar tab heading up with every layer on (the rotation eases in: run frames until it has arrived)
     d.headingDeg = 220; d.forceDial = 1; d.forceLayers = 7; d.forcePirep = 2; d.forceAdv = 1;
     for (int fr = 0; fr < 40; ++fr) {

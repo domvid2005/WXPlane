@@ -135,6 +135,16 @@ void buildData() {
         p.raw = std::string(p.urgent ? "UUA" : "UA") + " /OV ORW270020/TM 0215/FL" + std::to_string((int)(p.altFt / 100)) + "/TP " + p.acType + (p.intensity.empty() ? "" : "/TB " + std::string(ints[k]));
         g_snap->pireps.push_back(p);
     }
+    {   // reports without turbulence: icing, sky and weather, wind and temperature
+        hz::Pirep a; a.lat = 42.9; a.lon = -71.6; a.altFt = 7000; a.kind = "PIREP"; a.acType = "DH8D"; a.obsTime = now - 1200; a.icing = "MOD RIME FL060-FL080";
+        a.raw = "UA /OV MHT180010/TM 0230/FL070/TP DH8D/IC MOD RIME 060-080"; g_snap->pireps.push_back(a);
+        hz::Pirep b; b.lat = 41.9; b.lon = -70.6; b.altFt = 3000; b.kind = "PIREP"; b.acType = "C172"; b.obsTime = now - 2400; b.sky = "OVC 025"; b.wx = "-RA";
+        b.raw = "UA /OV PVC270015/TM 0210/FL030/TP C172/SK OVC025/WX -RA"; g_snap->pireps.push_back(b);
+        hz::Pirep c; c.lat = 42.6; c.lon = -72.4; c.altFt = 35000; c.kind = "AIREP"; c.acType = "B763"; c.obsTime = now - 300; c.windDir = 255; c.windKt = 82; c.tempC = -54;
+        c.raw = "ARP UAL123 4236N 07224W 0245 F350 MS54 255/082KT"; g_snap->pireps.push_back(c);
+        hz::Pirep e; e.lat = 41.75; e.lon = -71.3; e.altFt = 1500; e.kind = "PIREP"; e.urgent = true; e.acType = "E75L"; e.obsTime = now - 900; e.llws = true;
+        e.raw = "UUA /OV PVD050005/TM 0235/FL015/TP E75L/RM LLWS -15KT SFC-015 DURD RY05 PVD"; g_snap->pireps.push_back(e);
+    }
     {
         hz::Advisory c; c.cls = hz::Advisory::Convective; c.hazard = "CONVECTIVE"; c.name = "Convective SIGMET 12E"; c.line = false;
         c.raw = "CONVECTIVE SIGMET 12E\nVALID UNTIL 0455Z\nMA CT NY\nFROM 20W ALB-30N BDL-40W PVD-20W ALB\nAREA EMBD TS MOV FROM 24025KT. TOPS TO FL380.";
