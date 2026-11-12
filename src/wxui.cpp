@@ -197,36 +197,38 @@ long isaDevIn(double devC) { return std::lround(tempF() ? devC * 9.0 / 5.0 : dev
 // The units switch, right-aligned on the current line: a slightly bigger bubble holding two small labelled switches,
 // TEMP (°C / °F) and WIND (°T / °M); the airport lists use it (the home page's and the Airports tab's are the same switch)
 void windRefSwitch(const char* id) {
+    // one row, the height of the text: TEMP °C °F | WIND °T °M, in one bubble, right-aligned on the current line
     ImGui::PushID(id);
     const ImGuiStyle& st = ImGui::GetStyle();
-    auto pairW = [&](const char* a, const char* b) { return ImGui::CalcTextSize(a).x + ImGui::CalcTextSize(b).x + 4 * st.FramePadding.x + 2; };
-    const float lblFs = ImGui::GetFontSize() * 0.68f;
-    const float w1 = std::max(pairW("°C", "°F"), ImGui::CalcTextSize("TEMP").x * 0.68f), w2 = std::max(pairW("°T", "°M"), ImGui::CalcTextSize("WIND").x * 0.68f);
-    const float pad = 6, gapX = 10, bh = ImGui::GetTextLineHeight() + 2;
-    const float boxW = pad * 2 + w1 + gapX + w2, boxH = pad * 2 + lblFs + 2 + bh;
+    const float lblFs = ImGui::GetFontSize() * 0.72f;
+    ImFont* font = ImGui::GetFont();
+    auto bw = [&](const char* t) { return ImGui::CalcTextSize(t).x + 2 * st.FramePadding.x; };
+    const float lt = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "TEMP").x, lw = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "WIND").x;
+    const float pad = 6, inner = 4, gapG = 12;
+    const float boxW = pad + lt + inner + bw("°C") + 2 + bw("°F") + gapG + lw + inner + bw("°T") + 2 + bw("°M") + pad;
+    const float boxH = ImGui::GetTextLineHeight() + 4;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - boxW));
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(30, 32, 37, 255), 7.0f);
-    dl->AddRect(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(58, 62, 70, 255), 7.0f);
-    auto group = [&](float x, float w, const char* label, const char* a, const char* b, bool second, int which) {
-        const ImVec2 ls = ImGui::GetFont()->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, label);
-        dl->AddText(ImGui::GetFont(), lblFs, ImVec2(x + (w - ls.x) * 0.5f, p0.y + pad - 1), cIdle, label);
-        const float bw = pairW(a, b);
-        float bx = x + (w - bw) * 0.5f;
-        const float by = p0.y + pad + lblFs + 2;
-        for (int m = 0; m < 2; ++m) {   // each button placed explicitly (no SameLine across the cursor moves)
+    dl->AddRectFilled(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(30, 32, 37, 255), boxH * 0.5f);
+    dl->AddRect(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(58, 62, 70, 255), boxH * 0.5f);
+    float x = p0.x + pad;
+    auto group = [&](const char* label, float labW, const char* a, const char* b, bool second, int which) {
+        dl->AddText(font, lblFs, ImVec2(x, p0.y + (boxH - lblFs) * 0.5f), cIdle, label);
+        x += labW + inner;
+        for (int m = 0; m < 2; ++m) {
             const bool on = second == (m == 1);
             const char* t = m ? b : a;
-            ImGui::SetCursorScreenPos(ImVec2(bx, by));
+            ImGui::SetCursorScreenPos(ImVec2(x, p0.y + 2));
             ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
             if (ImGui::SmallButton(t)) { if (which == 0) tempF() = m == 1; else windMagnetic() = m == 1; }
             ImGui::PopStyleColor();
-            bx += ImGui::CalcTextSize(t).x + 2 * st.FramePadding.x + 2;
+            x += bw(t) + 2;
         }
+        x += gapG - 2;
     };
-    group(p0.x + pad, w1, "TEMP", "°C", "°F", tempF(), 0);
-    group(p0.x + pad + w1 + gapX, w2, "WIND", "°T", "°M", windMagnetic(), 1);
+    group("TEMP", lt, "°C", "°F", tempF(), 0);
+    group("WIND", lw, "°T", "°M", windMagnetic(), 1);
     ImGui::SetCursorScreenPos(p0);
     ImGui::Dummy(ImVec2(boxW, boxH));
     ImGui::PopID();
@@ -734,6 +736,8 @@ bool& showRadar() { static bool v = true; return v; }   // the radar echoes (sto
 // stays on the aircraft)
 ImVec2& mapPan() { static ImVec2 v(0, 0); return v; }
 bool& recentering() { static bool v = false; return v; }   // "Center on aircraft": the map glides back (updateShownRange)
+bool& mapLocalTime() { static bool v = false; return v; }   // the map's time bubble: local time instead of Zulu
+double& popupFullUntil() { static double t = -1; return t; }   // "MAX AMOUNT OF POPUPS" shows until then (ImGui time)
 // The range shown, eased towards the chosen one (in log space) like the North/Heading Lock turn
 float& shownRange() { static float r = 80; return r; }
 void updateShownRange() {
@@ -1407,20 +1411,31 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         dl->AddText(ImVec2(b0.x + 6 + lw, b0.y + 3), blue ? cLockBlue : (dim ? cIdle : cSoft), text);
         return std::make_pair(hov, b1.x - b0.x);
     };
-    if (!interactive) {   // the home page's map: which way it is turned, top right
-        const char* lk = dialHeadingUp() ? "Heading Lock" : "North Lock";
-        bubble(ImVec2(p.x + size - 8 - (ImGui::CalcTextSize(lk).x + 12), p.y + 8), nullptr, lk, dialHeadingUp(), false);
-    }
     if (interactive) {
-        bubble(ImVec2(p.x + 8, p.y + 8), "TIME", (clockText(d.now, false) + "Z").c_str(), false, false);
+        {   // the time: Zulu, or (clicked: blue) local time where the aircraft is
+            bool est = false;
+            const double off = localOffsetAt(d, d.lat, d.lon, est);
+            const std::string t = mapLocalTime() ? clockText(d.now + (std::time_t)off, false) + " " + (est ? "~" : "") + zoneText(d.lat, d.lon, off, d.now) : clockText(d.now, false) + "Z";
+            if (bubble(ImVec2(p.x + 8, p.y + 8), mapLocalTime() ? "LOCAL" : "TIME", t.c_str(), mapLocalTime(), false).first) bubbleHit = 3;
+        }
         const char* lk = dialHeadingUp() ? "Heading Lock" : "North Lock";
         const char* ce = "Center on aircraft";
         const float wl = ImGui::CalcTextSize(lk).x + 12, wc = ImGui::CalcTextSize(ce).x + 12;
         const bool panned = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
         if (bubble(ImVec2(p.x + size - 8 - wl, p.y + 8), nullptr, lk, dialHeadingUp(), false).first) bubbleHit = 2;
         // blue while the map is centred on the aircraft (it was pressed, or never moved), until the map is dragged away
-        if (bubble(ImVec2(p.x + size - 8 - wl - 6 - wc, p.y + 8), nullptr, ce, !panned, false).first && panned) bubbleHit = 1;
+        if (bubble(ImVec2(p.x + size - 8 - wl - 6 - wc, p.y + 8), nullptr, ce, !panned || recentering(), false).first && panned) bubbleHit = 1;   // lit as soon as it is pressed
         if (bubbleHit) { hitKind = 0; }
+    }
+    if (interactive && ImGui::GetTime() < popupFullUntil()) {   // the map is full of popups: a short notice in the middle
+        const float left = (float)(popupFullUntil() - ImGui::GetTime());
+        const int al = (int)(255 * std::min(1.0f, left / 0.3f));
+        const char* t = "MAX AMOUNT OF POPUPS";
+        const ImVec2 ts = f.bold->CalcTextSizeA(ImGui::GetFontSize() * 1.15f, FLT_MAX, 0.0f, t);
+        const ImVec2 b0(p.x + (size - ts.x) * 0.5f - 14, p.y + size * 0.5f - ts.y * 0.5f - 9), b1(b0.x + ts.x + 28, b0.y + ts.y + 18);
+        dl->AddRectFilled(b0, b1, IM_COL32(28, 30, 34, (int)(240 * al / 255)), 6.0f);
+        dl->AddRect(b0, b1, IM_COL32(245, 190, 80, al), 6.0f, 0, 1.5f);
+        dl->AddText(f.bold, ImGui::GetFontSize() * 1.15f, ImVec2(b0.x + 14, b0.y + 9), IM_COL32(245, 190, 80, al), t);
     }
     dl->PopClipRect();
     ImGui::InvisibleButton("radarclick", ImVec2(size, size));
@@ -1444,7 +1459,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         } else if (hov && hitKind) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (bubbleHit && hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (ImGui::IsItemDeactivated() && !dragged && hov && bubbleHit) {   // a bubble: re-centre, or switch North / Heading Lock
-            if (bubbleHit == 1) recentering() = true; else dialHeadingUp() = !dialHeadingUp();
+            if (bubbleHit == 1) recentering() = true; else if (bubbleHit == 3) mapLocalTime() = !mapLocalTime(); else dialHeadingUp() = !dialHeadingUp();
         } else if (ImGui::IsItemDeactivated() && !dragged && hov) {
             if (hitKind) selOpen(hitKind, hitKey, hitAt);   // another window opens beside the others (as many as fit)
             else mapSel().items.clear();
@@ -1504,7 +1519,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
         return false;
     };
     if (sel.dragged) {   // put somewhere by hand: it stays there (inside the map, pushed off every other window)
-        ImVec2 q = sel.pos;
+        ImVec2 q = keepClear(sel.pos, sz, mn, mx, ImVec2(0, 0), ImVec2(0, 0));   // inside the map always, other windows or not
         for (int pass = 0; pass < 3; ++pass) for (const Rect& o : others) q = keepClear(q, sz, mn, mx, o.first, o.second);
         if (overlapsAny(q.x, q.y)) return false;
         sel.pos = q;
@@ -1693,7 +1708,8 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
 }
 
 // The open info windows, as many as fit: placed oldest first, each clear of the windows already placed and of every window's point.
-// Windows dragged by hand are placed first (they keep their spot). When the newest finds no room, the oldest closes.
+// Windows dragged by hand are placed first (they keep their spot). When the newest finds no room, it does not open ("MAX AMOUNT
+// OF POPUPS" shows over the map for a moment).
 void infoWindow(const UiData& d, const UiFonts& f) {
     auto& v = mapSel().items;
     if (v.empty()) return;
@@ -1709,7 +1725,10 @@ void infoWindow(const UiData& d, const UiFonts& f) {
         v[i].shown = v[i].kind != 0;
         if (v[i].shown) placed.push_back({v[i].pos, ImVec2(v[i].pos.x + v[i].lastSize.x, v[i].pos.y + v[i].lastSize.y)});
     }
-    if (noRoom && v.size() > 1) v[0].kind = 0;   // the oldest makes way
+    if (noRoom && v.size() > 1) {   // no room for the newest without overlapping: it does not open, and the map says so for a second
+        v.back().kind = 0;
+        popupFullUntil() = ImGui::GetTime() + 1.2;
+    }
     v.erase(std::remove_if(v.begin(), v.end(), [](const SelItem& it) { return it.kind == 0; }), v.end());
 }
 
@@ -2351,6 +2370,7 @@ void timeBox(const UiData& d, const UiFonts& f) {
 }
 
 void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
+    UnitScope us(g_unitsHome);   // the home page's airport card and nearby list share their units (the winds-aloft table keeps its own)
     const float W = ImGui::GetContentRegionAvail().x, H = ImGui::GetContentRegionAvail().y;
     const float gap = 12;
     const float colW = std::floor((W - 2 * gap) * 0.31f), col3 = W - 2 * colW - 2 * gap, bodyH = H;
@@ -2403,6 +2423,7 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
 }
 
 void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
+    UnitScope us(g_unitsAir);   // the Airports tab: its own units
     static std::string selected;
     static char query[16] = "";
     const float W = ImGui::GetContentRegionAvail().x, H = ImGui::GetContentRegionAvail().y;
