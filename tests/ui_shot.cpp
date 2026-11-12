@@ -327,7 +327,8 @@ int main(int argc, char** argv) {
     // (pass 2: the surface - SFC: airport winds and the lowest clouds, one airport's wind decoded)
     d.magVarEast = -14.5;   // Boston: 14.5 degrees west
     for (int pass = 0; pass < 3; ++pass) {
-        d.forceLayers = pass == 0 ? 1 : (pass == 1 ? 3 : 1); d.forceAloftLayers = pass == 1 ? 2 : 3; d.forceMapAltFt = pass == 0 ? 18000 : (pass == 1 ? 3000 : -1);
+        d.forceLayers = pass == 0 ? 5 : (pass == 1 ? 3 : 1); d.forceAloftLayers = pass == 1 ? 2 : 3;   // pass 0: pilot reports too, two windows open
+        d.forcePirep = pass == 0 ? 2 : -1; d.forceMapAltFt = pass == 0 ? 18000 : (pass == 1 ? 3000 : -1);
         d.forceMapMode = pass == 2 ? 2 : -1;
         for (int fr = 0; fr < 40; ++fr) {
             d.forceWindSel = (pass == 0 && fr == 0) ? 9 : ((pass == 2 && fr == 20) ? 3 : -1);
@@ -346,7 +347,7 @@ int main(int argc, char** argv) {
         if (!writePng(cv, p)) return 1;
         std::printf("wrote %s\n", p.c_str());
     }
-    d.forceAloftLayers = 0; d.forceMapAltFt = -1; d.forceMapMode = 1; d.forceLayers = 1;
+    d.forceAloftLayers = 0; d.forceMapAltFt = -1; d.forceMapMode = 1; d.forceLayers = 1; d.forcePirep = -1;
     // a full reset: the countdown in the header
     d.loadingS = 83; d.loadingWhat = "Loading weather";
     for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 0 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }

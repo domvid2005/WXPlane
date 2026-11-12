@@ -144,6 +144,43 @@ std::string windShort(const Report& r) {
     return s;
 }
 
+// Airport winds in degrees true (as METARs report them) or magnetic (as runways, ATIS and performance figures use them): one switch
+// for the whole window, next to the airport lists (windRefSwitch)
+bool& windMagnetic() { static bool m = false; return m; }
+// a report's wind with its direction in the chosen reference: "030°T / 6 kt" or "044°M / 6 kt" (short: "030/6")
+int windDirIn(const Report& r, double varEast, bool mag) { return mag ? toMagnetic(r.windDir, varEast) : r.windDir; }
+std::string windTextRef(const Report& r, double varEast, bool mag) {
+    if (!r.hasWind) return "—";
+    if (r.windKt < 1) return "Calm";
+    std::string s = r.windVariable ? std::string("VRB") : fmt(mag ? "%03d°M" : "%03d°T", windDirIn(r, varEast, mag));
+    s += fmt(" / %.0f", r.windKt);
+    if (r.gustKt > r.windKt) s += fmt(" G%.0f", r.gustKt);
+    return s + " kt";
+}
+std::string windShortRef(const Report& r, double varEast, bool mag) {
+    if (!r.hasWind || r.windKt < 1 || r.windVariable || !mag) return windShort(r);
+    std::string s = fmt("%03d", windDirIn(r, varEast, mag)) + fmt("/%.0f", r.windKt);
+    if (r.gustKt > r.windKt) s += fmt(" G%.0f", r.gustKt);
+    return s;
+}
+// the °T / °M switch (right-aligned on the current line)
+void windRefSwitch(const char* id) {
+    ImGui::PushID(id);
+    const float w = ImGui::CalcTextSize("°T").x + ImGui::CalcTextSize("°M").x + 4 * ImGui::GetStyle().FramePadding.x + 2;
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - w));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, ImGui::GetStyle().ItemSpacing.y));
+    for (int m = 0; m < 2; ++m) {
+        const bool on = windMagnetic() == (m == 1);
+        ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
+        if (m) ImGui::SameLine();
+        if (ImGui::SmallButton(m ? "°M" : "°T")) windMagnetic() = m == 1;
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(m ? "Airport winds in degrees magnetic (runways, ATIS, performance calculations)" : "Airport winds in degrees true (as the METAR reports them)");
+    }
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+}
+
 std::string visText(const Report& r, bool us) {
     if (r.cavok) return "CAVOK";
     if (!r.hasVis) return "—";
@@ -434,13 +471,15 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
         ImGui::TableNextColumn();
         ImGui::BeginGroup();
         muted("Wind");
-        if (r.hasWind && r.windKt >= 1 && !r.windVariable) {
+        const double var = magVar(d, st.lat, st.lon);
+        const bool mag = windMagnetic();
+        if (r.hasWind && r.windKt >= 1 && !r.windVariable) {   // the other reference in the small box
             ImGui::SameLine(0, 8);
-            magBox(fmt("%03d°M", toMagnetic(r.windDir, magVar(d, st.lat, st.lon))).c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("The same wind referenced to magnetic north (runways and ATIS use magnetic)");
+            magBox(fmt(mag ? "%03d°T" : "%03d°M", windDirIn(r, var, !mag)).c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(mag ? "The same wind referenced to true north (as the METAR reports it)" : "The same wind referenced to magnetic north (runways and ATIS use magnetic)");
         }
         ImGui::PushFont(f.bold);
-        ImGui::TextUnformatted(windText(r).c_str());
+        ImGui::TextUnformatted(windTextRef(r, var, mag).c_str());
         ImGui::PopFont();
         ImGui::EndGroup();
         ImGui::TableNextColumn(); field(f, "Visibility", visText(r, us));
@@ -540,8 +579,20 @@ double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k
 // the pilot report open in the radar page's info window (identified by its text and time, the list is rebuilt every update)
 // What is open in the radar page's info window: a pilot report, an airport or an advisory, identified by a key that survives the
 // lists being rebuilt at every update (text + time, the ICAO code, name + start time)
-struct MapSel { int kind = 0; std::string key; ImVec2 at; ImVec2 mapMin, mapMax; ImVec2 lastSize = ImVec2(300, 200); };   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
+// Up to two of them can be open at once (the oldest closes when a third is clicked), and they never overlap each other.
+struct SelItem { int kind = 0; std::string key; ImVec2 at; ImVec2 lastSize = ImVec2(300, 200); ImVec2 pos, size; bool shown = false; };   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
+struct MapSel { std::vector<SelItem> items; ImVec2 mapMin, mapMax; };
 MapSel& mapSel() { static MapSel s; return s; }
+SelItem* selFind(int kind, const std::string& key) { for (auto& it : mapSel().items) if (it.kind == kind && it.key == key) return &it; return nullptr; }
+bool isSel(int kind, const std::string& key) { return selFind(kind, key) != nullptr; }
+void selAt(int kind, const std::string& key, ImVec2 q) { if (SelItem* it = selFind(kind, key)) it->at = q; }
+void selOpen(int kind, const std::string& key, ImVec2 at) {
+    if (SelItem* it = selFind(kind, key)) { it->at = at; return; }
+    auto& v = mapSel().items;
+    if (v.size() >= 2) v.erase(v.begin());   // the oldest makes room
+    SelItem it; it.kind = kind; it.key = key; it.at = at;
+    v.push_back(it);
+}
 std::string pirepKey(const hz::Pirep& p) { return p.raw + "|" + std::to_string((long long)p.obsTime); }
 std::string advKey(const hz::Advisory& a) { return a.name + "|" + std::to_string((long long)a.from) + "|" + std::to_string(a.pts.size()); }
 
@@ -619,6 +670,9 @@ enum class AltMode { Chosen = 0, Acft = 1, Sfc = 2 };
 struct MapAlt { float shown = -1, target = -1, chosen = -1; AltMode mode = AltMode::Acft; };
 MapAlt& mapAlt() { static MapAlt a; return a; }
 bool atSurface() { return mapAlt().mode == AltMode::Sfc && mapAlt().shown < 50.0f; }   // the surface layers (METAR winds, lowest clouds)
+// the airports' reported winds instead of winds aloft: at SFC, and whenever the map's altitude is below 1,000 ft (an aircraft on
+// the ground with ACFT on: winds aloft start a few thousand feet up)
+bool surfaceWinds() { return atSurface() || mapAlt().shown < 1000.0f; }
 void updateMapAlt(const UiData& d) {
     MapAlt& a = mapAlt();
     const float acft = d.havePos ? (float)std::max(0.0, std::min((double)kMapAltMax, d.altFt)) : 0.0f;
@@ -723,7 +777,7 @@ void updateWinds(const UiData& d) {
     const float r = (float)(kPi / 180.0);
     const float kE = 1.0f - std::exp(-dt * 3.0f);   // about a second to settle on new data
     auto find = [&](const std::string& key) -> WindPt* { for (auto& q : pts) if (q.key == key) return &q; return nullptr; };
-    if (d.res && showWinds() && atSurface())   // the surface: the airports' reported winds (METAR, ATIS merged), true
+    if (d.res && showWinds() && surfaceWinds())   // the surface: the airports' reported winds (METAR, ATIS merged), true
         for (const auto& st : d.res->stations) {
             if (st.icao.compare(0, 3, "GFS") == 0 || !st.report.hasWind) continue;
             const Report& rp = st.report;
@@ -736,7 +790,7 @@ void updateWinds(const UiData& d) {
             w->hasT = rp.hasTemp; w->gustKt = rp.gustKt > rp.windKt ? (float)rp.gustKt : 0.0f; w->rangeA = 1;
             w->u += (tu - w->u) * kE; w->v += (tv - w->v) * kE; w->tempC += ((float)rp.tempC - w->tempC) * kE;
         }
-    if (d.res && showWinds() && !atSurface())
+    if (d.res && showWinds() && !surfaceWinds())
         for (const auto& s : d.res->aloft) {
             if (!s.located) continue;
             float dir = 0, kt = 0, tc = 0, edge = 0; bool hasT = false;
@@ -1029,7 +1083,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                 float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
                 for (const auto& q : adv.pts) { const ImVec2 v = at(q.first, q.second); pts.push_back(v); x0 = std::min(x0, v.x); y0 = std::min(y0, v.y); x1 = std::max(x1, v.x); y1 = std::max(y1, v.y); }
                 if (x1 < p.x || y1 < p.y || x0 > p.x + size || y0 > p.y + size || pts.size() < 2) continue;
-                const bool sel = mapSel().kind == 3 && mapSel().key == advKey(adv);
+                const bool sel = isSel(3, advKey(adv));
                 if (adv.line) {
                     dl->AddPolyline(pts.data(), (int)pts.size(), advColor(adv, sel ? 255 : 230), ImDrawFlags_None, sel ? 4.0f : 3.0f);
                     if (interactive) for (size_t k = 0; k + 1 < pts.size(); ++k) if (distToSeg(mouse, pts[k], pts[k + 1]) < 6 && 0.0f < hitArea) { hitKind = 3; hitKey = advKey(adv); hitAt = mouse; hitArea = 0.0f; }
@@ -1058,8 +1112,8 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         for (size_t i : order) {
             WindPt& w = windPts()[i];
             const ImVec2 q = at(w.lat, w.lon);
-            if (interactive && d.forceWindSel >= 0 && (int)i == d.forceWindSel) { mapSel().kind = 4; mapSel().key = w.key; }
-            const bool sel = mapSel().kind == 4 && mapSel().key == w.key;
+            if (interactive && d.forceWindSel >= 0 && (int)i == d.forceWindSel) selOpen(4, w.key, q);
+            const bool sel = isSel(4, w.key);
             bool crowded = false;
             if (!sel && w.rangeA > 0) for (const ImVec2& o : placed) if (std::fabs(o.x - q.x) < minSep && std::fabs(o.y - q.y) < minSep) { crowded = true; break; }
             const float target = showWinds() ? (crowded ? 0.0f : w.rangeA) : 0.0f;
@@ -1076,7 +1130,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const float sf = std::max(0.0f, std::min(1.0f, (kt - 5.0f) / 95.0f));
             const ImU32 blue = IM_COL32((int)(175 - 145 * sf), (int)(215 - 135 * sf), (int)(255 - 25 * sf), al);
             const ImU32 col = sel ? IM_COL32(255, 196, 70, std::max(al, 200)) : (kt < 2.5f ? IM_COL32(255, 255, 255, al) : blue);
-            if (sel) mapSel().at = q;
+            if (sel) selAt(4, w.key, q);
             drawBarb(dl, q, dir, kt, viewRot(), col, sel ? 1.12f : 1.0f);
             // clicked on its staff and feathers (not on the point itself, which belongs to the airport there, if any)
             const double ang = (dir - viewRot()) * kPi / 180.0;
@@ -1093,9 +1147,9 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const ImVec2 q = at(pr.lat, pr.lon);
             if (!inside(q, 6)) continue;
             const ImU32 col = pr.urgent ? IM_COL32(235, 64, 64, 255) : IM_COL32(240, 150, 40, 255);   // UUA red, UA orange
-            if (interactive && d.forcePirep >= 0 && &pr == &d.reports->pireps[(size_t)std::min<int>(d.forcePirep, (int)d.reports->pireps.size() - 1)]) { mapSel().kind = 1; mapSel().key = pirepKey(pr); }
-            const bool sel = mapSel().kind == 1 && mapSel().key == pirepKey(pr);
-            if (sel) { mapSel().at = q; dl->AddCircle(q, 10.0f, IM_COL32(255, 255, 255, 220), 20, 1.5f); }
+            if (interactive && d.forcePirep >= 0 && &pr == &d.reports->pireps[(size_t)std::min<int>(d.forcePirep, (int)d.reports->pireps.size() - 1)]) selOpen(1, pirepKey(pr), q);
+            const bool sel = isSel(1, pirepKey(pr));
+            if (sel) { selAt(1, pirepKey(pr), q); dl->AddCircle(q, 10.0f, IM_COL32(255, 255, 255, 220), 20, 1.5f); }
             const float dm = std::hypot(mouse.x - q.x, mouse.y - q.y);
             if (interactive && dm < bestPt) { bestPt = dm; hitKind = 1; hitKey = pirepKey(pr); hitAt = q; }
             dl->AddTriangleFilled(ImVec2(q.x, q.y - 6), ImVec2(q.x + 5.5f, q.y + 4), ImVec2(q.x - 5.5f, q.y + 4), col);
@@ -1111,8 +1165,8 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             if (st.icao.compare(0, 3, "GFS") == 0) continue;
             const ImVec2 q = at(st.lat, st.lon);
             if (!inside(q, 0)) continue;
-            const bool sel = mapSel().kind == 2 && mapSel().key == st.icao;
-            if (sel) { mapSel().at = q; dl->AddCircle(q, 8.0f, IM_COL32(255, 255, 255, 220), 16, 1.5f); }
+            const bool sel = isSel(2, st.icao);
+            if (sel) { selAt(2, st.icao, q); dl->AddCircle(q, 8.0f, IM_COL32(255, 255, 255, 220), 16, 1.5f); }
             dl->AddCircleFilled(q, 3.5f, catColor(flightCategory(st.report)), 12);
             if (rangeNm <= 40) dl->AddText(f.body, ImGui::GetFontSize() * 0.75f, ImVec2(q.x + 5, q.y - 6), cMuted, st.icao.c_str());
             const float dm = std::hypot(mouse.x - q.x, mouse.y - q.y);
@@ -1152,8 +1206,8 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         } else if (hov && hitKind) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (ImGui::IsItemDeactivated() && !dragged && hov) {
-            if (hitKind) { mapSel().kind = hitKind; mapSel().key = hitKey; mapSel().at = hitAt; }
-            else mapSel().kind = 0;
+            if (hitKind) selOpen(hitKind, hitKey, hitAt);   // a second window opens next to the first (two at most)
+            else mapSel().items.clear();
         }
     }
 }
@@ -1173,30 +1227,45 @@ void infoText(const UiFonts& f, const std::string& t, ImU32 col) {
 }
 std::string levelText(double ft) { return ft < 0 ? std::string("?") : (ft == 0 ? std::string("SFC") : fmt("FL%03.0f", ft / 100.0)); }
 
-void infoWindow(const UiData& d, const UiFonts& f) {
-    MapSel& sel = mapSel();
-    if (!sel.kind) return;
+// One info window. `other`: the rectangle of the window already placed this frame (none: zero size), which this one must not
+// overlap; `otherPt`: that window's point, kept clear too. Returns false when there is no room for it beside the other.
+bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 otherMin, ImVec2 otherMax, ImVec2 otherPt) {
     const hz::Pirep* p = nullptr; const Station* st = nullptr; const hz::Advisory* av = nullptr;
     if (sel.kind == 1 && d.reports && showPireps()) for (const auto& q : d.reports->pireps) if (pirepKey(q) == sel.key) p = &q;
     if (sel.kind == 2 && d.res && showAirports()) for (const auto& q : d.res->stations) if (q.icao == sel.key) st = &q;
     if (sel.kind == 3 && d.reports) for (const auto& q : d.reports->advisories) if (advKey(q) == sel.key && (q.cls == hz::Advisory::Airmet ? showAirmets() : showSigmets())) av = &q;
     const WindPt* wp = nullptr;
     if (sel.kind == 4 && showWinds()) for (const auto& q : windPts()) if (q.key == sel.key) wp = &q;
-    if (!p && !st && !av && !wp) { sel.kind = 0; return; }
-    {   // inside the map: to the right of the point if it fits, else to its left; moved up or down to stay within the map
-        // tries right of the point, left, below, above: the first that fits inside the map without covering the point; if none
-        // does, the one that leaves the most of it uncovered (always clamped inside the map)
-        const ImVec2 mn = sel.mapMin, mx = sel.mapMax, sz = sel.lastSize, a = sel.at;
-        const ImVec2 cand[4] = {ImVec2(a.x + 14, a.y - 10), ImVec2(a.x - 14 - sz.x, a.y - 10), ImVec2(a.x - sz.x * 0.5f, a.y + 14), ImVec2(a.x - sz.x * 0.5f, a.y - 14 - sz.y)};
+    if (!p && !st && !av && !wp) { sel.kind = 0; return true; }
+    {   // inside the map, clear of its own point (and the other window's point) and never over the other window: tries right of the
+        // point, left, below, above, then beside the other window and in the map's corners; the first spot that fits wins, else
+        // the one that covers the points least. No spot clear of the other window: false (the caller closes the older window).
+        const MapSel& ms = mapSel();
+        const ImVec2 mn = ms.mapMin, mx = ms.mapMax, sz = sel.lastSize, a = sel.at;
+        const bool haveOther = otherMax.x > otherMin.x;
+        std::vector<ImVec2> cand = {ImVec2(a.x + 14, a.y - 10), ImVec2(a.x - 14 - sz.x, a.y - 10), ImVec2(a.x - sz.x * 0.5f, a.y + 14), ImVec2(a.x - sz.x * 0.5f, a.y - 14 - sz.y)};
+        if (haveOther) {
+            cand.push_back(ImVec2(otherMax.x + 8, a.y - 10)); cand.push_back(ImVec2(otherMin.x - 8 - sz.x, a.y - 10));
+            cand.push_back(ImVec2(a.x - sz.x * 0.5f, otherMax.y + 8)); cand.push_back(ImVec2(a.x - sz.x * 0.5f, otherMin.y - 8 - sz.y));
+            cand.push_back(ImVec2(otherMax.x + 8, otherMin.y)); cand.push_back(ImVec2(otherMin.x - 8 - sz.x, otherMin.y));
+            cand.push_back(ImVec2(otherMin.x, otherMax.y + 8)); cand.push_back(ImVec2(otherMin.x, otherMin.y - 8 - sz.y));
+        }
+        cand.push_back(ImVec2(mn.x, mn.y)); cand.push_back(ImVec2(mx.x, mn.y)); cand.push_back(ImVec2(mn.x, mx.y)); cand.push_back(ImVec2(mx.x, mx.y));
+        auto cover = [&](float cx, float cy, ImVec2 pt) {
+            const float ox = std::min(cx + sz.x, pt.x + 10) - std::max(cx, pt.x - 10), oy = std::min(cy + sz.y, pt.y + 10) - std::max(cy, pt.y - 10);
+            return (ox > 0 && oy > 0) ? ox * oy : 0.0f;
+        };
         float x = 0, y = 0, bestPen = 1e30f;
+        bool found = false;
         for (const ImVec2& c : cand) {
             const float cx = std::max(mn.x + 4, std::min(c.x, mx.x - 4 - sz.x)), cy = std::max(mn.y + 4, std::min(c.y, mx.y - 4 - sz.y));
-            // how far the clamped box reaches over the point (0: clear of it, with a 10 px margin)
-            const float ox = std::min(cx + sz.x, a.x + 10) - std::max(cx, a.x - 10), oy = std::min(cy + sz.y, a.y + 10) - std::max(cy, a.y - 10);
-            const float pen = (ox > 0 && oy > 0) ? ox * oy : 0.0f;
-            if (pen < bestPen - 0.5f) { bestPen = pen; x = cx; y = cy; }
+            if (haveOther && cx < otherMax.x + 4 && cx + sz.x > otherMin.x - 4 && cy < otherMax.y + 4 && cy + sz.y > otherMin.y - 4) continue;   // over the other window
+            const float pen = cover(cx, cy, a) + cover(cx, cy, otherPt);
+            if (pen < bestPen - 0.5f) { bestPen = pen; x = cx; y = cy; found = true; }
             if (pen <= 0) break;
         }
+        if (!found) return false;
+        sel.pos = ImVec2(x, y);
         ImGui::SetNextWindowPos(ImVec2(x, y));
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, mx.x - mn.x - 8), std::max(120.0f, mx.y - mn.y - 8)));
     }
@@ -1206,15 +1275,16 @@ void infoWindow(const UiData& d, const UiFonts& f) {
     ImGui::PushStyleColor(ImGuiCol_WindowBg, v4(IM_COL32(28, 30, 34, 255)));
     const ImGuiWindowFlags fl = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
-    if (ImGui::Begin("##mapinfo", nullptr, fl)) {
-        auto title = [&](const std::string& t, ImU32 col) {
+    if (ImGui::Begin(("##mapinfo" + std::to_string(sel.kind) + sel.key).c_str(), nullptr, fl)) {
+        auto title = [&](const std::string& t, ImU32 col) {   // the close button top left, then the title
+            if (ImGui::SmallButton("x")) sel.kind = 0;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close");
+            ImGui::SameLine(0, 10);
             ImGui::PushFont(f.bold);
             ImGui::PushStyleColor(ImGuiCol_Text, v4(col));
             ImGui::TextUnformatted(t.c_str());
             ImGui::PopStyleColor();
             ImGui::PopFont();
-            ImGui::SameLine(0, 24);
-            if (ImGui::SmallButton("x")) sel.kind = 0;
         };
         if (p) {
             title(p->urgent ? "UUA  urgent pilot report" : (p->kind == "AIREP" ? "AIREP" : "UA  pilot report"), p->urgent ? IM_COL32(235, 64, 64, 255) : IM_COL32(240, 150, 40, 255));
@@ -1243,8 +1313,9 @@ void infoWindow(const UiData& d, const UiFonts& f) {
                 const bool us = usUnits(st->icao);
                 {
                     const Report& r = st->report;
-                    std::string w = windText(r);
-                    if (r.hasWind && r.windKt >= 1 && !r.windVariable) w += fmt("   (%03d°M)", toMagnetic(r.windDir, magVar(d, st->lat, st->lon)));
+                    const double var = magVar(d, st->lat, st->lon);
+                    std::string w = windTextRef(r, var, windMagnetic());
+                    if (r.hasWind && r.windKt >= 1 && !r.windVariable) w += fmt(windMagnetic() ? "   (%03d°T)" : "   (%03d°M)", windDirIn(r, var, !windMagnetic()));
                     infoRow("Wind", w);
                 }
                 infoRow("Visibility", visText(st->report, us));
@@ -1311,10 +1382,26 @@ void infoWindow(const UiData& d, const UiFonts& f) {
             }
         }
         sel.lastSize = ImGui::GetWindowSize();
+        sel.size = sel.lastSize;
     }
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
+    return true;
+}
+
+// The open info windows (two at most): the older one is placed first, the newer one beside it without overlapping; if the newer
+// one finds no room, the older one closes.
+void infoWindow(const UiData& d, const UiFonts& f) {
+    auto& v = mapSel().items;
+    if (v.empty()) return;
+    if (!infoWindowOne(d, f, v[0], ImVec2(0, 0), ImVec2(0, 0), v.size() > 1 ? v[1].at : ImVec2(-1e6f, -1e6f))) v[0].kind = 0;   // clear of both points
+    if (v.size() > 1) {
+        const bool firstUp = v[0].kind != 0;
+        const ImVec2 o0 = firstUp ? v[0].pos : ImVec2(0, 0), o1 = firstUp ? ImVec2(v[0].pos.x + v[0].lastSize.x, v[0].pos.y + v[0].lastSize.y) : ImVec2(0, 0);
+        if (!infoWindowOne(d, f, v[1], o0, o1, firstUp ? v[0].at : ImVec2(-1e6f, -1e6f))) { v[0].kind = 0; }   // no room beside it: the older one makes way
+    }
+    v.erase(std::remove_if(v.begin(), v.end(), [](const SelItem& it) { return it.kind == 0; }), v.end());
 }
 
 void radarLegend() {
@@ -1748,7 +1835,7 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
     ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
     ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
-    ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthStretch, textColW("000/00 G00"), kSortWind);
+    ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind###wind", ImGuiTableColumnFlags_WidthStretch, textColW("000/00 G00"), kSortWind);
     ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
     ImGui::TableSetupColumn("Ceil.", ImGuiTableColumnFlags_WidthFixed, textColW("00,000"), kSortCeil);
     ImGui::TableSetupScrollFreeze(0, 1);
@@ -1763,7 +1850,7 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
         ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(s->icao.c_str());
         ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f", distTo(d, *s));
         ImGui::TableSetColumnIndex(2); { const std::string c = flightCategory(r); ImGui::PushStyleColor(ImGuiCol_Text, v4(catColor(c))); ImGui::TextUnformatted(c.empty() ? "—" : c.c_str()); ImGui::PopStyleColor(); }
-        ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(windShort(r).c_str());
+        ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(windShortRef(r, magVar(d, s->lat, s->lon), windMagnetic()).c_str());
         ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(visText(r, usUnits(s->icao)).c_str());
         ImGui::TableSetColumnIndex(5); { const int c = ceilingFt(r); if (c < 0) muted("none"); else ImGui::TextUnformatted(ftText(c).c_str()); }
     }
@@ -1819,7 +1906,7 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("time", ImVec2(colW, timeH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) timeBox(d, f);
     panelEnd();
     ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
-    if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); nearbyTable(d, st, 0, true); }
+    if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); windRefSwitch("wrNear"); nearbyTable(d, st, 0, true); }
     panelEnd();
     ImGui::EndGroup();
     ImGui::SameLine(0, gap);
@@ -1860,12 +1947,13 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
         else if (!d.searchError.empty() && selected == "@search") { ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn)); ImGui::TextWrapped("%s", d.searchError.c_str()); ImGui::PopStyleColor(); }
         ImGui::Spacing();
         sectionTitle(f, fmt("Airports in use (%zu)", d.res->stations.size()).c_str());
+        windRefSwitch("wrAir");
         const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
         if (ImGui::BeginTable("all", 8, fl)) {
             ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
             ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
             ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
-            ImGui::TableSetupColumn("Wind °T", ImGuiTableColumnFlags_WidthFixed, textColW("VRB/00 G00 "), kSortWind);
+            ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind °T###wind", ImGuiTableColumnFlags_WidthFixed, textColW("VRB/00 G00 "), kSortWind);
             ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
             ImGui::TableSetupColumn("Weather", ImGuiTableColumnFlags_WidthFixed, textColW("+TSRA BR"), kSortWx);
             ImGui::TableSetupColumn("Ceiling", ImGuiTableColumnFlags_WidthStretch, textColW("00,000 ft"), kSortCeil);
@@ -1887,7 +1975,7 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
                 ImGui::PopID();
                 ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f", distTo(d, *s));
                 ImGui::TableSetColumnIndex(2); { const std::string c = flightCategory(r); ImGui::PushStyleColor(ImGuiCol_Text, v4(catColor(c))); ImGui::TextUnformatted(c.empty() ? "—" : c.c_str()); ImGui::PopStyleColor(); }
-                ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(windShort(r).c_str());
+                ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(windShortRef(r, magVar(d, s->lat, s->lon), windMagnetic()).c_str());
                 ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(visText(r, usUnits(s->icao)).c_str());
                 ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(r.wxText.empty() ? "—" : r.wxText.c_str());
                 ImGui::TableSetColumnIndex(6); { const int c = ceilingFt(r); if (c < 0) muted("none"); else ImGui::TextUnformatted((ftText(c) + " ft").c_str()); }

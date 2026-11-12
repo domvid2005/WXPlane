@@ -214,7 +214,8 @@ void fillUi(UiData& d) {
     d.reports = g_snap;
     d.wsOn = g_cfg.enabled && g_cfg.windshear; d.wsSources = 2; d.wsLow = 1; d.wsMed = 1; d.wsStrongest = "storm line 38 nm W (gust front, 25 kt)";
     d.haveLocalOffset = true; d.localOffsetS = -5 * 3600;
-    d.magVarEast = -14.5; d.magVarAt = [](double, double lon) { return -14.5 + (lon + 71.0) * 0.35; };
+    // magnetic variation, roughly (east positive): New England, Europe, the far east
+    d.magVarEast = -14.5; d.magVarAt = [](double lat, double lon) { return lon < -30 ? -14.5 + (lon + 71.0) * 0.35 : (lon < 60 ? -0.5 + 0.45 * lon : (lat > 0 ? -8.0 : 12.5)); };
     d.xpRealWeather = false;
     d.loadingS = g_loadUntil > g_t ? g_loadUntil - g_t : -1; d.loadingWhat = "Loading weather";
 }
