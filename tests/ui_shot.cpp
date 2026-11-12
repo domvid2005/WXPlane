@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
 
     UiData d;
     d.res = &res; d.haveData = true; d.cfg = &cfg; d.now = now;
-    d.havePos = true; d.lat = 42.3606; d.lon = -71.0106; d.altFt = 22; d.trackDeg = 220;
+    d.havePos = true; d.lat = 42.3606; d.lon = -71.0106; d.altFt = 22; d.trackDeg = 220; d.headingDeg = 220;
     d.nextUpdateS = 192;
     d.extraServices = {{"NOAA Aviation Weather Center", "pilot reports", SvcState::Degraded, "5 report(s), downloaded 02:40Z; failed: PIREPs: HTTP 502;", now - 600},
                        {"NOAA GTGN", "turbulence (US)", SvcState::Ok, "analysis 02:30Z", now - 1200},
@@ -221,6 +221,26 @@ int main(int argc, char** argv) {
         if (!writePng(cv, p)) { std::printf("cannot write %s\n", p.c_str()); return 1; }
         std::printf("wrote %s\n", p.c_str());
     }
+    // the wind dial turned with the aircraft: KBOS 030/06 on a heading of 220 (runway 22) and of 040
+    for (double hdg : {220.0, 40.0}) {
+        d.headingDeg = hdg;
+        for (int fr = 0; fr < 3; ++fr) {
+            io.DeltaTime = 1.0f / 30.0f;
+            ImGui::NewFrame();
+            d.forceTab = fr == 0 ? 0 : -1;
+            d.forceDial = 1;
+            UiActions act;
+            uiDraw(d, f, W, H, false, act);
+            ImGui::Render();
+            ++frames;
+        }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        const std::string p = out + "/ui_dial_hdg" + std::to_string((int)hdg) + ".png";
+        if (!writePng(cv, p)) return 1;
+        std::printf("wrote %s\n", p.c_str());
+    }
+    d.forceDial = 0;
     // no data yet, and data with nothing in it
     UiData empty; empty.cfg = &cfg; empty.now = now; empty.status1 = "Starting...";
     FetchResult bare; bare.fetchedAt = now;

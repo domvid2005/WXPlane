@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -240,36 +241,76 @@ double distTo(const UiData& d, const Station& s) { return d.havePos ? distNm(d.l
 
 // ---- pieces -------------------------------------------------------------------------------------------------------------------
 
-void windDial(const Report& r, float size) {
+// Wind components on a heading: headwind (+) / tailwind (-) and crosswind (+ from the right), in knots.
+void windComponents(double windDir, double windKt, double headingDeg, double& head, double& cross) {
+    const double rel = (windDir - headingDeg) * kPi / 180.0;
+    head = windKt * std::cos(rel);
+    cross = windKt * std::sin(rel);
+}
+
+bool& dialHeadingUp() { static bool up = false; return up; }   // false: north up; true: the aircraft's heading up (click the dial)
+
+void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
+    // the whole dial is a button: north up <-> aircraft heading up
+    ImGui::InvisibleButton("winddial", ImVec2(size, size));
+    if (ImGui::IsItemClicked()) dialHeadingUp() = !dialHeadingUp();
+    if (d.forceDial >= 0) dialHeadingUp() = d.forceDial == 1;
+    const bool hovered = ImGui::IsItemHovered();
+    const bool up = dialHeadingUp() && d.havePos;
+    const double rot = up ? d.headingDeg : 0.0;   // screen-up direction, degrees true
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float R = size * 0.5f - 2;
+    const float hub = 26.0f;   // the middle circle: the same size in both modes, big enough for the components
     const ImVec2 c(p.x + size * 0.5f, p.y + size * 0.5f);
-    dl->AddCircleFilled(c, R, cInset, 48);
-    dl->AddCircle(c, R, IM_COL32(58, 62, 70, 255), 48, 1.5f);
-    dl->AddCircle(c, R * 0.7f, cRing, 48, 1.0f);
+    dl->AddCircleFilled(c, R, cInset, 64);
+    dl->AddCircle(c, R, hovered ? IM_COL32(90, 130, 190, 255) : IM_COL32(58, 62, 70, 255), 64, 1.5f);
+    dl->AddCircle(c, R * 0.72f, cRing, 64, 1.0f);
+    auto onDial = [&](double trueDeg, float rad) {
+        const double a = (trueDeg - rot) * kPi / 180.0;
+        return ImVec2(c.x + (float)std::sin(a) * rad, c.y - (float)std::cos(a) * rad);
+    };
     const char* nesw[] = {"N", "E", "S", "W"};
     for (int k = 0; k < 4; ++k) {
-        const double a = k * kPi / 2;
         const ImVec2 ts = ImGui::CalcTextSize(nesw[k]);
-        const ImVec2 q(c.x + (float)std::sin(a) * (R - 9) - ts.x * 0.5f, c.y - (float)std::cos(a) * (R - 9) - ts.y * 0.5f);
-        dl->AddText(q, cMuted, nesw[k]);
+        const ImVec2 q = onDial(k * 90.0, R - 9);
+        dl->AddText(ImVec2(q.x - ts.x * 0.5f, q.y - ts.y * 0.5f), k == 0 ? cSoft : cMuted, nesw[k]);
     }
-    if (r.hasWind && r.windKt >= 1 && !r.windVariable) {
+    if (up) {   // the aircraft's nose at the top of the dial
+        dl->AddTriangleFilled(ImVec2(c.x, p.y + 3), ImVec2(c.x + 5, p.y + 11), ImVec2(c.x - 5, p.y + 11), IM_COL32(255, 255, 255, 230));
+    }
+    const bool steady = r.hasWind && r.windKt >= 1 && !r.windVariable;
+    if (steady) {
         // the arrow comes from the direction the wind blows from, pointing to the centre
-        const double a = r.windDir * kPi / 180.0;
+        const double a = (r.windDir - rot) * kPi / 180.0;
         const ImVec2 dir((float)std::sin(a), -(float)std::cos(a));
         const ImVec2 n(-dir.y, dir.x);
-        const ImVec2 tail(c.x + dir.x * (R - 16), c.y + dir.y * (R - 16)), tip(c.x + dir.x * 18, c.y + dir.y * 18), base(c.x + dir.x * 32, c.y + dir.y * 32);
+        const ImVec2 tail(c.x + dir.x * (R - 16), c.y + dir.y * (R - 16)), tip(c.x + dir.x * (hub + 2), c.y + dir.y * (hub + 2)),
+                     base(c.x + dir.x * (hub + 15), c.y + dir.y * (hub + 15));
         dl->AddLine(tail, base, cAccent, 4.0f);
         dl->AddTriangleFilled(tip, ImVec2(base.x + n.x * 7, base.y + n.y * 7), ImVec2(base.x - n.x * 7, base.y - n.y * 7), cAccent);
     }
-    dl->AddCircleFilled(c, 16, cPanel, 32);
-    dl->AddCircle(c, 16, IM_COL32(58, 62, 70, 255), 32);
-    const std::string kt = !r.hasWind ? std::string("—") : (r.windKt < 1 ? std::string("0") : fmt("%.0f", r.windKt));
-    const ImVec2 ts = ImGui::CalcTextSize(kt.c_str());
-    dl->AddText(ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), IM_COL32(255, 255, 255, 255), kt.c_str());
-    ImGui::Dummy(ImVec2(size, size));
+    dl->AddCircleFilled(c, hub, cPanel, 48);
+    dl->AddCircle(c, hub, IM_COL32(58, 62, 70, 255), 48);
+    auto centred = [&](ImFont* font, float px, const std::string& t, float y, ImU32 col) {
+        const ImVec2 ts = font->CalcTextSizeA(px, FLT_MAX, 0.0f, t.c_str());
+        dl->AddText(font, px, ImVec2(c.x - ts.x * 0.5f, y - ts.y * 0.5f), col, t.c_str());
+    };
+    const float fs = ImGui::GetFontSize();
+    if (up && r.hasWind) {
+        double head = 0, cross = 0;
+        if (steady) windComponents(r.windDir, r.windKt, d.headingDeg, head, cross);
+        const std::string hw = !steady ? std::string("VRB") : (std::fabs(head) < 0.5 ? std::string("H 0") : fmt("%s %.0f", head >= 0 ? "H" : "T", std::fabs(head)));
+        const std::string xw = !steady ? fmt("%.0f kt", r.windKt) : (std::fabs(cross) < 0.5 ? std::string("X 0") : fmt("X %.0f%s", std::fabs(cross), cross > 0 ? "R" : "L"));
+        centred(f.bold, fs, hw, c.y - fs * 0.5f, steady && head < -0.5 ? cWarn : IM_COL32(255, 255, 255, 255));
+        centred(f.bold, fs, xw, c.y + fs * 0.5f, steady && std::fabs(cross) >= 15 ? cWarn : cSoft);
+    } else {
+        const std::string kt = !r.hasWind ? std::string("—") : (r.windKt < 1 ? std::string("0") : fmt("%.0f", r.windKt));
+        centred(f.title, ImGui::GetFontSize() * 20.0f / 14.5f, kt, c.y - fs * 0.15f, IM_COL32(255, 255, 255, 255));
+        centred(f.body, fs * 0.75f, "kt", c.y + fs * 0.75f, cMuted);
+    }
+    if (hovered) ImGui::SetTooltip(dialHeadingUp() ? "Aircraft heading up (headwind/tailwind and crosswind in the middle).\nClick for north up."
+                                                   : "North up.\nClick to turn the dial with the aircraft's heading.");
 }
 
 void field(const UiFonts& f, const char* label, const std::string& value) {
@@ -311,7 +352,7 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
     ImGui::PopStyleColor();
     ImGui::Spacing();
     // dial + decoded values
-    windDial(r, 112);
+    windDial(d, f, r, 124);
     ImGui::SameLine(0, 14);
     ImGui::BeginGroup();
     if (ImGui::BeginTable("dec", 2, ImGuiTableFlags_SizingStretchSame)) {

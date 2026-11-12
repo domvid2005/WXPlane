@@ -109,7 +109,7 @@ X-Plane blends cloud layers between neighbouring reports slot by slot. When any 
 Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, with six tabs:
 
 * **Overview** - the nearest airport (raw report, wind dial, decoded wind, visibility, weather, pressure, temperature, ceiling and
-  flight category), the nearby airports, a 50/100/150 nm radar picture (storm cells by reflectivity, airports coloured by flight
+  flight category; click the wind dial to turn it from north up to the aircraft's heading up, which shows the headwind or tailwind (H/T) and crosswind (X, from the left or right) in the middle), the nearby airports, a 50/100/150 nm radar picture (storm cells by reflectivity, airports coloured by flight
   category, the aircraft in the middle), winds and temperatures aloft with the tropopause, turbulence and windshear at the aircraft
   with the Max turbulence slider, and the data services.
 * **Airports** - every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for

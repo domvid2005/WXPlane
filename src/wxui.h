@@ -27,6 +27,7 @@ struct UiData {
     // aircraft
     bool havePos = false;
     double lat = 0, lon = 0, altFt = 0, trackDeg = 0, gsKt = 0;
+    double headingDeg = 0;              // true heading (the wind dial turns with it, and the components use it)
     // update state
     bool busy = false;                  // a download is running
     double nextUpdateS = -1;            // seconds to the next scheduled update, -1 unknown
@@ -42,7 +43,8 @@ struct UiData {
     bool wsOn = false;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
     std::string wsStrongest;
-    int forceTab = -1;                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
+    int forceTab = -1;
+    int forceDial = -1;                 // the wind dial: 0 north up, 1 heading up, -1 leave it (tests)                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
 };
 
 struct UiActions {

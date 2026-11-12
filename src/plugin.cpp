@@ -2746,6 +2746,8 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     if (g_drLat && g_drLon) { d.lat = XPLMGetDatad(g_drLat); d.lon = XPLMGetDatad(g_drLon); d.havePos = !(d.lat == 0 && d.lon == 0); }
     if (g_drElev) d.altFt = XPLMGetDatad(g_drElev) / 0.3048;
     if (g_drTrkFetch) d.trackDeg = XPLMGetDataf(g_drTrkFetch);
+    static XPLMDataRef drPsi = XPLMFindDataRef("sim/flightmodel/position/psi");   // true heading
+    d.headingDeg = drPsi ? XPLMGetDataf(drPsi) : d.trackDeg;
     if (g_drGsFetch) d.gsKt = XPLMGetDataf(g_drGsFetch) * 1.943844;
     d.busy = g_fetcher.busy();
     if (g_everRequested && g_cfg.enabled) d.nextUpdateS = std::max(0.0, g_cfg.updateMinutes * 60.0 - std::chrono::duration<double>(Clock::now() - g_lastRequest).count());
