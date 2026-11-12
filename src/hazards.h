@@ -19,10 +19,34 @@ struct Pirep {
     std::time_t obsTime = 0;
     bool urgent = false;
     bool llws = false;                 // the report mentions low-level wind shear (LLWS, or a /WS group)
+    // the rest of the report (for the radar map's info window)
+    std::string icing;                 // e.g. "MOD RIME FL080-FL110"
+    std::string sky, wx;               // cloud groups, weather
+    double tempC = -999, windDir = -1, windKt = -1;
 };
+
+// AIRMETs, SIGMETs and convective SIGMETs (the radar map; not used for the simulation). From the AWC data API: domestic SIGMETs and
+// convective SIGMETs (airsigmet), international SIGMETs (isigmet, worldwide) and G-AIRMETs (gairmet, US, the current hour).
+struct Advisory {
+    enum Class { Airmet = 0, Sigmet = 1, Convective = 2 };
+    int cls = Sigmet;
+    std::string hazard;                // CONVECTIVE, TS, TURB, ICE, IFR, MT_OBSC, TURB-HI, TURB-LO, LLWS, SFC_WND, VA, TC, MTW...
+    std::string name;                  // "Convective SIGMET 17E", "SIGMET 27 WAAF", "G-AIRMET TANGO"
+    std::string raw;                   // the text (none for G-AIRMETs)
+    std::string qualifier;             // isigmet: "ERUPTION MT DUKONO", gairmet: due to / severity
+    double baseFt = -1, topFt = -1;    // -1: not given (0 = surface)
+    std::time_t from = 0, to = 0;
+    std::string movement;              // "MOV SW 10KT"
+    bool line = false;                 // a line (e.g. a line of thunderstorms), not an area
+    std::vector<std::pair<double, double>> pts;   // (lat, lon)
+};
+std::vector<Advisory> parseAirSigmets(const std::string& json, std::string* err = nullptr);   // airsigmet (US)
+std::vector<Advisory> parseISigmets(const std::string& json, std::string* err = nullptr);     // isigmet (international)
+std::vector<Advisory> parseGAirmets(const std::string& json, std::time_t now, std::string* err = nullptr);   // gairmet (US), the forecast nearest now
 
 struct Snapshot {
     std::vector<Pirep> pireps;
+    std::vector<Advisory> advisories;
     std::time_t fetched = 0;
 };
 

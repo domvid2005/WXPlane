@@ -196,6 +196,19 @@ int main(int argc, char** argv) {
     snap->fetched = now - 600;
     const char* ints[] = {"LGT", "", "MOD", "LGT-MOD", "NEG"};
     for (int k = 0; k < 5; ++k) { hz::Pirep p; p.lat = 42 + 0.4 * k; p.lon = -72 + 0.5 * k; p.altFt = 9000 + 6000 * k; p.intensity = ints[k]; p.urgent = k == 2; p.kind = "PIREP"; p.tbType = k == 2 ? "CAT" : ""; p.baseFt = k == 2 ? 19000 : -1; p.topFt = k == 2 ? 23000 : -1; p.acType = k % 2 ? "B738" : "A321"; p.obsTime = now - 900 * (k + 1); p.raw = std::string(k == 2 ? "UUA" : "UA") + " /OV ORW270020/TM 0215/FL" + std::to_string((int)(p.altFt / 100)) + "/TP " + p.acType + "/TB " + std::string(ints[k]); snap->pireps.push_back(p); }
+    {   // advisories around Boston: a convective SIGMET line, a turbulence SIGMET, AIRMETs for IFR and icing
+        hz::Advisory c; c.cls = hz::Advisory::Convective; c.hazard = "CONVECTIVE"; c.name = "Convective SIGMET 12E"; c.line = false;
+        c.raw = "CONVECTIVE SIGMET 12E\nVALID UNTIL 0455Z\nMA CT NY\nFROM 20W ALB-30N BDL-40W PVD-20W ALB\nAREA EMBD TS MOV FROM 24025KT. TOPS TO FL380.";
+        c.from = now - 1200; c.to = now + 6000; c.topFt = 38000; c.movement = "MOV 240 25 KT";
+        c.pts = {{42.7, -73.9}, {42.3, -72.4}, {41.7, -72.0}, {41.6, -73.2}, {42.7, -73.9}};
+        hz::Advisory t; t.cls = hz::Advisory::Sigmet; t.hazard = "TURB"; t.name = "SIGMET UNIFORM 3"; t.from = now - 3600; t.to = now + 7200; t.baseFt = 24000; t.topFt = 38000;
+        t.raw = "SIGMET UNIFORM 3 VALID UNTIL 0600Z\nME NH VT MA\nOCNL SEV TURB BTN FL240 AND FL380."; t.pts = {{44.5, -72.5}, {44.6, -69.0}, {43.2, -68.8}, {42.9, -71.8}, {44.5, -72.5}};
+        hz::Advisory i; i.cls = hz::Advisory::Airmet; i.hazard = "ICE"; i.name = "G-AIRMET ZULU ICE"; i.from = now - 600; i.to = now + 10000; i.baseFt = 8000; i.topFt = 18000;
+        i.pts = {{43.8, -74.5}, {43.9, -70.5}, {42.6, -70.0}, {41.4, -71.0}, {41.2, -74.2}, {43.8, -74.5}};
+        hz::Advisory r; r.cls = hz::Advisory::Airmet; r.hazard = "IFR"; r.name = "G-AIRMET SIERRA IFR"; r.qualifier = "CIG BLW 010/VIS BLW 3SM BR"; r.from = now - 600; r.to = now + 10000; r.baseFt = 0;
+        r.pts = {{41.9, -70.9}, {41.9, -69.8}, {41.3, -69.8}, {41.3, -70.9}, {41.9, -70.9}};
+        snap->advisories = {i, r, t, c};
+    }
     d.reports = snap;
     for (int gy = 0; gy < 25; ++gy)
         for (int gx = 0; gx < 25; ++gx) {
@@ -258,7 +271,7 @@ int main(int argc, char** argv) {
         std::printf("wrote %s\n", p.c_str());
     }
     // the radar tab heading up with every layer on (the rotation eases in: run frames until it has arrived)
-    d.headingDeg = 220; d.forceDial = 1; d.forceLayers = 7; d.forcePirep = 2;
+    d.headingDeg = 220; d.forceDial = 1; d.forceLayers = 7; d.forcePirep = 2; d.forceAdv = 1;
     for (int fr = 0; fr < 40; ++fr) {
         io.DeltaTime = 1.0f / 30.0f;
         ImGui::NewFrame();
@@ -274,7 +287,7 @@ int main(int argc, char** argv) {
         if (!writePng(cv, out + "/ui_radar_layers.png")) return 1;
         std::printf("wrote %s\n", (out + "/ui_radar_layers.png").c_str());
     }
-    d.forceDial = 0; d.forceLayers = 1; d.forcePirep = -1;
+    d.forceDial = 0; d.forceLayers = 1; d.forcePirep = -1; d.forceAdv = 0;
     // X-Plane's real weather on: the warning over a locked window; then the weather off: the settings greyed out
     for (int pass = 0; pass < 2; ++pass) {
         d.xpRealWeather = pass == 0;

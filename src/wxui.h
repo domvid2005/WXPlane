@@ -49,7 +49,8 @@ struct UiData {
     int forceTab = -1;
     int forceDial = -1;
     int forceLayers = -1;
-    int forcePirep = -1;                // open this pilot report's info window on the radar page (tests)               // radar map layers: 1 map, 2 turbulence, 4 pilot reports; -1 leave them (tests)                 // the wind dial: 0 north up, 1 heading up, -1 leave it (tests)                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
+    int forcePirep = -1;
+    int forceAdv = -1;                  // 1: AIRMET and SIGMET layers on, 0: off (tests)                // open this pilot report's info window on the radar page (tests)               // radar map layers: 1 map, 2 turbulence, 4 pilot reports; -1 leave them (tests)                 // the wind dial: 0 north up, 1 heading up, -1 leave it (tests)                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
 };
 
 struct UiActions {

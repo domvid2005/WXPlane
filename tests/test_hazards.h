@@ -13,8 +13,41 @@ const char* kPireps = R"([
 {"receiptTime":"2026-11-06T23:09:04.306Z","obsTime":1794006000,"qcField":0,"icaoId":"KWBC","acType":"UAL1463","lat":28.25,"lon":-74.1167,"fltLvl":320,"fltLvlType":"OTHER","clouds":null,"visib":null,"wxString":"","temp":-38,"wdir":309,"wspd":44,"icgBas1":null,"icgTop1":null,"icgInt1":"","icgType1":"","icgBas2":null,"icgTop2":null,"icgInt2":"","icgType2":"","tbBas1":null,"tbTop1":null,"tbInt1":"","tbType1":"","tbFreq1":"","tbBas2":null,"tbTop2":null,"tbInt2":"","tbType2":"","tbFreq2":"","vertGust":null,"brkAction":"","pirepType":"AIREP","rawOb":"ARP UAL1463 2815N 7407W 2300 F320 MS38 309/044KT"}
 ])";
 
+// AWC data API answers of 2026-11-12 (trimmed): a convective SIGMET, an international SIGMET, G-AIRMETs (two forecast hours)
+const char* kAirSigmet = R"([{"icaoId":"KKCI","alphaChar":"E","seriesId":"17E","receiptTime":"2026-11-12T03:46:19.302Z","creationTime":"2026-11-12T03:55:00.000Z","validTimeFrom":1794455700,"validTimeTo":1794462900,"airSigmetType":"SIGMET","hazard":"CONVECTIVE","altitudeHi1":32000,"altitudeHi2":32000,"altitudeLow1":null,"altitudeLow2":null,"movementDir":null,"movementSpd":0,"rawAirSigmet":"WSUS31 KKCI 120355
+MKCE WST 120355
+CONVECTIVE SIGMET 17E
+VALID UNTIL 0555Z
+FL AND CSTL WTRS
+FROM 20SSE SRQ-40E RSW-70NW EYW-100SSW SRQ-20SSE SRQ
+DMSHG AREA TS MOV LTL. TOPS TO FL320.","postProcessFlag":0,"severity":5,"coords":[{"lon":-82.404,"lat":27.094},{"lon":-81.036,"lat":26.528},{"lon":-82.712,"lat":25.411},{"lon":-83.242,"lat":25.856},{"lon":-82.404,"lat":27.094}]}])";
+const char* kISigmet = R"([{"icaoId":"WAAA","firId":"WAAF","firName":"WAAF UJUNG PANDANG","receiptTime":"2026-11-11T22:25:00.793Z","validTimeFrom":1794435600,"validTimeTo":1794457200,"seriesId":"27","hazard":"VA","qualifier":"ERUPTION MT DUKONO","base":0,"top":9000,"geom":"AREA","coords":[{"lon":127.967,"lat":1.7},{"lon":127.467,"lat":1.133},{"lon":127.083,"lat":1.283},{"lon":127.117,"lat":1.65},{"lon":127.917,"lat":1.8},{"lon":127.967,"lat":1.7}],"dir":"SW","spd":"10","chng":"INTSF","rawSigmet":"WVID21 WAAA 112220
+WAAF SIGMET 27 VALID 112220/120420 WAAA-"},
+{"icaoId":"EGRR","firId":"EGTT","firName":"EGTT LONDON","validTimeFrom":1794435600,"validTimeTo":1794457200,"seriesId":"3","hazard":"TS","qualifier":"EMBD","base":null,"top":35000,"geom":"AREA","coords":[{"lon":-1,"lat":51},{"lon":1,"lat":51},{"lon":1,"lat":52},{"lon":-1,"lat":51}],"rawSigmet":"EGTT SIGMET 3"},
+{"icaoId":"XXXX","hazard":"TC","geom":"POINT","coords":[{"lon":130,"lat":15}]}])";
+const char* kGAirmet = R"([{"tag":"1C","forecastHour":0,"validTime":"2026-11-12T03:00:00.000Z","hazard":"FZLVL","geometryType":"LINE","product":"ZULU","level":"SFC","issueTime":1794451500,"expireTime":1794474000,"coords":[{"lat":"56.13","lon":"-128.33"},{"lat":"55.88","lon":"-127.83"}]},
+{"tag":"2S","forecastHour":0,"validTime":"2026-11-12T03:00:00.000Z","hazard":"IFR","geometryType":"AREA","product":"SIERRA","due_to":"CIG BLW 010/VIS BLW 3SM BR","severity":null,"base":null,"top":null,"issueTime":1794451500,"expireTime":1794474000,"coords":[{"lat":"42.0","lon":"-71.0"},{"lat":"42.0","lon":"-70.0"},{"lat":"41.0","lon":"-70.0"},{"lat":"42.0","lon":"-71.0"}]},
+{"tag":"3T","forecastHour":0,"validTime":"2026-11-12T03:00:00.000Z","hazard":"TURB-HI","geometryType":"AREA","product":"TANGO","severity":"MOD","base":"240","top":"390","issueTime":1794451500,"expireTime":1794474000,"coords":[{"lat":"45","lon":"-75"},{"lat":"45","lon":"-70"},{"lat":"43","lon":"-70"},{"lat":"45","lon":"-75"}]},
+{"tag":"3T","forecastHour":3,"validTime":"2026-11-12T06:00:00.000Z","hazard":"TURB-HI","geometryType":"AREA","product":"TANGO","severity":"MOD","base":"240","top":"390","coords":[{"lat":"45","lon":"-75"},{"lat":"45","lon":"-70"},{"lat":"43","lon":"-70"},{"lat":"45","lon":"-75"}]}])";
+
 void run() {
     using namespace hz;
+    {   // AIRMETs, SIGMETs and convective SIGMETs for the radar map
+        std::string e;
+        auto a = parseAirSigmets(kAirSigmet, &e);
+        CHECK(a.size() == 1 && a[0].cls == Advisory::Convective && a[0].name == "Convective SIGMET 17E" && a[0].topFt == 32000 && a[0].baseFt < 0);
+        CHECK(a[0].pts.size() == 5 && !a[0].line && a[0].from == 1794455700 && a[0].to == 1794462900 && a[0].raw.find("TOPS TO FL320") != std::string::npos);
+        auto i = parseISigmets(kISigmet, &e);
+        CHECK(i.size() == 2);   // the point SIGMET has no outline
+        CHECK(i[0].cls == Advisory::Sigmet && i[0].hazard == "VA" && i[0].qualifier == "ERUPTION MT DUKONO" && i[0].baseFt == 0 && i[0].topFt == 9000 && i[0].movement == "MOV SW 10 KT INTSF");
+        CHECK(i[1].cls == Advisory::Convective && i[1].name.find("EGTT LONDON") != std::string::npos);
+        const std::time_t at = 1794456000;   // 03:20Z: the 03Z forecast hour
+        auto g = parseGAirmets(kGAirmet, at, &e);
+        CHECK(g.size() == 2);   // the freezing level line and the 06Z hour are left out
+        CHECK(g[0].cls == Advisory::Airmet && g[0].hazard == "IFR" && g[0].qualifier == "CIG BLW 010/VIS BLW 3SM BR" && g[0].pts.size() == 4);
+        CHECK(g[1].hazard == "TURB-HI" && g[1].baseFt == 24000 && g[1].topFt == 39000 && g[1].qualifier == "MOD");
+        CHECK(parseAirSigmets("[]", &e).empty() && parseGAirmets("not json", at, &e).empty());
+    }
     const std::time_t now = 1794006600;   // 2026-11-06 23:10Z
     std::string err;
     auto ps = parsePireps(kPireps, &err);

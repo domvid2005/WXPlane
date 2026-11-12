@@ -117,7 +117,138 @@ std::vector<Pirep> parsePireps(const std::string& json, std::string* err) {
         p.obsTime = timeOf(o, "obsTime");
         p.urgent = p.raw.find(" UUA ") != std::string::npos || p.raw.compare(0, 4, "UUA ") == 0;
         p.llws = p.raw.find("LLWS") != std::string::npos || p.raw.find("/WS ") != std::string::npos || p.raw.find("/WS/") != std::string::npos;
+        {   // icing, sky, weather, temperature and wind (shown on the radar map)
+            std::string ic = str(o, "icgInt1");
+            if (!ic.empty()) {
+                const std::string ty = str(o, "icgType1");
+                if (!ty.empty()) ic += " " + ty;
+                const double ib = num(o, "icgBas1", -1), it = num(o, "icgTop1", -1);
+                char b2[64];
+                if (ib >= 0 || it >= 0) { std::snprintf(b2, sizeof b2, " FL%03.0f-FL%03.0f", ib >= 0 ? ib : 0, it >= 0 ? it : ib); ic += b2; }
+                p.icing = ic;
+            }
+            p.wx = str(o, "wxString");
+            const Json* cl = o.get("clouds");
+            if (cl && cl->type == Json::Arr)
+                for (const auto& c : cl->arr) {
+                    const std::string cv = str(c, "cover");
+                    if (cv.empty()) continue;
+                    const double cb = num(c, "base", -1), ct = num(c, "top", -1);
+                    char b2[64];
+                    std::snprintf(b2, sizeof b2, "%s%s%s", p.sky.empty() ? "" : " ", cv.c_str(), cb >= 0 ? "" : "");
+                    p.sky += b2;
+                    if (cb >= 0) { std::snprintf(b2, sizeof b2, " %03.0f", cb / 100.0); p.sky += b2; }
+                    if (ct >= 0) { std::snprintf(b2, sizeof b2, "-%03.0f", ct / 100.0); p.sky += b2; }
+                }
+            p.tempC = num(o, "temp", -999);
+            p.windDir = num(o, "wdir", -1); p.windKt = num(o, "wspd", -1);
+        }
         out.push_back(p);
+    }
+    return out;
+}
+
+namespace {
+std::vector<std::pair<double, double>> coordsOf(const Json& o) {
+    std::vector<std::pair<double, double>> v;
+    const Json* c = o.get("coords");
+    if (!c || c->type != Json::Arr) return v;
+    for (const auto& q : c->arr) {
+        const double la = num(q, "lat", 999), lo = num(q, "lon", 999);
+        if (std::fabs(la) <= 90 && std::fabs(lo) <= 360) v.push_back({la, lo});
+    }
+    return v;
+}
+std::string mov(const std::string& dir, double spd) {
+    if (dir.empty() && spd <= 0) return "";
+    char b[64];
+    if (spd > 0) std::snprintf(b, sizeof b, "MOV %s %.0f KT", dir.c_str(), spd); else std::snprintf(b, sizeof b, "MOV %s", dir.c_str());
+    return b;
+}
+} // namespace
+
+std::vector<Advisory> parseAirSigmets(const std::string& json, std::string* err) {
+    std::vector<Advisory> out;
+    Json root;
+    if (!parseArray(json, root, err, "SIGMET")) return out;
+    for (const auto& o : root.arr) {
+        Advisory a;
+        const std::string type = str(o, "airSigmetType");
+        a.hazard = str(o, "hazard");
+        a.cls = type == "AIRMET" ? Advisory::Airmet : (a.hazard == "CONVECTIVE" ? Advisory::Convective : Advisory::Sigmet);
+        if (type == "OUTLOOK") continue;
+        const std::string sid = str(o, "seriesId");
+        a.name = std::string(a.cls == Advisory::Convective ? "Convective SIGMET " : (a.cls == Advisory::Airmet ? "AIRMET " : "SIGMET ")) + sid;
+        a.raw = str(o, "rawAirSigmet");
+        const double lo = num(o, "altitudeLow1", -1), hi = num(o, "altitudeHi1", -1);
+        a.baseFt = lo; a.topFt = hi;
+        a.from = timeOf(o, "validTimeFrom"); a.to = timeOf(o, "validTimeTo");
+        const double md = num(o, "movementDir", -1), ms = num(o, "movementSpd", -1);
+        if (md >= 0 || ms > 0) { char b[64]; std::snprintf(b, sizeof b, "MOV %03.0f %.0f KT", md >= 0 ? md : 0, ms > 0 ? ms : 0); a.movement = md >= 0 ? b : ""; }
+        a.pts = coordsOf(o);
+        if (a.pts.size() < 2) continue;
+        a.line = a.pts.size() < 3 || !(a.pts.front() == a.pts.back());
+        out.push_back(a);
+    }
+    return out;
+}
+
+std::vector<Advisory> parseISigmets(const std::string& json, std::string* err) {
+    std::vector<Advisory> out;
+    Json root;
+    if (!parseArray(json, root, err, "international SIGMET")) return out;
+    for (const auto& o : root.arr) {
+        Advisory a;
+        a.hazard = str(o, "hazard");
+        a.cls = (a.hazard == "TS" || a.hazard == "TSGR" || a.hazard == "TC") ? Advisory::Convective : Advisory::Sigmet;
+        a.name = "SIGMET " + str(o, "seriesId") + " " + str(o, "firName");
+        a.raw = str(o, "rawSigmet");
+        a.qualifier = str(o, "qualifier");
+        a.baseFt = num(o, "base", -1); a.topFt = num(o, "top", -1);
+        a.from = timeOf(o, "validTimeFrom"); a.to = timeOf(o, "validTimeTo");
+        a.movement = mov(str(o, "dir"), num(o, "spd", -1));
+        const std::string ch = str(o, "chng");
+        if (!ch.empty()) a.movement += (a.movement.empty() ? "" : " ") + ch;
+        a.pts = coordsOf(o);
+        if (a.pts.size() < 2) continue;   // point SIGMETs (a volcano, a cyclone centre) have no outline
+        a.line = str(o, "geom") == "LINE";
+        out.push_back(a);
+    }
+    return out;
+}
+
+std::vector<Advisory> parseGAirmets(const std::string& json, std::time_t now, std::string* err) {
+    std::vector<Advisory> out;
+    Json root;
+    if (!parseArray(json, root, err, "G-AIRMET")) return out;
+    // the forecast hour nearest now (the list holds several)
+    std::time_t best = 0;
+    for (const auto& o : root.arr) {
+        const std::time_t v = timeOf(o, "validTime");
+        if (v && (!best || std::llabs((long long)(v - now)) < std::llabs((long long)(best - now)))) best = v;
+    }
+    for (const auto& o : root.arr) {
+        if (best && timeOf(o, "validTime") != best) continue;
+        Advisory a;
+        a.cls = Advisory::Airmet;
+        a.hazard = str(o, "hazard");
+        if (a.hazard == "FZLVL" || a.hazard == "M_FZLVL") continue;   // freezing-level contours, not advisories
+        a.name = "G-AIRMET " + str(o, "product") + " " + a.hazard;
+        std::string q = str(o, "due_to");
+        const std::string sev = str(o, "severity");
+        if (!sev.empty()) q = sev + (q.empty() ? "" : ", " + q);
+        a.qualifier = q;
+        const std::string lvB = str(o, "base");
+        const double nb = num(o, "base", -1), nt = num(o, "top", -1);   // hundreds of feet ("SFC", "FZL" or nothing otherwise)
+        a.baseFt = lvB == "SFC" ? 0.0 : (nb >= 0 ? nb * 100.0 : -1.0);
+        a.topFt = nt >= 0 ? nt * 100.0 : -1.0;
+        a.from = timeOf(o, "issueTime"); a.to = timeOf(o, "expireTime");
+        if (const std::time_t v = timeOf(o, "validTime")) { a.from = v; }
+        a.pts = coordsOf(o);
+        if (a.pts.size() < 2) continue;
+        const std::string g = str(o, "geometryType");
+        a.line = g == "LINE";
+        out.push_back(a);
     }
     return out;
 }

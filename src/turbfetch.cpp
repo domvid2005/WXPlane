@@ -185,14 +185,30 @@ void Fetcher::reportsStep(double lat, double lon, std::time_t now) {
     // Reports around the aircraft (the API returns at most a few hundred, so the box is kept to ~1,000 km).
     if (get(base + "pirep?format=json&age=1.5&bbox=" + bbox, "", body, st, err, 30, 8u << 20)) snap->pireps = hz::parsePireps(body, &err);
     else { problems += " PIREPs: " + (st ? "HTTP " + std::to_string(st) : err) + ";"; if (old) snap->pireps = old->pireps; }
+    // AIRMETs, SIGMETs and convective SIGMETs, for the radar map (the simulation does not use them)
+    {
+        auto one = [&](const std::string& url, const char* what, auto parse) {
+            std::string b, e;
+            long s = 0;
+            if (get(url, "", b, s, e, 30, 16u << 20)) { auto v = parse(b, &e); snap->advisories.insert(snap->advisories.end(), v.begin(), v.end()); return true; }
+            problems += std::string(" ") + what + ": " + (s ? "HTTP " + std::to_string(s) : e) + ";";
+            return false;
+        };
+        bool ok = one(base + "airsigmet?format=json", "SIGMETs", [](const std::string& b, std::string* e) { return hz::parseAirSigmets(b, e); });
+        ok &= one(base + "isigmet?format=json", "international SIGMETs", [](const std::string& b, std::string* e) { return hz::parseISigmets(b, e); });
+        ok &= one(base + "gairmet?format=json", "G-AIRMETs", [&](const std::string& b, std::string* e) { return hz::parseGAirmets(b, now, e); });
+        if (!ok && old) for (const auto& a : old->advisories) { bool have = false; for (const auto& x : snap->advisories) if (x.name == a.name && x.from == a.from) have = true; if (!have) snap->advisories.push_back(a); }
+    }
     snap->fetched = now;
     hzLat_ = lat; hzLon_ = lon;
     int turbP = 0, llws = 0;
     for (const auto& p : snap->pireps) { if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++turbP; if (p.llws) ++llws; }
     if (!problems.empty()) { ++hzFail_; hzNext_ = now + std::min(600, 60 * hzFail_); } else hzFail_ = 0;
     char b[300];
-    std::snprintf(b, sizeof b, "reports: %zu PIREPs/AIREPs within ~500 nm (%d with turbulence, %d with low-level wind shear)%s",
-                  snap->pireps.size(), turbP, llws, problems.empty() ? "" : ("; failed:" + problems).c_str());
+    int nA = 0, nS = 0, nC = 0;
+    for (const auto& a : snap->advisories) { if (a.cls == hz::Advisory::Airmet) ++nA; else if (a.cls == hz::Advisory::Convective) ++nC; else ++nS; }
+    std::snprintf(b, sizeof b, "reports: %zu PIREPs/AIREPs within ~500 nm (%d with turbulence, %d with low-level wind shear); map: %d AIRMET, %d SIGMET, %d convective%s",
+                  snap->pireps.size(), turbP, llws, nA, nS, nC, problems.empty() ? "" : ("; failed:" + problems).c_str());
     log(b);
     std::lock_guard<std::mutex> l(mx_);
     hz_ = snap;

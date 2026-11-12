@@ -110,19 +110,23 @@ X-Plane blends cloud layers between neighbouring reports slot by slot. When any 
 
 Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, with six tabs:
 
-* **Overview** - the nearest airport (raw report, wind dial, decoded wind, visibility, weather, pressure, temperature, ceiling and
+* **Overview** (the data services are on the Services tab) - the nearest airport (raw report, wind dial, decoded wind, visibility, weather, pressure, temperature, ceiling and
   flight category; click the wind dial to turn it from north up to the aircraft's heading up, which shows the headwind or tailwind (H/T) and crosswind (X, from the left or right) in the middle), the nearby airports, a 50/100/150 nm radar picture (storm cells by reflectivity, airports coloured by flight
   category, the aircraft in the middle), winds and temperatures aloft with the tropopause, turbulence and windshear at the aircraft
   with the Max turbulence slider, and the data services.
 * **Airports** - every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
   its report, its ATIS and exactly what WXPlane sent to X-Plane for it.
 * **Radar** - the radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
-  The map has three layers (buttons above it): **Map** (coastlines, borders, state/province lines and lakes from Natural Earth,
+  The map's layers (buttons above it): **Airports** (by flight category; click one for its METAR and ATIS), **AIRMET**
+  (G-AIRMETs, US: IFR purple, mountain obscuration pink, turbulence yellow, icing light blue, surface wind green, LLWS rose) and
+  **SIGMET** (SIGMETs worldwide and convective SIGMETs: convective red, turbulence orange, icing blue, volcanic ash brown, cyclone
+  magenta; click an area for its hazard, levels, validity, movement and text; airports and reports stay clickable inside them),
+  **Map** (coastlines, borders, state/province lines and lakes from Natural Earth,
   public domain, embedded - no map downloads), **Turb** (the turbulence at the aircraft's altitude on a 12 nm grid, 300 x 300 nm,
   from the realistic-turbulence data) and **PIREPs** (pilot reports as triangles: urgent UUA red, routine UA orange, labelled with
   their level). On the Radar tab, click a report for a small window with its time, level, aircraft, turbulence, distance and text.
-  The mouse wheel over the map zooms through 1, 2, 5, 10, 20, 40, 80 and 160 nm (or the - / + buttons). Click the wind dial to turn
-  the dial and the map between **North Lock** and **Airplane Heading Lock** (an eased turn; the aircraft symbol uses its heading,
+  The mouse wheel over the map zooms through 1, 2, 5, 10, 20, 40, 80 and 160 nm (or the - / + buttons). Click the wind dial (or, on
+  the Radar tab, the North Lock / Heading Lock button) to turn the dial and the map between **North Lock** and **Airplane Heading Lock** (an eased turn; the aircraft symbol uses its heading,
   not its ground track, so it no longer swings around on the ground).
 * **Winds & Temps** - the profile at the aircraft every 1,000-2,000 ft up to FL600, with ISA deviation and the tropopause.
 * **Turbulence** - EDR by altitude at the aircraft, the nearby pilot reports, windshear.
