@@ -92,6 +92,8 @@ struct UiActions {
     bool popOut = false;                // move the window to its own OS window (or back)
     // the settings (the plugin's former menu toggles): flip these
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
+    // the one "Realistic turbulence & windshear" switch: set both to this (-1: untouched)
+    int setTurbWs = -1;
     std::string search;                 // look up this ICAO code anywhere in the world (METAR + ATIS)
     double mapAltFt = -1;               // the map's altitude slider (turbulence layer), when the turbulence layer is shown; -2: composite (the worst level)
 };

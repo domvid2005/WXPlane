@@ -338,6 +338,7 @@ void frame() {
     if (act.toggleAloft) g_cfg.useAloft = !g_cfg.useAloft;
     if (act.toggleTurbulence) g_cfg.realisticTurbulence = !g_cfg.realisticTurbulence;
     if (act.toggleWindshear) g_cfg.windshear = !g_cfg.windshear;
+    if (act.setTurbWs >= 0) g_cfg.realisticTurbulence = g_cfg.windshear = act.setTurbWs == 1;
     if (act.maxTurbChanged || act.maxTurbReleased) { g_cfg.maxTurbulence = std::max(0.0, std::min(1.0, act.maxTurb)); g_lastGridAlt = -1e9; }
     if (!act.search.empty()) {
         std::string q = act.search;

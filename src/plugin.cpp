@@ -3034,6 +3034,11 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     if (act.toggleAloft) menuHandler(nullptr, (void*)(intptr_t)kAloft);
     if (act.toggleTurbulence) menuHandler(nullptr, (void*)(intptr_t)kTurbulence);
     if (act.toggleWindshear) menuHandler(nullptr, (void*)(intptr_t)kWindshear);
+    if (act.setTurbWs >= 0) {   // the window's one switch for both
+        const bool on = act.setTurbWs == 1;
+        if (g_cfg.realisticTurbulence != on) menuHandler(nullptr, (void*)(intptr_t)kTurbulence);
+        if (g_cfg.windshear != on) menuHandler(nullptr, (void*)(intptr_t)kWindshear);
+    }
 }
 #endif
 

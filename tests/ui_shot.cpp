@@ -380,6 +380,17 @@ int main(int argc, char** argv) {
         d.cfg = &cfg;
     }
     d.xpRealWeather = false;
+    {   // turbulence & windshear switched off: the home page says so, the Turbulence tab fades out
+        Config nt = cfg; nt.realisticTurbulence = false; nt.windshear = false;
+        d.cfg = &nt; d.turbOn = false; d.wsOn = false;
+        for (int fr = 0; fr < 20; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 0 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        if (!writePng(cv, out + "/ui_turb_off.png")) return 1;
+        std::printf("wrote %s\n", (out + "/ui_turb_off.png").c_str());
+        d.cfg = &cfg; d.turbOn = true; d.wsOn = true;
+        for (int fr = 0; fr < 10; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+    }
     // duplicate ImGui IDs (ImGui outlines them in red when one is hovered): sweep the mouse over every tab with every map layer on
     {
         d.forceLayers = 7; d.forceAdv = 1; d.forceAloftLayers = 3;

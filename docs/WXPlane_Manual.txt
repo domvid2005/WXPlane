@@ -149,8 +149,11 @@ MAP
   * Radar echoes are drawn as a radar picture: green edges into yellow,
     orange and red cores.
   * True and magnetic: winds are given in degrees true (°T) as METARs and
-    winds aloft report them, with the magnetic direction (°M) in a small
-    box next to them. ATIS winds are magnetic; METAR winds are true.
+    winds aloft report them, with the other reference in a small box next
+    to them. On an airport's details (and its map popup), click that box
+    to swap true and magnetic. The °T / °M switch above the airport lists
+    sets the lists (Overview and Airports tab together). ATIS winds are
+    magnetic; METAR winds are true.
   * Click the circle of an airport for its METAR, ATIS and surface wind,
     and a wind barb's staff or feathers for its decode (the selected barb
     turns amber). Barbs are blue, deeper the stronger the wind; a calm

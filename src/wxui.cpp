@@ -50,15 +50,24 @@ int toMagnetic(double trueDeg, double varEast) {
     return m == 0 ? 360 : m;
 }
 // A small outlined box with text in it, on the current line (the magnetic direction next to a true one)
-void magBox(const char* text, ImU32 col = IM_COL32(196, 200, 207, 255)) {
+// clickable: returns true when clicked (the box then swaps which reference is shown)
+bool magBox(const char* text, ImU32 col = IM_COL32(196, 200, 207, 255), bool clickable = false) {
     const ImVec2 ts = ImGui::CalcTextSize(text);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float h = ImGui::GetTextLineHeight();
+    bool clicked = false, hov = false;
+    if (clickable) {
+        ImGui::PushID(text);
+        clicked = ImGui::InvisibleButton("##magbox", ImVec2(ts.x + 10, h));
+        hov = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    } else ImGui::Dummy(ImVec2(ts.x + 10, h));
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(ImVec2(p.x, p.y - 1), ImVec2(p.x + ts.x + 10, p.y + h + 1), IM_COL32(28, 30, 34, 255), 3.0f);
-    dl->AddRect(ImVec2(p.x, p.y - 1), ImVec2(p.x + ts.x + 10, p.y + h + 1), IM_COL32(90, 96, 106, 255), 3.0f, 0, 1.0f);
+    dl->AddRectFilled(ImVec2(p.x, p.y - 1), ImVec2(p.x + ts.x + 10, p.y + h + 1), hov ? IM_COL32(40, 46, 56, 255) : IM_COL32(28, 30, 34, 255), 3.0f);
+    dl->AddRect(ImVec2(p.x, p.y - 1), ImVec2(p.x + ts.x + 10, p.y + h + 1), hov ? cAccent : IM_COL32(90, 96, 106, 255), 3.0f, 0, 1.0f);
     dl->AddText(ImVec2(p.x + 5, p.y), col, text);
-    ImGui::Dummy(ImVec2(ts.x + 10, h));
+    return clicked;
 }
 
 std::string fmt(const char* f, ...) {
@@ -146,7 +155,9 @@ std::string windShort(const Report& r) {
 
 // Airport winds in degrees true (as METARs report them) or magnetic (as runways, ATIS and performance figures use them): one switch
 // for the whole window, next to the airport lists (windRefSwitch)
-bool& windMagnetic() { static bool m = false; return m; }
+bool& windMagnetic() { static bool m = false; return m; }   // the airport lists (home page and Airports tab, one switch for both)
+// the airport card's and map popups' wind: true or magnetic, swapped by clicking the small box with the other one
+bool& cardWindMagnetic() { static bool m = false; return m; }
 // a report's wind with its direction in the chosen reference: "030°T / 6 kt" or "044°M / 6 kt" (short: "030/6")
 int windDirIn(const Report& r, double varEast, bool mag) { return mag ? toMagnetic(r.windDir, varEast) : r.windDir; }
 std::string windTextRef(const Report& r, double varEast, bool mag) {
@@ -485,10 +496,10 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
         ImGui::BeginGroup();
         muted("Wind");
         const double var = magVar(d, st.lat, st.lon);
-        const bool mag = windMagnetic();
-        if (r.hasWind && r.windKt >= 1 && !r.windVariable) {   // the other reference in the small box
+        const bool mag = cardWindMagnetic();
+        if (r.hasWind && r.windKt >= 1 && !r.windVariable) {   // the other reference in the small box: a click swaps them
             ImGui::SameLine(0, 8);
-            magBox(fmt(mag ? "%03d°T" : "%03d°M", windDirIn(r, var, !mag)).c_str());
+            if (magBox(fmt(mag ? "%03d°T" : "%03d°M", windDirIn(r, var, !mag)).c_str(), IM_COL32(196, 200, 207, 255), true)) cardWindMagnetic() = !mag;
         }
         ImGui::PushFont(f.bold);
         ImGui::TextUnformatted(windTextRef(r, var, mag).c_str());
@@ -1374,9 +1385,13 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
                 {
                     const Report& r = st->report;
                     const double var = magVar(d, st->lat, st->lon);
-                    std::string w = windTextRef(r, var, windMagnetic());
-                    if (r.hasWind && r.windKt >= 1 && !r.windVariable) w += fmt(windMagnetic() ? "   (%03d°T)" : "   (%03d°M)", windDirIn(r, var, !windMagnetic()));
-                    infoRow("Wind", w);
+                    const bool mag = cardWindMagnetic();
+                    ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); muted("Wind"); ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(windTextRef(r, var, mag).c_str());
+                    if (r.hasWind && r.windKt >= 1 && !r.windVariable) {   // the other reference: a click swaps them
+                        ImGui::SameLine(0, 8);
+                        if (magBox(fmt(mag ? "%03d°T" : "%03d°M", windDirIn(r, var, !mag)).c_str(), IM_COL32(196, 200, 207, 255), true)) cardWindMagnetic() = !mag;
+                    }
                 }
                 infoRow("Visibility", visText(st->report, us));
                 infoRow("Weather", weatherText(st->report));
@@ -1795,6 +1810,14 @@ void statRow(const UiFonts& f, const char* label, const std::string& value, cons
 
 void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slider) {
     sectionTitle(f, "Turbulence & windshear");
+    if (!slider && d.cfg && !d.cfg->realisticTurbulence && !d.cfg->windshear) {   // the home page with both off: say where to switch them on
+        const ImVec2 av = ImGui::GetContentRegionAvail();
+        const char* t = "Turbulence/Windshear Disabled in Settings.";
+        const ImVec2 ts = ImGui::CalcTextSize(t);
+        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.0f, (av.x - ts.x) * 0.5f), ImGui::GetCursorPosY() + std::max(0.0f, (av.y - ts.y) * 0.4f)));
+        muted(t);
+        return;
+    }
     if (!d.turbData.empty()) { ImGui::SameLine(); muted(d.turbData.c_str()); }
     if (!slider) {   // the home page: three rows
         int withTurb = 0, total = 0;
@@ -1965,12 +1988,12 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     const float cardH = std::min(bodyH * 0.58f, 330.0f);
     if (panelBegin("card", ImVec2(colW, cardH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { if (st) stationCard(d, f, *st, false); else mutedWrapped("No airport reports near the aircraft."); }
     panelEnd();
-    ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + gap);   // exactly `gap` between stacked panels, so every column ends level
     // the time: zulu and local where the aircraft is
     const float timeH = ImGui::GetTextLineHeight() * 2 + ImGui::GetFontSize() * 0.6f + 24;
     if (panelBegin("time", ImVec2(colW, timeH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) timeBox(d, f);
     panelEnd();
-    ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + gap);   // exactly `gap` between stacked panels, so every column ends level
     if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); windRefSwitch("wrNear"); nearbyTable(d, st, 0, true); }
     panelEnd();
     ImGui::EndGroup();
@@ -1987,7 +2010,7 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
         aloftTable(d, f, {5000, 10000, 18000, 24000, 30000, 34000, 39000, 45000}, false);
     }
     panelEnd();
-    ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + gap);   // exactly `gap` between stacked panels, so every column ends level
     if (panelBegin("turb", ImVec2(col3, bodyH - aloftH - gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) turbulenceCard(d, f, act, false);
     panelEnd();
     ImGui::EndGroup();
@@ -2278,8 +2301,12 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         settingRow("Use ATIS", d.cfg->useAtis, "Merge the digital ATIS (D-ATIS, major US airports) over the METAR.", act.toggleAtis);
         ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Turbulence & windshear");
-        settingRow("Realistic turbulence", d.cfg->realisticTurbulence, "WXPlane sets the turbulence at every altitude from NOAA GTGN (US) / ECMWF (elsewhere) and pilot reports. Max turbulence is on the Turbulence tab.", act.toggleTurbulence);
-        settingRow("Realistic windshear", d.cfg->windshear, "Gust fronts and microbursts near convective storms.", act.toggleWindshear);
+        {   // one switch for both: turbulence at every altitude, and windshear near storms
+            const bool on = d.cfg->realisticTurbulence || d.cfg->windshear;
+            bool flip = false;
+            settingRow("Realistic turbulence & windshear", on, "Turbulence at every altitude from NOAA GTGN (US) / ECMWF (elsewhere) and pilot reports, and gust fronts and microbursts near convective storms. Off: X-Plane's own turbulence, no windshear, and no Turbulence tab. Max turbulence is on the Turbulence tab.", flip);
+            if (flip) act.setTurbWs = on ? 0 : 1;
+        }
         if (off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
         ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Status");
@@ -2559,7 +2586,18 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
         if (ImGui::BeginTabItem("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem(fmt("Airports (%zu)###air", d.res->stations.size()).c_str(), nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Winds & Temps", nullptr, d.forceTab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAloft(d, f); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
+        {   // the Turbulence tab only while turbulence & windshear are on; it fades out (and back in) instead of vanishing
+            static float vis = -1;
+            const bool want = !d.cfg || d.cfg->realisticTurbulence || d.cfg->windshear;
+            if (vis < 0) vis = want ? 1.0f : 0.0f;
+            vis = want ? std::min(1.0f, vis + ImGui::GetIO().DeltaTime * 4.0f) : std::max(0.0f, vis - ImGui::GetIO().DeltaTime * 4.0f);
+            if (vis > 0.0f) {
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * vis);
+                const bool open = ImGui::BeginTabItem("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
+                ImGui::PopStyleVar();
+                if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
+            }
+        }
         if (ImGui::BeginTabItem(bad ? fmt("Services (%d)###svc", bad).c_str() : "Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Settings", nullptr, d.forceTab == 6 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabSettings(d, f, act); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
