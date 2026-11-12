@@ -42,6 +42,9 @@ struct UiData {
     // magnetic variation, degrees east positive (magnetic = true - variation): at a point (nullptr: use magVarEast everywhere)
     double (*magVarAt)(double lat, double lon) = nullptr;
     double magVarEast = 0;
+    // local time where the aircraft is: seconds to add to UTC (X-Plane's time zone there); false: not known (longitude estimate)
+    bool haveLocalOffset = false;
+    double localOffsetS = 0;
     // update state
     bool busy = false;                  // a download is running
     double nextUpdateS = -1;            // seconds to the next scheduled update, -1 unknown

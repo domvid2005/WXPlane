@@ -69,6 +69,25 @@ std::string fmt(const char* f, ...) {
     return b;
 }
 
+// Local time at a point: X-Plane's time zone near the aircraft (within 250 nm), else an estimate from the longitude (marked ~)
+double localOffsetAt(const UiData& d, double lat, double lon, bool& estimate) {
+    estimate = !(d.haveLocalOffset && (!d.havePos || distNm(d.lat, d.lon, lat, lon) < 250.0));
+    if (!estimate) return d.localOffsetS;
+    return std::round(lon / 15.0) * 3600.0;
+}
+std::string utcOffsetText(double offS) {
+    const int m = (int)std::lround(std::fabs(offS) / 60.0);
+    return m % 60 ? fmt("UTC%s%d:%02d", offS < 0 ? "-" : "+", m / 60, m % 60) : fmt("UTC%s%d", offS < 0 ? "-" : "+", m / 60);
+}
+std::string clockText(std::time_t t, bool seconds) {
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    return seconds ? fmt("%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec) : fmt("%02d:%02d", tm.tm_hour, tm.tm_min);
+}
 std::string hhmm(std::time_t t) {
     if (t <= 0) return "--:--Z";
     return fmt("%02d:%02dZ", (int)((t / 3600) % 24), (int)((t / 60) % 60));
@@ -422,6 +441,12 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
         ImGui::TableNextColumn(); field(f, "Temp / Dew", r.hasTemp ? (r.hasDewp ? fmt("%.0f / %.0f °C", r.tempC, r.dewpC) : fmt("%.0f °C", r.tempC)) : std::string("—"));
         const int ceil = ceilingFt(r);
         ImGui::TableNextColumn(); field(f, "Ceiling", ceil < 0 ? std::string("None") : ftText(ceil) + " ft");
+        {   // local time at the airport
+            bool est = false;
+            const double off = localOffsetAt(d, st.lat, st.lon, est);
+            ImGui::TableNextColumn(); field(f, "Local time", (est ? "~" : "") + clockText(d.now + (std::time_t)off, false) + "  " + utcOffsetText(off));
+            ImGui::TableNextColumn(); field(f, "Zulu", clockText(d.now, false) + "Z");
+        }
         ImGui::EndTable();
     }
     ImGui::EndGroup();
@@ -582,7 +607,7 @@ bool altLayersOn() { return showTurb() || showWinds() || showClouds(); }
 // descends (the default), SFC is the surface (the slider at the bottom), or the altitude chosen with the slider. Leaving ACFT or SFC
 // (clicking it again) goes back to the altitude chosen before. What the layers use (shown) glides to the target, so they change
 // smoothly while the slider moves.
-const float kMapAltMax = 50000.0f;
+const float kMapAltMax = 60000.0f;
 enum class AltMode { Chosen = 0, Acft = 1, Sfc = 2 };
 struct MapAlt { float shown = -1, target = -1, chosen = -1; AltMode mode = AltMode::Acft; };
 MapAlt& mapAlt() { static MapAlt a; return a; }
@@ -1039,15 +1064,21 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             windOf(w, dir, kt);
             const int al = (int)(235 * w.show);
             // the selected barb (its decode window open) in amber, the others white (stations) or blue (model points)
-            const ImU32 col = sel ? IM_COL32(255, 196, 70, std::max(al, 200)) : (w.model ? IM_COL32(150, 200, 255, al) : IM_COL32(225, 235, 250, al));
+            // blue, darker and deeper the stronger the wind (light at 5 kt, deep blue at 100 kt and more); calm: a white circle;
+            // the selected barb (its decode window open) amber
+            const float sf = std::max(0.0f, std::min(1.0f, (kt - 5.0f) / 95.0f));
+            const ImU32 blue = IM_COL32((int)(175 - 145 * sf), (int)(215 - 135 * sf), (int)(255 - 25 * sf), al);
+            const ImU32 col = sel ? IM_COL32(255, 196, 70, std::max(al, 200)) : (kt < 2.5f ? IM_COL32(255, 255, 255, al) : blue);
             if (sel) mapSel().at = q;
             drawBarb(dl, q, dir, kt, viewRot(), col, sel ? 1.12f : 1.0f);
             // clicked on its staff and feathers (not on the point itself, which belongs to the airport there, if any)
             const double ang = (dir - viewRot()) * kPi / 180.0;
             const ImVec2 sv((float)std::sin(ang), -(float)std::cos(ang));
             const ImVec2 s0(q.x + sv.x * 7, q.y + sv.y * 7), s1(q.x + sv.x * 30, q.y + sv.y * 30);
-            const float dm = kt < 2.5f ? std::fabs(std::hypot(mouse.x - q.x, mouse.y - q.y) - 5.5f) + 3.0f : distToSeg(mouse, s0, s1);
-            if (interactive && w.show > 0.5f && dm < 8.0f && dm < bestPt) { bestPt = dm; hitKind = 4; hitKey = w.key; hitAt = q; }
+            // the barb: its staff and feathers (from 7 px out); the circle at its foot is the airport's (its METAR, ATIS, surface wind)
+            const bool onCircle = std::hypot(mouse.x - q.x, mouse.y - q.y) <= 7.5f;
+            const float dm = kt < 2.5f ? (w.surface ? 1e9f : std::fabs(std::hypot(mouse.x - q.x, mouse.y - q.y) - 5.5f) + 3.0f) : distToSeg(mouse, s0, s1);
+            if (interactive && w.show > 0.5f && dm < 10.0f && dm < bestPt && !(onCircle && w.surface)) { bestPt = dm; hitKind = 4; hitKey = w.key; hitAt = q; }
         }
     }
     if (showPireps() && d.reports) {
@@ -1078,13 +1109,21 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             dl->AddCircleFilled(q, 3.5f, catColor(flightCategory(st.report)), 12);
             if (rangeNm <= 40) dl->AddText(f.body, ImGui::GetFontSize() * 0.75f, ImVec2(q.x + 5, q.y - 6), cMuted, st.icao.c_str());
             const float dm = std::hypot(mouse.x - q.x, mouse.y - q.y);
-            if (interactive && (dm < bestPt || (dm < 5.0f && hitKind == 4))) { bestPt = dm; hitKind = 2; hitKey = st.icao; hitAt = q; }
+            if (interactive && (dm < bestPt || (dm <= 7.5f && hitKind == 4))) { bestPt = dm; hitKind = 2; hitKey = st.icao; hitAt = q; }
         }
     // the aircraft: its true heading (not the ground track, which swings around when slow or stopped)
     const double a = (d.headingDeg - viewRot()) * kPi / 180.0;
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
     dl->AddTriangleFilled(ImVec2(ac.x + dir.x * 10, ac.y + dir.y * 10), ImVec2(ac.x - dir.x * 7 + n.x * 6, ac.y - dir.y * 7 + n.y * 6),
                           ImVec2(ac.x - dir.x * 7 - n.x * 6, ac.y - dir.y * 7 - n.y * 6), IM_COL32(255, 255, 255, 255));
+    if (interactive) {   // the time, top left of the Map tab's map
+        const std::string z = clockText(d.now, false) + "Z";
+        const ImVec2 ts = ImGui::CalcTextSize(z.c_str());
+        const ImVec2 b0(p.x + 8, p.y + 8), b1(p.x + 8 + ts.x + 12, p.y + 8 + ts.y + 6);
+        dl->AddRectFilled(b0, b1, IM_COL32(20, 22, 26, 220), 4.0f);
+        dl->AddRect(b0, b1, IM_COL32(60, 64, 72, 255), 4.0f);
+        dl->AddText(ImVec2(b0.x + 6, b0.y + 3), cSoft, z.c_str());
+    }
     dl->PopClipRect();
     ImGui::InvisibleButton("radarclick", ImVec2(size, size));
     if (interactive) { mapSel().mapMin = p; mapSel().mapMax = ImVec2(p.x + size, p.y + size); }   // the info window stays inside this
@@ -1409,8 +1448,8 @@ void altitudeSlider(const UiData& d, float w, float h) {
     const float sh = std::max(60.0f, h - 2 * bh - 2 * ImGui::GetStyle().ItemSpacing.y);
     // scale marks every 10,000 ft on the right of the track
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    for (int k = 0; k <= 5; ++k) {
-        const float y = p.y + 7 + (sh - 14) * (1.0f - k / 5.0f);
+    for (int k = 0; k <= 6; ++k) {
+        const float y = p.y + 7 + (sh - 14) * (1.0f - k / 6.0f);
         dl->AddLine(ImVec2(p.x + w * 0.5f + 5, y), ImVec2(p.x + w * 0.5f + 10, y), cRing, 1.0f);
         const std::string t = k == 0 ? std::string("0") : fmt("%d", k * 10);
         dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.72f, ImVec2(p.x + w * 0.5f + 12, y - ImGui::GetFontSize() * 0.36f), cIdle, t.c_str());
@@ -1697,7 +1736,7 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
     ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
     ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
-    ImGui::TableSetupColumn("Wind °T", ImGuiTableColumnFlags_WidthStretch, textColW("000/00 G00"), kSortWind);
+    ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthStretch, textColW("000/00 G00"), kSortWind);
     ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
     ImGui::TableSetupColumn("Ceil.", ImGuiTableColumnFlags_WidthFixed, textColW("00,000"), kSortCeil);
     ImGui::TableSetupScrollFreeze(0, 1);
@@ -1729,6 +1768,28 @@ void panelEnd() { ImGui::EndChild(); ImGui::PopStyleVar(); ImGui::PopStyleColor(
 
 // ---- tabs ---------------------------------------------------------------------------------------------------------------------
 
+// Zulu and local time (where the aircraft is), side by side
+void timeBox(const UiData& d, const UiFonts& f) {
+    const float w = ImGui::GetContentRegionAvail().x * 0.5f;
+    const float x0 = ImGui::GetCursorPosX();
+    bool est = false;
+    const double off = localOffsetAt(d, d.lat, d.lon, est);
+    ImGui::BeginGroup();
+    muted("Zulu");
+    ImGui::PushFont(f.title);
+    ImGui::TextUnformatted((clockText(d.now, true) + "Z").c_str());
+    ImGui::PopFont();
+    ImGui::EndGroup();
+    ImGui::SameLine(x0 + w);
+    ImGui::BeginGroup();
+    muted(("Local  " + std::string(est ? "~" : "") + utcOffsetText(off)).c_str());
+    ImGui::PushFont(f.title);
+    ImGui::TextUnformatted(clockText(d.now + (std::time_t)off, true).c_str());
+    ImGui::PopFont();
+    ImGui::EndGroup();
+    if (est && ImGui::IsItemHovered()) ImGui::SetTooltip("Estimated from the longitude (X-Plane's time zone is not known yet)");
+}
+
 void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     const float W = ImGui::GetContentRegionAvail().x, H = ImGui::GetContentRegionAvail().y;
     const float gap = 12;
@@ -1740,7 +1801,12 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("card", ImVec2(colW, cardH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { if (st) stationCard(d, f, *st, false); else mutedWrapped("No airport reports near the aircraft."); }
     panelEnd();
     ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
-    if (panelBegin("near", ImVec2(colW, bodyH - cardH - gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); nearbyTable(d, st, 0, true); }
+    // the time: zulu and local where the aircraft is
+    const float timeH = ImGui::GetTextLineHeight() * 2 + ImGui::GetFontSize() * 0.6f + 24;
+    if (panelBegin("time", ImVec2(colW, timeH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) timeBox(d, f);
+    panelEnd();
+    ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+    if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); nearbyTable(d, st, 0, true); }
     panelEnd();
     ImGui::EndGroup();
     ImGui::SameLine(0, gap);
@@ -1786,7 +1852,7 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
             ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
             ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
             ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
-            ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthFixed, textColW("VRB/00 G00"), kSortWind);   // true (the card above says so)
+            ImGui::TableSetupColumn("Wind °T", ImGuiTableColumnFlags_WidthFixed, textColW("VRB/00 G00 "), kSortWind);
             ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
             ImGui::TableSetupColumn("Weather", ImGuiTableColumnFlags_WidthFixed, textColW("+TSRA BR"), kSortWx);
             ImGui::TableSetupColumn("Ceiling", ImGuiTableColumnFlags_WidthStretch, textColW("00,000 ft"), kSortCeil);

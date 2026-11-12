@@ -2987,6 +2987,16 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
     d.turbGridAltFt = g_uiTs.gridAltFt; d.turbGridSeq = g_uiTs.gridSeq;
     d.magVarAt = magVarEastAt;
+    {   // X-Plane's time zone where the aircraft is: its local time minus its zulu time (whole quarter hours)
+        static XPLMDataRef drLoc = XPLMFindDataRef("sim/time/local_time_sec"), drZulu = XPLMFindDataRef("sim/time/zulu_time_sec");
+        if (drLoc && drZulu && d.havePos) {
+            double off = (double)XPLMGetDataf(drLoc) - (double)XPLMGetDataf(drZulu);
+            while (off > 14 * 3600.0) off -= 86400.0;
+            while (off <= -12 * 3600.0) off += 86400.0;
+            d.localOffsetS = std::round(off / 900.0) * 900.0;
+            d.haveLocalOffset = true;
+        }
+    }
     if (d.havePos) d.magVarEast = magVarEastAt(d.lat, d.lon);
     uiCloudsTick();
     d.clouds = g_uiClouds;

@@ -232,6 +232,7 @@ int main(int argc, char** argv) {
             d.turbGrid.push_back({la, lo, e});
         }
     d.turbGridDLat = 0.2; d.turbGridDLon = 0.27;
+    d.haveLocalOffset = true; d.localOffsetS = -5 * 3600;   // Boston in November: EST
     {   // the clouds sent to X-Plane: a mid-level deck with gaps, a deep band along the storm line, low stratus to the south-east
         auto g = std::make_shared<UiCloudGrid>();
         g->nx = g->ny = 61; g->dLat = 0.1; g->dLon = 0.134; g->lat0 = 42.36 - 30 * g->dLat; g->lon0 = -71.0 - 30 * g->dLon;
