@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "hazards.h"
+#include "status.h"
 #include "turbulence.h"
 
 namespace wx {
@@ -26,6 +27,8 @@ public:
     Inputs inputs() const;
     std::shared_ptr<const hz::Snapshot> reports() const;
     std::vector<std::string> takeLog();
+    // Pilot reports, NOAA GTGN and ECMWF Open Data, for the window's "Data services" list (any thread).
+    std::vector<ServiceStatus> services(std::time_t now) const;
 
 private:
     void run();
@@ -45,6 +48,7 @@ private:
     std::shared_ptr<const hz::Snapshot> hz_;
     std::time_t hzNext_ = 0; double hzLat_ = 999, hzLon_ = 999; int hzFail_ = 0;
     std::vector<std::string> log_;
+    std::string gProbPub_, eProbPub_, hzProbPub_;   // the workers' last problems, copied under mx_ for services()
 
     // GTGN state (worker only)
     struct GMsg { size_t off = 0, len = 0; double altFt = 0; };

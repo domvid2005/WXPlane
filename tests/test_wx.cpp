@@ -967,6 +967,31 @@ int main() {
         CHECK(all.find("ABI") != std::string::npos);
         CHECK(all.find("ATIS   KAAA") == std::string::npos);            // no ATIS block for a station without one
         CHECK(buildViewLines(fr, false, cfg, now).size() == 2);         // nothing downloaded yet
+        // data services at the bottom, coloured by state; a report that already starts with "METAR" is not labelled twice
+        {
+            FetchResult sr = fr;
+            Station u; u.icao = "EGPC"; u.rawMetar = "METAR EGPC 120050Z AUTO 32033G47KT 6000 -RA FEW024/// 05/02 Q1002"; parseReport(u.rawMetar, u.report);
+            sr.stations = {u};
+            ServiceStatus m{"NOAA Aviation Weather Center", "METARs", SvcState::Ok, "7 report(s)", now};
+            ServiceStatus o{"EUMETNET OPERA", "radar storms (Europe)", SvcState::Down, "feed down: newest composite is 20:10Z (4 h 48 min old)", 0};
+            ServiceStatus w{"Open-Meteo (NOAA GFS)", "winds and temperatures aloft", SvcState::Degraded, "unavailable, using the earlier download", now - 1800};
+            sr.services = {m, o, w};
+            std::vector<ServiceStatus> extra = {ServiceStatus{"NOAA GTGN", "turbulence (US)", SvcState::NotHere, "outside the US", 0}};
+            auto sv = buildViewLines(sr, true, cfg, now, &extra);
+            std::string t; int ok = 0, down = 0, warn = 0, idle = 0; size_t hdr = 0, last = 0;
+            for (size_t i = 0; i < sv.size(); ++i) {
+                t += sv[i].text + "\n";
+                if (sv[i].text == "Data services") hdr = i;
+                if (sv[i].kind == LineKind::SvcOk) ++ok; if (sv[i].kind == LineKind::SvcDown) ++down; if (sv[i].kind == LineKind::SvcWarn) ++warn; if (sv[i].kind == LineKind::SvcIdle) ++idle;
+                last = i;
+            }
+            CHECK(hdr > 0 && last == hdr + 4 && ok == 1 && down == 1 && warn == 1 && idle == 1);
+            CHECK(t.find("DOWN   EUMETNET OPERA - radar storms (Europe): feed down: newest composite is 20:10Z") != std::string::npos);
+            CHECK(t.find("(last good ") != std::string::npos && t.find("30 min ago)") != std::string::npos);
+            CHECK(t.find("not used here   NOAA GTGN") != std::string::npos);
+            CHECK(t.find("METAR METAR") == std::string::npos && t.find("METAR EGPC 120050Z") != std::string::npos);
+            CHECK(buildViewLines(sr, false, cfg, now, &extra).size() == 2 + 2 + 4);   // also before the first download
+        }
         auto w = wrapText("aaaa bbbb cccc dddd eeee ffff", 10);
         CHECK(w.size() == 3 && w[0] == "aaaa bbbb");
         CHECK(wrapText("", 10).size() == 1);

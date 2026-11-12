@@ -104,6 +104,17 @@ Advanced settings (start-up gating, `transition_s`, `update_transition_s`, `appl
 
 X-Plane blends cloud layers between neighbouring reports slot by slot. When any nearby station has fog, WXPlane keeps cloud slot 0 reserved for fog at every station (empty where there is none), so fog is only ever blended with fog. This avoids the layer flickering as you fly over it. The fog layer is at least 100-120 m thick for the same reason. The visibility self-check is skipped while you are more than 1000 m above the ground, so it never re-applies weather (and rebuilds clouds) during cruise.
 
+## Data services
+
+The bottom of the "Show Local METAR/ATIS Data..." window lists every service WXPlane downloads from, with its state: **OK** (green),
+**DEGRADED** (amber: the last download failed and an earlier one is in use), **DOWN** (red), or "not used here" / "off" / "waiting"
+(grey), with what it last delivered and, when it is failing, when it last worked:
+
+* NOAA Aviation Weather Center - METARs; D-ATIS (clowd.io) - ATIS
+* Open-Meteo (NOAA GFS) - winds and temperatures aloft; clouds aloft and open-water weather
+* NOAA MRMS - radar (US); EUMETNET OPERA - radar (Europe)
+* NOAA Aviation Weather Center - pilot reports; NOAA GTGN - turbulence (US); ECMWF Open Data - turbulence (outside the US)
+
 ## Radar storms
 
 X-Plane's weather API cannot take a radar image, so WXPlane builds the storms from radar data instead. The aircraft's weather radar draws what the sim simulates, so if the sim's storms match the real ones, the radar picture does too.
@@ -150,7 +161,9 @@ OPERA has no precipitation type and no echo tops, so:
   is capped at `radar_stratiform_max_dbz` like MRMS steady rain (the melting-layer bright band would otherwise make cumulonimbus);
 * storm tops are estimated from reflectivity.
 
-The radar log line names the source ("EUMETNET OPERA (Europe)") and counts the tiles downloaded.
+The radar log line names the source ("EUMETNET OPERA (Europe)") and counts the tiles downloaded. When no composite has been
+published for 20 minutes, WXPlane reads the bucket listing (at most every 10 minutes) and says how long the feed has been down,
+e.g. "feed down: newest composite is 20:10Z (4 h 48 min old)".
 
 ### Elsewhere
 

@@ -232,13 +232,22 @@ CURLcode curl_easy_setopt(CURL* c, int opt, ...) {
 // European radar mock (HARNESS_OPERA): the real composite header, tiles made here (a 50 dBZ block over LEMD in 20 dBZ rain)
 static std::string g_operaHead;
 static int g_operaTiles = 0;
+static bool g_operaDown = false;   // the feed stalled 4 h 48 min ago: composites answer 404, the listing names the last one
 static std::string operaTileFor(uint64_t off);
 CURLcode curl_easy_perform(CURL* c) {
     Easy* e = (Easy*)c;
     ++g_netRequests;
     std::printf("  net: GET %s\n", e->url.c_str());
     { static std::mutex m; std::lock_guard<std::mutex> l(m); g_urls.push_back(e->url); }   // several worker threads download at once
-    if (!g_operaHead.empty() && e->url.find("cloudferro.com/openradar-24h/") != std::string::npos) {
+    if (!g_operaHead.empty() && e->url.find("cloudferro.com/openradar-24h") != std::string::npos) {
+        if (e->url.find("?list-type=2") != std::string::npos) {
+            std::time_t last = ((std::time(nullptr) - 288 * 60) / 300) * 300;
+            std::tm g{}; gmtime_r(&last, &g);
+            char k[200]; std::snprintf(k, sizeof k, "<ListBucketResult><Contents><Key>x/OPERA@%04d%02d%02dT%02d%02d@0@DBZH.tiff</Key></Contents></ListBucketResult>", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour, g.tm_min);
+            static std::string b; b = g_operaDown ? std::string(k) : std::string("<ListBucketResult/>");
+            e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+        }
+        if (g_operaDown) { e->status = 404; return 0; }
         if (e->range.empty()) { e->status = 403; return 0; }
         const uint64_t a = std::strtoull(e->range.c_str(), nullptr, 10), b = std::strtoull(e->range.c_str() + e->range.find('-') + 1, nullptr, 10);
         if (a == 0) { const size_t n = (size_t)std::min<uint64_t>(b + 1, g_operaHead.size()); e->status = 206; e->wf((char*)g_operaHead.data(), 1, n, e->wd); return 0; }
@@ -649,7 +658,19 @@ static int runOpera() {
     g_lat = 40.4722; g_lon = -3.5608; g_elev = 1500; g_agl = 900;
     char n[256], s[256], d[256];
     CHECK(XPluginStart(n, s, d) == 1);
+    // first the feed is down: no storms, and the note says since when
+    g_operaDown = true;
     CHECK(XPluginEnable() == 1);
+    for (int i = 0; i < 1500 && g_logAll.find("radar: none") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    {
+        const size_t d = g_logAll.find("radar: none");
+        if (d != std::string::npos) std::printf("[opera] %s\n", g_logAll.substr(d, g_logAll.find('\n', d) - d).c_str());
+        CHECK(g_logAll.find("European radar (OPERA): feed down: newest composite is ") != std::string::npos && g_logAll.find("(4 h 4") != std::string::npos);
+        CHECK(g_operaTiles == 0);
+    }
+    g_operaDown = false;
+    g_logAll.clear();
+    g_menuHandler(nullptr, (void*)(intptr_t)2);
     for (int i = 0; i < 1500 && g_logAll.find("radar: EUMETNET OPERA") == std::string::npos && g_logAll.find("radar: none") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     const size_t at = g_logAll.find("radar: ");
     if (at != std::string::npos) std::printf("[opera] %s\n", g_logAll.substr(at, g_logAll.find('\n', at) - at).c_str());

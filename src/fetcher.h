@@ -11,6 +11,7 @@
 
 #include "config.h"
 #include "opera.h"
+#include "status.h"
 #include "radar.h"
 #include "wxmodel.h"
 
@@ -40,6 +41,7 @@ struct FetchResult {
     bool immediate = false;
     bool radarOnly = false;
     std::time_t fetchedAt = 0;
+    std::vector<ServiceStatus> services;   // every data service of this fetcher, in a fixed order
 };
 
 class Fetcher {
@@ -97,6 +99,18 @@ private:
     RadarResult lastOpera_;
     std::time_t lastOperaAt_ = 0;
     double lastOperaLat_ = 0, lastOperaLon_ = 0;
+    std::time_t operaNewestKnown_ = 0, operaNewestCheckedAt_ = 0;   // the newest composite in the bucket, when the feed stalls
+    std::time_t operaNewestPublished(std::time_t now);
+    enum { kSvcMetar, kSvcAtis, kSvcWinds, kSvcClouds, kSvcMrms, kSvcOpera, kSvcCount };
+    ServiceStatus svc_[kSvcCount] = {
+        {"NOAA Aviation Weather Center", "METARs"},
+        {"D-ATIS (clowd.io)", "ATIS"},
+        {"Open-Meteo (NOAA GFS)", "winds and temperatures aloft"},
+        {"Open-Meteo (NOAA GFS)", "clouds aloft, open-water weather"},
+        {"NOAA MRMS", "radar storms (US)"},
+        {"EUMETNET OPERA", "radar storms (Europe)"}};
+    void setSvc(int k, SvcState s, const std::string& detail, std::time_t now) { svc_[k].state = s; svc_[k].detail = detail; if (s == SvcState::Ok) svc_[k].lastOk = now; }
+    void copySvc(FetchResult& r) const { r.services.assign(svc_, svc_ + kSvcCount); }
     bool fetchOpera(const FetchRequest& rq, std::time_t now, const std::vector<Station>* stations, RadarResult& out, std::string& err);
 };
 

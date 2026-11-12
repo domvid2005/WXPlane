@@ -27,6 +27,10 @@ struct OperaHeader {
 std::string operaUrl(std::time_t t);
 // The slot to try first: composites appear about 4 minutes after their time.
 std::time_t operaNewestSlot(std::time_t now);
+// The bucket listing of the composites of one UTC hour (S3 ListObjectsV2), for finding the newest one when the feed stalls.
+std::string operaListUrl(std::time_t hour);
+// The newest DBZH GeoTIFF composite named in a listing, 0 if none.
+std::time_t operaNewestInListing(const std::string& xml);
 // Inside the composite's grid (the standard OPERA domain; coverage inside it is decided by the data).
 bool operaCovers(double lat, double lon);
 // LAEA (ellipsoidal) forward projection with the header's parameters.

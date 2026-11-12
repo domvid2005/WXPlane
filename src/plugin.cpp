@@ -2515,6 +2515,10 @@ void colorFor(wx::LineKind k, float* c) {
         case wx::LineKind::Metar:   c[0] = 0.85f; c[1] = 0.95f; c[2] = 0.7f; break;
         case wx::LineKind::Atis:    c[0] = 1.0f; c[1] = 0.85f; c[2] = 0.5f; break;
         case wx::LineKind::Applied: c[0] = 0.75f; c[1] = 0.75f; c[2] = 0.75f; break;
+        case wx::LineKind::SvcOk:   c[0] = 0.45f; c[1] = 0.9f; c[2] = 0.45f; break;
+        case wx::LineKind::SvcWarn: c[0] = 1.0f; c[1] = 0.8f; c[2] = 0.3f; break;
+        case wx::LineKind::SvcDown: c[0] = 1.0f; c[1] = 0.4f; c[2] = 0.4f; break;
+        case wx::LineKind::SvcIdle: c[0] = 0.6f; c[1] = 0.6f; c[2] = 0.6f; break;
         default:                    c[0] = 0.9f; c[1] = 0.9f; c[2] = 0.9f; break;
     }
 }
@@ -2548,9 +2552,14 @@ void wrapPx(const std::string& text, wx::LineKind kind, int widthPx, std::vector
 }
 
 void rewrap(int widthPx) {
-    if (g_wrappedVersion == g_viewVersion && g_wrappedWidth == widthPx) return;
+    static std::time_t wrappedAt = 0;
+    const std::time_t now = std::time(nullptr);
+    // the turbulence worker's services change between weather updates: the text is rebuilt every 10 s as well
+    if (g_wrappedVersion == g_viewVersion && g_wrappedWidth == widthPx && now - wrappedAt < 10) return;
+    wrappedAt = now;
     g_wrapped.clear();
-    for (const auto& l : wx::buildViewLines(g_lastRes, g_haveLast, g_cfg, std::time(nullptr))) wrapPx(l.text, l.kind, widthPx, g_wrapped);
+    const std::vector<wx::ServiceStatus> extra = g_turbFetch.services(now);
+    for (const auto& l : wx::buildViewLines(g_lastRes, g_haveLast, g_cfg, now, &extra)) wrapPx(l.text, l.kind, widthPx, g_wrapped);
     g_wrappedVersion = g_viewVersion;
     g_wrappedWidth = widthPx;
 }

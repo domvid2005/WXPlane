@@ -79,6 +79,17 @@ void run() {
     CHECK(!operaCovers(5.0, 10.0));
     CHECK(!operaCovers(35.5, 139.8));       // Tokyo
 
+    // the bucket listing (ListObjectsV2) when the feed stalls: the newest DBZH GeoTIFF counts, other products do not
+    CHECK(operaListUrl(1794427800 + 1500) == "https://s3.waw3-1.cloudferro.com/openradar-24h?list-type=2&max-keys=200&prefix=2026/11/11/OPERA/COMP/OPERA@20261111T20");
+    {
+        const std::string xml = "<ListBucketResult><Contents><Key>2026/11/11/OPERA/COMP/OPERA@20261111T2005@0@DBZH.tiff</Key></Contents>"
+                                "<Contents><Key>2026/11/11/OPERA/COMP/OPERA@20261111T2010@0@DBZH.h5</Key></Contents>"
+                                "<Contents><Key>2026/11/11/OPERA/COMP/OPERA@20261111T2010@0@DBZH.tiff</Key></Contents>"
+                                "<Contents><Key>2026/11/11/OPERA/COMP/OPERA@20261111T2015@0@ACRR.tiff</Key></Contents></ListBucketResult>";
+        CHECK(operaNewestInListing(xml) == 1794427800);
+        CHECK(operaNewestInListing("<ListBucketResult></ListBucketResult>") == 0);
+    }
+
     const std::string head = readAll(WX_TEST_DATA_DIR "/opera_head.bin");
     CHECK(head.size() == 5469);
     OperaHeader h;

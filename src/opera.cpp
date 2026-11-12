@@ -69,6 +69,43 @@ std::string operaUrl(std::time_t t) {
     return b;
 }
 
+std::string operaListUrl(std::time_t t) {
+    t = (t / 3600) * 3600;
+    std::tm g{};
+#if defined(_WIN32)
+    gmtime_s(&g, &t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    char b[220];
+    std::snprintf(b, sizeof b, "https://s3.waw3-1.cloudferro.com/openradar-24h?list-type=2&max-keys=200&prefix=%04d/%02d/%02d/OPERA/COMP/OPERA@%04d%02d%02dT%02d",
+                  g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour);
+    return b;
+}
+
+static std::time_t timegmUtc(int y, int mo, int d, int h, int mi) {
+    // days from civil (Howard Hinnant), no timegm needed
+    y -= mo <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const long long days = (long long)era * 146097 + (long long)doe - 719468;
+    return (std::time_t)(days * 86400 + h * 3600 + mi * 60);
+}
+
+std::time_t operaNewestInListing(const std::string& xml) {
+    std::time_t best = 0;
+    for (size_t at = xml.find("OPERA@"); at != std::string::npos; at = xml.find("OPERA@", at + 6)) {
+        int y, mo, d, h, mi;
+        char tail[16] = {0};
+        if (std::sscanf(xml.c_str() + at, "OPERA@%4d%2d%2dT%2d%2d@0@%15[A-Z.a-z]", &y, &mo, &d, &h, &mi, tail) != 6) continue;
+        if (std::strncmp(tail, "DBZH.tiff", 9) != 0) continue;
+        best = std::max(best, timegmUtc(y, mo, d, h, mi));
+    }
+    return best;
+}
+
 void operaForward(const OperaHeader& h, double lat, double lon, double& x, double& y) {
     const double f = 1.0 / h.invF, e2 = 2 * f - f * f, e = std::sqrt(e2);
     const double qp = qOf(90 * kD2R, e2, e), Rq = h.a * std::sqrt(qp / 2);

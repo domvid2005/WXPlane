@@ -30,13 +30,33 @@ std::string hhmmZ(std::time_t t) {
 
 } // namespace
 
-std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, const Config& cfg, std::time_t now) {
+static void addServices(std::vector<ViewLine>& v, const std::vector<ServiceStatus>& a, const std::vector<ServiceStatus>* extra, std::time_t now) {
+    std::vector<ServiceStatus> all = a;
+    if (extra) all.insert(all.end(), extra->begin(), extra->end());
+    if (all.empty()) return;
+    v.push_back({LineKind::Blank, ""});
+    v.push_back({LineKind::Header, "Data services"});
+    for (const auto& s : all) {
+        LineKind k = LineKind::SvcIdle;
+        if (s.state == SvcState::Ok) k = LineKind::SvcOk;
+        else if (s.state == SvcState::Degraded) k = LineKind::SvcWarn;
+        else if (s.state == SvcState::Down) k = LineKind::SvcDown;
+        std::string line = std::string(svcLabel(s.state)) + "   " + s.name + " - " + s.use;
+        if (!s.detail.empty()) line += ": " + s.detail;
+        if ((s.state == SvcState::Down || s.state == SvcState::Degraded) && s.lastOk > 0)
+            line += fmt(" (last good %s, %ld min ago)", hhmmZ(s.lastOk).c_str(), (long)((now - s.lastOk) / 60));
+        v.push_back({k, line});
+    }
+}
+
+std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, const Config& cfg, std::time_t now, const std::vector<ServiceStatus>* extra) {
     std::vector<ViewLine> v;
     auto add = [&](LineKind k, const std::string& s) { v.push_back({k, s}); };
 
     if (!haveData) {
         add(LineKind::Title, "WXPlane - local weather data");
         add(LineKind::Note, "No weather has been downloaded yet. Use \"Refresh Weather Data Now\" and reopen this window.");
+        addServices(v, res.services, extra, now);
         return v;
     }
     add(LineKind::Title, fmt("WXPlane - %zu METAR station(s), %d ATIS, updated %s", res.stations.size(), res.atisCount,
@@ -48,7 +68,9 @@ std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, cons
         std::string head = fmt("%s   %.0f nm   field %.0f m (%.0f ft)", st.icao.c_str(), st.distNm, st.elevM, st.elevM / 0.3048);
         if (st.hasAtis) head += "   ATIS " + (st.atisLetter.empty() ? std::string("?") : st.atisLetter);
         add(LineKind::Header, head);
-        add(LineKind::Metar, st.rawMetar.empty() ? std::string("(no METAR text)") : "METAR  " + st.rawMetar);
+        // Some reports (UK AUTO stations) already begin with "METAR"/"SPECI": no second label then
+        const bool typed = st.rawMetar.compare(0, 6, "METAR ") == 0 || st.rawMetar.compare(0, 6, "SPECI ") == 0;
+        add(LineKind::Metar, st.rawMetar.empty() ? std::string("(no METAR text)") : typed ? st.rawMetar : "METAR  " + st.rawMetar);
         if (st.hasAtis) add(LineKind::Atis, "ATIS   " + st.atisText);
         if (!st.filled.empty()) add(LineKind::Note, "Completed: " + st.filled);
         XpWx x = buildXp(st, cfg, now, &res.aloft, true);
@@ -92,6 +114,7 @@ std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, cons
         row += one;
     }
     if (!row.empty()) add(LineKind::Note, row);
+    addServices(v, res.services, extra, now);
     return v;
 }
 

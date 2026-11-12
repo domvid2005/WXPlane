@@ -101,6 +101,13 @@ void Fetcher::run() {
     }
 }
 
+static std::string hhmm(std::time_t t) {
+    if (t <= 0) return "--:--Z";
+    char b[16];
+    std::snprintf(b, sizeof b, "%02d:%02dZ", (int)((t / 3600) % 24), (int)((t / 60) % 60));
+    return b;
+}
+
 FetchResult Fetcher::fetch(const FetchRequest& rq) {
     FetchResult res;
     res.centerLat = rq.lat;
@@ -113,6 +120,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
         if (cfg.radar) res.radar = fetchRadar(rq, res.fetchedAt, radarStations_.empty() ? nullptr : &radarStations_);
         res.ok = res.radar.ok;
         if (!res.ok) res.error = res.radar.note.empty() ? std::string("radar refresh failed") : res.radar.note;
+        copySvc(res);
         return res;
     }
 
@@ -131,11 +139,13 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
         long status = 0;
         if (!httpGet(awcMetarUrl(rq.lat, rq.lon, radius), body, status, err)) {
             res.error = "NOAA METAR: " + err;
+            setSvc(kSvcMetar, SvcState::Down, err, now);
+            copySvc(res);
             return res;
         }
         std::string perr;
         std::vector<Station> all = parseAwcMetarJson(body, &perr);
-        if (!perr.empty() && !body.empty()) { res.error = perr; return res; }
+        if (!perr.empty() && !body.empty()) { res.error = perr; setSvc(kSvcMetar, SvcState::Down, "unreadable answer: " + perr, now); copySvc(res); return res; }
         for (auto& s : all) {
             s.distNm = distNm(rq.lat, rq.lon, s.lat, s.lon);
             if (s.distNm > radius * 1.05) continue;
@@ -151,11 +161,14 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     std::sort(keep.begin(), keep.end(), [](const Station& a, const Station& b) { return a.distNm < b.distNm; });
     if ((int)keep.size() > cfg.maxStations) keep.resize((size_t)cfg.maxStations);
     res.metarCount = (int)keep.size();
+    setSvc(kSvcMetar, SvcState::Ok, keep.empty() ? std::string("answering; no reports within 600 nm") : std::to_string(keep.size()) + " report(s)", now);
     res.elevNote = checkStationElevations(keep);
 
     // 2) ATIS for the closest airports (D-ATIS covers major US airports; others simply return nothing).
+    if (!cfg.useAtis) setSvc(kSvcAtis, SvcState::Off, "\"Use ATIS\" is off", now);
     if (cfg.useAtis) {
-        int tried = 0;
+        int tried = 0, netFail = 0;
+        std::string netErr;
         for (auto& s : keep) {
             if (tried >= cfg.atisMaxAirports || s.distNm > cfg.atisRangeNm) break;
             if (s.icao.size() != 4) continue;
@@ -165,7 +178,9 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
             std::string abody, aerr;
             long ast = 0;
             std::string text;
-            bool got = httpGet(datisUrl(s.icao), abody, ast, aerr, 8) && parseDatisJson(abody, text);
+            const bool answered = httpGet(datisUrl(s.icao), abody, ast, aerr, 8);
+            if (!answered && ast == 0) { ++netFail; netErr = aerr; }
+            bool got = answered && parseDatisJson(abody, text);
             Report ar;
             if (got && parseReport(text, ar, true)) {
                 mergeAtis(s, ar, text);
@@ -177,14 +192,21 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
                 noAtis_.emplace_back(s.icao, now);
             }
         }
+        if (res.atisCount > 0) setSvc(kSvcAtis, SvcState::Ok, std::to_string(res.atisCount) + " airport(s)", now);
+        else if (netFail > 0 && netFail == tried) setSvc(kSvcAtis, SvcState::Down, netErr, now);
+        else setSvc(kSvcAtis, SvcState::NotHere, "no digital ATIS for the airports nearby (D-ATIS covers major US airports)", now);
     }
 
     // 3) Winds & temperatures aloft from the global model (Open-Meteo GFS), so the cruise levels follow real data too.
     // NOAA's FD wind/temperature tables (fetchAloft) were discontinued with the NAM model: AWC answers HTTP 400 ("Wind/temp tables have
     // been discontinued", SCN 26-47, seen 2026-11-09). The global model is now the source at every level.
+    if (!cfg.useAloft) { setSvc(kSvcWinds, SvcState::Off, "the global-model option is off", now); setSvc(kSvcClouds, SvcState::Off, "the global-model option is off", now); }
     if (cfg.useAloft) {   // the global model at every level
         std::string upNote;
         std::vector<AloftStation> up = fetchUpperAir(rq, now, upNote, res.stations);
+        if (up.empty()) setSvc(kSvcWinds, SvcState::Down, upNote.empty() ? std::string("no data") : upNote, now);
+        else if (upNote.find("using the earlier download") != std::string::npos) setSvc(kSvcWinds, SvcState::Degraded, upNote, now), svc_[kSvcWinds].lastOk = upTime_;
+        else { setSvc(kSvcWinds, SvcState::Ok, std::to_string(up.size()) + " model point(s), downloaded " + hhmm(upTime_), now); svc_[kSvcWinds].lastOk = upTime_; }
         for (auto& u : up) res.aloft.push_back(std::move(u));
         if (!upNote.empty()) res.aloftNote += (res.aloftNote.empty() ? "" : "; ") + upNote;
     }
@@ -194,6 +216,9 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     if (cfg.useAloft && (cfg.modelClouds || cfg.oceanModelWeather)) {
         std::string cNote;
         std::vector<ModelPoint> mp = fetchModelClouds(rq, now, cNote);
+        if (mp.empty()) setSvc(kSvcClouds, SvcState::Down, cNote.empty() ? std::string("no data") : cNote, now);
+        else if (cNote.find("using the earlier download") != std::string::npos) { setSvc(kSvcClouds, SvcState::Degraded, cNote, now); svc_[kSvcClouds].lastOk = cloudTime_; }
+        else { setSvc(kSvcClouds, SvcState::Ok, std::to_string(mp.size()) + " model point(s), downloaded " + hhmm(cloudTime_), now); svc_[kSvcClouds].lastOk = cloudTime_; }
         if (!cNote.empty()) res.aloftNote += (res.aloftNote.empty() ? "" : "; ") + cNote;
         if (cfg.modelClouds)
             for (auto& a : res.aloft) {
@@ -223,6 +248,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     // 4) Radar storm cells.
     radarStations_ = keep;   // radar-only refreshes check convection against these
     if (cfg.radar) res.radar = fetchRadar(rq, now, &keep);
+    else { setSvc(kSvcMrms, SvcState::Off, "radar is off", now); setSvc(kSvcOpera, SvcState::Off, "radar is off", now); }
 
     res.noaaFixes = 0;
     for (const auto& k : keep) if (!k.filled.empty()) ++res.noaaFixes;
@@ -231,6 +257,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     res.ok = true;
     if (res.stations.empty()) res.error = "no METARs within 600 nm: the weather already set is kept";
     else if (!widened.empty()) res.error = widened;
+    copySvc(res);
     return res;
 }
 
@@ -319,6 +346,8 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
         else if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
         if (!typeNote.empty()) out.note += (out.note.empty() ? "" : "; ") + typeNote;
         if (out.ok) { lastMrms_ = out; lastMrmsAt_ = now; lastMrmsLat_ = rq.lat; lastMrmsLon_ = rq.lon; }
+        setSvc(kSvcMrms, SvcState::Ok, name + ", valid " + hhmm(refl.refTime) + (typeNote.find("unavailable") != std::string::npos ? "; precipitation type unavailable" : ""), now);
+        setSvc(kSvcOpera, SvcState::NotHere, "outside Europe", now);
         return out;
     }
     // Inside NOAA coverage a failed download used to fall straight through to RainViewer (log 2026-11-04, Ohio; RainViewer was removed
@@ -328,22 +357,30 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
     if (mrmsArea && lastMrms_.ok && now - lastMrmsAt_ < 20 * 60 && distNm(rq.lat, rq.lon, lastMrmsLat_, lastMrmsLon_) < 30.0) {
         RadarResult r = lastMrms_;
         r.note = "MRMS download failed (" + lastErr + "), reusing the radar picture from " + std::to_string((now - lastMrmsAt_) / 60) + " min ago";
+        setSvc(kSvcMrms, SvcState::Degraded, r.note, now);
+        svc_[kSvcMrms].lastOk = lastMrmsAt_;
         return r;
     }
+    if (mrmsArea) { setSvc(kSvcMrms, SvcState::Down, lastErr, now); setSvc(kSvcOpera, SvcState::NotHere, "outside Europe", now); }
+    else setSvc(kSvcMrms, SvcState::NotHere, "outside the US", now);
     // Europe: the EUMETNET OPERA composite
     if (!mrmsArea && operaCovers(rq.lat, rq.lon)) {
         RadarResult eu;
         std::string euErr;
-        if (fetchOpera(rq, now, stations, eu, euErr)) return eu;
+        if (fetchOpera(rq, now, stations, eu, euErr)) { setSvc(kSvcOpera, SvcState::Ok, "composite " + hhmm(eu.dataTime), now); return eu; }
         if (lastOpera_.ok && now - lastOperaAt_ < 20 * 60 && distNm(rq.lat, rq.lon, lastOperaLat_, lastOperaLon_) < 30.0) {
             RadarResult r = lastOpera_;
             r.note = "OPERA download failed (" + euErr + "), reusing the radar picture from " + std::to_string((now - lastOperaAt_) / 60) + " min ago";
+            setSvc(kSvcOpera, SvcState::Degraded, r.note, now);
+            svc_[kSvcOpera].lastOk = lastOperaAt_;
             return r;
         }
         out.ok = false;
         out.note = "European radar (OPERA): " + euErr;
+        setSvc(kSvcOpera, SvcState::Down, euErr, now);
         return out;
     }
+    setSvc(kSvcOpera, SvcState::NotHere, "outside Europe", now);
     out.ok = false;
     out.note = lastErr.empty() ? std::string("no radar composite covers this area (radar covers the US and Europe)") : lastErr;
     return out;
@@ -418,7 +455,34 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
         return true;
     }
     if (err.empty()) err = "no recent composite";
+    if (err.find("no composite for") != std::string::npos) {   // nothing published for 20 minutes: say how long the feed has been down
+        const std::time_t newest = operaNewestPublished(now);
+        char b[160];
+        if (newest > 0) {
+            const long m = (long)((now - newest) / 60);
+            std::snprintf(b, sizeof b, "feed down: newest composite is %s (%ld h %02ld min old)", hhmm(newest).c_str(), m / 60, m % 60);
+        } else {
+            std::snprintf(b, sizeof b, "feed down: no composite published in the last 12 h");
+        }
+        err = b;
+    }
     return false;
+}
+
+// When the newest composites are missing, the bucket listing tells how long the feed has been stalled. Hour by hour backwards (up to
+// 12 small listings), at most every 10 minutes.
+std::time_t Fetcher::operaNewestPublished(std::time_t now) {
+    if (operaNewestCheckedAt_ && now - operaNewestCheckedAt_ < 600) return operaNewestKnown_;
+    operaNewestCheckedAt_ = now;
+    operaNewestKnown_ = 0;
+    for (int h = 0; h < 12; ++h) {
+        std::string body, e;
+        long st = 0;
+        if (!httpGet(operaListUrl(now - h * 3600), body, st, e, 10, 1u << 20) || st != 200) { operaNewestCheckedAt_ = 0; break; }
+        const std::time_t t = operaNewestInListing(body);
+        if (t > 0) { operaNewestKnown_ = t; break; }
+    }
+    return operaNewestKnown_;
 }
 
 // The 3x3 GFS lattice shared by the winds and the clouds. Nodes sit on whole degrees of latitude and on multiples of `step` degrees

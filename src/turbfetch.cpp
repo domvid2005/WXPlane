@@ -84,6 +84,38 @@ void Fetcher::update(double lat, double lon, double alt, bool enabled, bool repo
 Inputs Fetcher::inputs() const { std::lock_guard<std::mutex> l(mx_); return pub_; }
 std::shared_ptr<const hz::Snapshot> Fetcher::reports() const { std::lock_guard<std::mutex> l(mx_); return hz_; }
 
+static std::string clockZ(std::time_t t) {
+    char b[16];
+    std::snprintf(b, sizeof b, "%02d:%02dZ", (int)((t / 3600) % 24), (int)((t / 60) % 60));
+    return b;
+}
+
+std::vector<ServiceStatus> Fetcher::services(std::time_t now) const {
+    std::lock_guard<std::mutex> l(mx_);
+    ServiceStatus pr{"NOAA Aviation Weather Center", "pilot reports"}, gt{"NOAA GTGN", "turbulence (US)"}, ec{"ECMWF Open Data", "turbulence (outside the US)"};
+    if (!reports_ && !enabled_) { pr.state = SvcState::Off; pr.detail = "turbulence and windshear are off"; }
+    else if (!hz_) pr.detail = "not downloaded yet";
+    else {
+        pr.lastOk = hz_->fetched;
+        pr.state = hzProbPub_.empty() ? SvcState::Ok : SvcState::Degraded;
+        pr.detail = std::to_string(hz_->pireps.size()) + " report(s), downloaded " + clockZ(hz_->fetched) + (hzProbPub_.empty() ? "" : "; failed:" + hzProbPub_);
+    }
+    const bool inUs = havePos_ && inGtgnBox(lat_, lon_);
+    if (!enabled_) { gt.state = ec.state = SvcState::Off; gt.detail = ec.detail = "realistic turbulence is off"; }
+    else {
+        if (!inUs && !pub_.gtgn) { gt.state = SvcState::NotHere; gt.detail = "outside the US"; }
+        else if (pub_.gtgn && now - pub_.gtgn->valid <= kGtgnMaxAgeS) { gt.state = gProbPub_.empty() ? SvcState::Ok : SvcState::Degraded; gt.lastOk = pub_.gtgnArrived; gt.detail = "analysis " + clockZ(pub_.gtgn->valid) + (gProbPub_.empty() ? "" : "; " + gProbPub_); }
+        else if (!inUs) { gt.state = SvcState::NotHere; gt.detail = "outside the US"; }
+        else if (!gProbPub_.empty()) { gt.state = SvcState::Down; gt.detail = gProbPub_; }
+        else gt.detail = "not downloaded yet";
+        if (pub_.ecA) { ec.state = eProbPub_.empty() ? SvcState::Ok : SvcState::Degraded; ec.detail = pub_.ecA->run + (eProbPub_.empty() ? "" : "; " + eProbPub_); }
+        else if (!eProbPub_.empty()) { ec.state = SvcState::Down; ec.detail = eProbPub_; }
+        else if (inUs && pub_.gtgn) { ec.state = SvcState::NotHere; ec.detail = "GTGN covers this area"; }
+        else ec.detail = "not downloaded yet";
+    }
+    return {pr, gt, ec};
+}
+
 std::vector<std::string> Fetcher::takeLog() {
     std::lock_guard<std::mutex> l(mx_);
     std::vector<std::string> v;
@@ -133,6 +165,8 @@ void Fetcher::run() {
         gtgnStep(lat, lon, alt, now);
         if (stop_) break;
         ecStep(lat, lon, alt, now);
+        std::lock_guard<std::mutex> l(mx_);
+        gProbPub_ = gLastProblem_; eProbPub_ = eLastProblem_;
     }
 }
 
@@ -162,6 +196,7 @@ void Fetcher::reportsStep(double lat, double lon, std::time_t now) {
     log(b);
     std::lock_guard<std::mutex> l(mx_);
     hz_ = snap;
+    hzProbPub_ = problems;
 }
 
 // ---- NOAA GTGN ----------------------------------------------------------------------------------------------------
