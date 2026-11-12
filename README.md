@@ -24,7 +24,12 @@ Since 4.0, **Plugins → WXPlane** opens the weather window directly; every sett
 | **Realistic turbulence** | Turbulence from real data at every altitude: NOAA GTGN in the US, an ECMWF-based estimate elsewhere, pilot reports (see below). On by default. |
 | **Max turbulence** | A slider from 0 (no turbulence from WXPlane at all) to 1.0 (full realism, as the data says). |
 
-Two X-Plane commands can be bound to keys or buttons: `wxplane/weather_window` (open/close the window) and `wxplane/refresh`.
+Two X-Plane commands can be bound to keys or buttons (X-Plane's Settings > Keyboard or Joystick, search "WXPlane"):
+"WXPlane: open/close the weather window (GUI)" (`wxplane/weather_window`) and "WXPlane: refresh the weather now" (`wxplane/refresh`).
+
+Switching the weather off in the window fades back to X-Plane's own weather, and switching it on downloads at once and fades in:
+neither pauses the sim any more (both used an immediate rebuild, and switching on again within a minute waited for the
+manual-refresh gap).
 
 Which layers count: the rough-top records apply to every layer with at least `rough_min_coverage` (0.65) coverage, so broken (BKN, 0.70) decks get them as well as overcast ones. Set it to 0.85 for overcast only.
 
@@ -114,9 +119,12 @@ Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, 
   flight category; click the wind dial to turn it from north up to the aircraft's heading up, which shows the headwind or tailwind (H/T) and crosswind (X, from the left or right) in the middle), the nearby airports, a 50/100/150 nm radar picture (storm cells by reflectivity, airports coloured by flight
   category, the aircraft in the middle), winds and temperatures aloft with the tropopause, turbulence and windshear at the aircraft
   with the Max turbulence slider, and the data services.
-* **Airports** - every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
+* **Airports** - a search box for any airport in the world (its METAR and, where D-ATIS has one, its ATIS; shown only, X-Plane's
+  weather is not changed), then every station in use. Click a column header to sort by it (again for the other way); "Ties A-Z"
+  sorts equal values by ICAO code (off: by distance). The Overview's nearby list sorts the same way. Every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
   its report, its ATIS and exactly what WXPlane sent to X-Plane for it.
-* **Radar** - the radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
+* **Map** (was Radar) - the map larger: drag it to move it, "Center on aircraft" brings it back; the zoom eases between steps; the
+  **Radar** button turns the echoes on and off. The radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
   The map's layers (buttons above it): **Airports** (by flight category; click one for its METAR and ATIS), **AIRMET**
   (G-AIRMETs, US: IFR purple, mountain obscuration pink, turbulence yellow, icing light blue, surface wind green, LLWS rose) and
   **SIGMET** (SIGMETs worldwide and convective SIGMETs: convective red, turbulence orange, icing blue, volcanic ash brown, cyclone
@@ -129,7 +137,8 @@ Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, 
   the Radar tab, the North Lock / Heading Lock button) to turn the dial and the map between **North Lock** and **Airplane Heading Lock** (an eased turn; the aircraft symbol uses its heading,
   not its ground track, so it no longer swings around on the ground).
 * **Winds & Temps** - the profile at the aircraft every 1,000-2,000 ft up to FL600, with ISA deviation and the tropopause.
-* **Turbulence** - EDR by altitude at the aircraft, the nearby pilot reports, windshear.
+* **Turbulence** - EDR by altitude at the aircraft, every nearby pilot report (click one to open its details below it: time,
+  turbulence layer, icing, clouds, weather, temperature, wind, text; click again to close), windshear.
 * **Settings** - every on/off setting and the Max turbulence slider (the 3.0 menu). With the weather off, the other settings are
   greyed out and cannot be changed.
 

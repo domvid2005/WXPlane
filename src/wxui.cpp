@@ -56,6 +56,15 @@ std::string hhmm(std::time_t t) {
     return fmt("%02d:%02dZ", (int)((t / 3600) % 24), (int)((t / 60) % 60));
 }
 
+// Column headers for tables that cannot be sorted: plain text, no hover highlight (only sortable headers react to the mouse)
+void plainHeaders() {
+    ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+    for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) { ImGui::TableSetColumnIndex(c); ImGui::TextUnformatted(ImGui::TableGetColumnName(c)); }
+}
+
+// Column widths from their widest expected text, so nothing is cut off at any UI scale (plus room for the sort arrow)
+float textColW(const char* sample) { return ImGui::CalcTextSize(sample).x + 16.0f; }
+
 bool usUnits(const std::string& icao) { return !icao.empty() && (icao[0] == 'K' || icao[0] == 'P' || icao[0] == 'C' || icao[0] == 'T'); }
 
 ImU32 catColor(const std::string& c) {
@@ -465,6 +474,19 @@ std::string pirepKey(const hz::Pirep& p) { return p.raw + "|" + std::to_string((
 std::string advKey(const hz::Advisory& a) { return a.name + "|" + std::to_string((long long)a.from) + "|" + std::to_string(a.pts.size()); }
 
 bool& showAirports() { static bool v = true; return v; }
+bool& showRadar() { static bool v = true; return v; }   // the radar echoes (storm cells)
+// The Map tab's view can be dragged away from the aircraft: the offset of its centre, nm east and north (the Overview's map always
+// stays on the aircraft)
+ImVec2& mapPan() { static ImVec2 v(0, 0); return v; }
+// The range shown, eased towards the chosen one (in log space) like the North/Heading Lock turn
+float& shownRange() { static float r = 80; return r; }
+void updateShownRange() {
+    const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
+    const float target = (float)rangeNmOf(radarRange());
+    const float k = 1.0f - std::exp(-dt * 9.0f);
+    const float a = std::log(shownRange()), b = std::log(target);
+    shownRange() = std::fabs(a - b) < 0.002f ? target : std::exp(a + (b - a) * k);
+}
 bool& showAirmets() { static bool v = false; return v; }
 bool& showSigmets() { static bool v = false; return v; }   // SIGMETs and convective SIGMETs
 
@@ -511,8 +533,12 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     const float R = size * 0.5f;
     dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), IM_COL32(15, 17, 20, 255), 6.0f);
     dl->PushClipRect(p, ImVec2(p.x + size, p.y + size), true);
-    const double cLat = d.havePos ? d.lat : (d.res ? d.res->centerLat : 0), cLon = d.havePos ? d.lon : (d.res ? d.res->centerLon : 0);
-    const double kx = std::cos(cLat * kPi / 180.0);
+    const double aLat = d.havePos ? d.lat : (d.res ? d.res->centerLat : 0), aLon = d.havePos ? d.lon : (d.res ? d.res->centerLon : 0);
+    const ImVec2 pan = interactive ? mapPan() : ImVec2(0, 0);   // nm east, north of the aircraft
+    const double kx = std::cos(aLat * kPi / 180.0);
+    const double cLat = aLat + pan.y / 60.0, cLon = aLon + pan.x / (60.0 * std::max(0.05, kx));
+    (void)rangeNm;
+    rangeNm = shownRange();   // eased zoom
     const float px = (float)(R / rangeNm);   // pixels per nm
     const double rot = viewRot() * kPi / 180.0;
     const float cr = (float)std::cos(rot), sr = (float)std::sin(rot);
@@ -555,7 +581,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         dl->Flags = fl;
     }
     // echoes
-    if (d.res && d.res->radar.ok) {
+    if (showRadar() && d.res && d.res->radar.ok) {
         const double cell = d.cfg ? d.cfg->radarCellNm : 6.0;
         std::vector<const RadarCell*> cs;
         for (const auto& k : d.res->radar.cells) cs.push_back(&k);
@@ -570,11 +596,14 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         }
     }
     // rings, and north where the map is turned
+    const ImVec2 ac = at(aLat, aLon);   // the aircraft on the screen (the centre unless the map was dragged)
+    const double nice = rangeNmOf(radarRange());
     for (float fr : {0.25f, 0.5f, 1.0f}) {
-        dl->AddCircle(c, R * fr, cRing, 64, 1.0f);
-        const std::string t = fmt("%g", rangeNm * fr);
+        const float rr = (float)(nice * fr) * px;
+        dl->AddCircle(ac, rr, cRing, 64, 1.0f);
+        const std::string t = fmt("%g", nice * fr);
         // the labels sit on the rings towards the lower right, clear of the N marker and the aircraft
-        dl->AddText(f.body, ImGui::GetFontSize() * 0.8f, ImVec2(c.x + R * fr * 0.707f + 2, c.y + R * fr * 0.707f - 2), IM_COL32(107, 114, 124, 255), t.c_str());
+        dl->AddText(f.body, ImGui::GetFontSize() * 0.8f, ImVec2(ac.x + rr * 0.707f + 2, ac.y + rr * 0.707f - 2), IM_COL32(107, 114, 124, 255), t.c_str());
     }
     {
         const ImVec2 nq(c.x - sr * (R - 10), c.y - cr * (R - 10));
@@ -643,16 +672,27 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     // the aircraft: its true heading (not the ground track, which swings around when slow or stopped)
     const double a = (d.headingDeg - viewRot()) * kPi / 180.0;
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
-    dl->AddTriangleFilled(ImVec2(c.x + dir.x * 10, c.y + dir.y * 10), ImVec2(c.x - dir.x * 7 + n.x * 6, c.y - dir.y * 7 + n.y * 6),
-                          ImVec2(c.x - dir.x * 7 - n.x * 6, c.y - dir.y * 7 - n.y * 6), IM_COL32(255, 255, 255, 255));
+    dl->AddTriangleFilled(ImVec2(ac.x + dir.x * 10, ac.y + dir.y * 10), ImVec2(ac.x - dir.x * 7 + n.x * 6, ac.y - dir.y * 7 + n.y * 6),
+                          ImVec2(ac.x - dir.x * 7 - n.x * 6, ac.y - dir.y * 7 - n.y * 6), IM_COL32(255, 255, 255, 255));
     dl->PopClipRect();
     ImGui::InvisibleButton("radarclick", ImVec2(size, size));
     const bool hov = ImGui::IsItemHovered();
-    // the mouse wheel zooms: 1, 2, 5, 10, 20, 40, 80, 160 nm
+    // the mouse wheel zooms: 1, 2, 5, 10, 20, 40, 80, 160 nm (eased)
     if (hov && ImGui::GetIO().MouseWheel != 0.0f) radarRange() = std::max(0, std::min(kRangeCount - 1, radarRange() - (ImGui::GetIO().MouseWheel > 0 ? 1 : -1)));
     if (interactive) {
-        if (hov && hitKind) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        if (ImGui::IsItemClicked()) {
+        // drag to move the map (the Map tab only); a click without a drag selects
+        static bool dragged = false;
+        if (ImGui::IsItemActivated()) dragged = false;
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
+            dragged = true;
+            const ImVec2 dlt = ImGui::GetIO().MouseDelta;
+            // the screen movement back to east/north (the map may be turned)
+            const float sx = dlt.x / px, sy = -dlt.y / px;
+            mapPan().x -= sx * cr + sy * sr;
+            mapPan().y -= -sx * sr + sy * cr;
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        } else if (hov && hitKind) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (ImGui::IsItemDeactivated() && !dragged && hov) {
             if (hitKind) { mapSel().kind = hitKind; mapSel().key = hitKey; mapSel().at = hitAt; }
             else mapSel().kind = 0;
         }
@@ -816,6 +856,9 @@ void toggleButton(const char* label, bool& v) {
 }
 
 void layerButtons(bool lockButton) {
+    toggleButton("Radar", showRadar());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Radar echoes (NOAA MRMS in the US, EUMETNET OPERA in Europe)");
+    ImGui::SameLine(0, 4);
     toggleButton("Map", showMap());
     ImGui::SameLine(0, 4);
     toggleButton("Airports", showAirports());
@@ -832,8 +875,13 @@ void layerButtons(bool lockButton) {
     ImGui::SameLine(0, 4);
     toggleButton("SIGMET", showSigmets());
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("SIGMETs worldwide and convective SIGMETs: convective red, turbulence orange, icing blue, volcanic ash brown, cyclone magenta");
-    if (lockButton) {   // the radar page has no wind dial: the same North Lock / Airplane Heading Lock switch
+    if (lockButton) {   // the Map tab: re-centre after dragging, and (it has no wind dial) the North / Airplane Heading Lock switch
         ImGui::SameLine(0, 12);
+        const bool off = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
+        if (!off) ImGui::BeginDisabled();
+        if (ImGui::SmallButton("Center on aircraft")) mapPan() = ImVec2(0, 0);
+        if (!off) ImGui::EndDisabled();
+        ImGui::SameLine(0, 4);
         if (ImGui::SmallButton(dialHeadingUp() ? "Heading Lock###lock" : "North Lock###lock")) dialHeadingUp() = !dialHeadingUp();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip(dialHeadingUp() ? "Airplane Heading Lock (click for North Lock)" : "North Lock (click for Airplane Heading Lock)");
     }
@@ -867,7 +915,7 @@ void radarPanel(const UiData& d, const UiFonts& f, bool big) {
     radarCanvas(d, f, size, rangeNmOf(radarRange()), big);
     radarLegend();
     ImGui::SameLine(0, 14);
-    muted(big ? "Scroll: zoom · click an airport, report or area for its details" : "Scroll: zoom");
+    muted(big ? "Scroll: zoom · drag: move · click an airport, report or area for its details" : "Scroll: zoom");
     if (showTurb() && d.turbGrid.empty()) { ImGui::SameLine(0, 12); muted(d.turbOn ? "no turbulence data yet" : "turbulence off"); }
     if (!big && d.res) {
         const RadarResult& r = d.res->radar;
@@ -942,15 +990,15 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
     for (const auto& r : rows) maxKt = std::max(maxKt, r.kt);
     const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | (scroll ? ImGuiTableFlags_ScrollY : 0);
     if (!ImGui::BeginTable("aloft", 6, fl)) return;
-    ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 56);
+    ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, textColW("00000 ft"));
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 18);
-    ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthFixed, 64);
+    ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthFixed, textColW("000/000"));
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Temp", ImGuiTableColumnFlags_WidthFixed, 44);
-    ImGui::TableSetupColumn("ISA", ImGuiTableColumnFlags_WidthFixed, 56);
+    ImGui::TableSetupColumn("Temp", ImGuiTableColumnFlags_WidthFixed, textColW("-00°"));
+    ImGui::TableSetupColumn("ISA", ImGuiTableColumnFlags_WidthFixed, textColW("ISA +00"));
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
-    ImGui::TableHeadersRow();
+    plainHeaders();
     ImGui::PopStyleColor();
     bool tropoDone = tropoFt < 0;
     for (int i = (int)rows.size() - 1; i >= 0; --i) {   // highest first, like a sounding
@@ -1032,24 +1080,65 @@ void servicesStrip(const UiData& d, const UiFonts& f) {
     }
 }
 
+
+// Sorting of the airport lists: by any column (click its header; again for the other direction), equal values then by ICAO
+// (A-Z) or, with that switched off, by distance.
+enum SortCol { kSortIcao = 1, kSortDist, kSortCat, kSortWind, kSortVis, kSortWx, kSortClouds, kSortCeil, kSortTemp };
+bool& tiesAlpha() { static bool v = true; return v; }
+int catRank(const std::string& c) { return c == "VFR" ? 0 : c == "MVFR" ? 1 : c == "IFR" ? 2 : c == "LIFR" ? 3 : 4; }
+void sortStations(std::vector<const Station*>& v, const UiData& d) {
+    int col = kSortDist;
+    bool desc = false;
+    if (ImGuiTableSortSpecs* sp = ImGui::TableGetSortSpecs())
+        if (sp->SpecsCount > 0) { col = (int)sp->Specs[0].ColumnUserID; desc = sp->Specs[0].SortDirection == ImGuiSortDirection_Descending; }
+    auto key = [&](const Station* s) -> double {
+        const Report& r = s->report;
+        switch (col) {
+            case kSortDist: return distTo(d, *s);
+            case kSortCat: return catRank(flightCategory(r));
+            case kSortWind: return r.hasWind ? std::max(r.windKt, r.gustKt) : -1;
+            case kSortVis: return r.cavok ? 99999 : (r.hasVis ? r.visM : -1);
+            case kSortCeil: { const int c = ceilingFt(r); return c < 0 ? 1e7 : c; }
+            case kSortClouds: { double lo = 1e7; for (const auto& g : r.clouds) lo = std::min(lo, (double)g.baseFtAgl); return lo; }
+            case kSortTemp: return r.hasTemp ? r.tempC : -999;
+            default: return 0;
+        }
+    };
+    std::stable_sort(v.begin(), v.end(), [&](const Station* a, const Station* b) {
+        int c = 0;
+        if (col == kSortIcao) c = a->icao.compare(b->icao);
+        else if (col == kSortWx) c = a->report.wxText.compare(b->report.wxText);
+        else { const double ka = key(a), kb = key(b); c = ka < kb - 1e-9 ? -1 : (ka > kb + 1e-9 ? 1 : 0); }
+        if (c != 0) return desc ? c > 0 : c < 0;
+        // equal: alphabetical (or by distance), always ascending
+        if (tiesAlpha()) return a->icao < b->icao;
+        return distTo(d, *a) < distTo(d, *b);
+    });
+}
+void tiesToggle() {
+    bool v = tiesAlpha();
+    if (ImGui::Checkbox("Ties A-Z", &v)) tiesAlpha() = v;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click a column header to sort (again: the other way). Airports with equal values: by ICAO code (on) or by distance (off).");
+}
+
 void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll) {
     if (!d.res) return;
     std::vector<const Station*> v;
     for (const auto& s : d.res->stations) if (&s != skip && s.icao.compare(0, 3, "GFS") != 0) v.push_back(&s);
-    std::sort(v.begin(), v.end(), [&](const Station* a, const Station* b) { return distTo(d, *a) < distTo(d, *b); });
-    if (maxRows > 0 && (int)v.size() > maxRows) v.resize((size_t)maxRows);
-    const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | (scroll ? ImGuiTableFlags_ScrollY : 0);
+    const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_Sortable | (scroll ? ImGuiTableFlags_ScrollY : 0);
     if (!ImGui::BeginTable("near", 6, fl)) return;
-    ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, 50);
-    ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, 30);
-    ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, 42);
-    ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, 56);
-    ImGui::TableSetupColumn("Ceiling", ImGuiTableColumnFlags_WidthFixed, 56);
+    ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
+    ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort, textColW("000"), kSortDist);
+    ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
+    ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthStretch, 0, kSortWind);
+    ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
+    ImGui::TableSetupColumn("Ceiling", ImGuiTableColumnFlags_WidthFixed, textColW("00,000"), kSortCeil);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
     ImGui::TableHeadersRow();
     ImGui::PopStyleColor();
+    sortStations(v, d);
+    if (maxRows > 0 && (int)v.size() > maxRows) v.resize((size_t)maxRows);
     for (const Station* s : v) {
         const Report& r = s->report;
         ImGui::TableNextRow();
@@ -1084,7 +1173,7 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("card", ImVec2(colW, cardH))) { if (st) stationCard(d, f, *st, false); else mutedWrapped("No airport reports near the aircraft."); }
     panelEnd();
     ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
-    if (panelBegin("near", ImVec2(colW, bodyH - cardH - gap))) { sectionTitle(f, "Nearby airports"); nearbyTable(d, st, 0, true); }
+    if (panelBegin("near", ImVec2(colW, bodyH - cardH - gap))) { sectionTitle(f, "Nearby airports"); ImGui::SameLine(ImGui::GetContentRegionAvail().x - textColW("Ties A-Z") - 10); tiesToggle(); nearbyTable(d, st, 0, true); }
     panelEnd();
     ImGui::EndGroup();
     ImGui::SameLine(0, gap);
@@ -1106,41 +1195,58 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     ImGui::EndGroup();
 }
 
-void tabAirports(const UiData& d, const UiFonts& f) {
+void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
     static std::string selected;
+    static char query[16] = "";
     const float W = ImGui::GetContentRegionAvail().x, H = ImGui::GetContentRegionAvail().y;
-    const float listW = std::floor(W * 0.55f);
+    const float listW = std::floor(W * 0.56f);
     if (panelBegin("alist", ImVec2(listW, H)) && d.res) {
-        sectionTitle(f, fmt("Airports (%zu)", d.res->stations.size()).c_str());
-        const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX;
+        // any airport in the world: its METAR and ATIS (only shown here, X-Plane's weather is not changed)
+        ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - textColW("Search") - textColW("Ties A-Z") - 40));
+        const bool enter = ImGui::InputTextWithHint("##search", "Search any airport worldwide (ICAO, e.g. EGLL)", query, sizeof query,
+                                                    ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank | ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine(0, 6);
+        if (d.searchBusy) ImGui::BeginDisabled();
+        const bool go = ImGui::Button("Search") || enter;
+        if (d.searchBusy) ImGui::EndDisabled();
+        if (go && query[0]) { act.search = query; selected = "@search"; }
+        ImGui::SameLine(0, 14);
+        tiesToggle();
+        if (d.searchBusy) muted("Searching...");
+        else if (!d.searchError.empty() && selected == "@search") { ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn)); ImGui::TextWrapped("%s", d.searchError.c_str()); ImGui::PopStyleColor(); }
+        ImGui::Spacing();
+        sectionTitle(f, fmt("Airports in use (%zu)", d.res->stations.size()).c_str());
+        const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_Sortable;
         if (ImGui::BeginTable("all", 8, fl)) {
-            ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, 52);
-            ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, 32);
-            ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, 42);
-            ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthFixed, 92);
-            ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, 58);
-            ImGui::TableSetupColumn("Weather", ImGuiTableColumnFlags_WidthFixed, 70);
-            ImGui::TableSetupColumn("Clouds", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("T/Td", ImGuiTableColumnFlags_WidthFixed, 52);
+            ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
+            ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort, textColW("000"), kSortDist);
+            ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
+            ImGui::TableSetupColumn("Wind", ImGuiTableColumnFlags_WidthFixed, textColW("VRB/00 G00"), kSortWind);
+            ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
+            ImGui::TableSetupColumn("Weather", ImGuiTableColumnFlags_WidthFixed, textColW("+TSRA BR"), kSortWx);
+            ImGui::TableSetupColumn("Clouds", ImGuiTableColumnFlags_WidthStretch, 0, kSortClouds);
+            ImGui::TableSetupColumn("T/Td", ImGuiTableColumnFlags_WidthFixed, textColW("-00/-00"), kSortTemp);
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
             ImGui::TableHeadersRow();
             ImGui::PopStyleColor();
             std::vector<const Station*> v;
             for (const auto& s : d.res->stations) v.push_back(&s);
-            std::sort(v.begin(), v.end(), [&](const Station* a, const Station* b) { return distTo(d, *a) < distTo(d, *b); });
+            sortStations(v, d);
             if (selected.empty() && !v.empty()) selected = v[0]->icao;
             for (const Station* s : v) {
                 const Report& r = s->report;
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
+                ImGui::PushID((const void*)s);   // two reports can share an ICAO code: the row's own ID
                 if (ImGui::Selectable(s->icao.c_str(), selected == s->icao, ImGuiSelectableFlags_SpanAllColumns)) selected = s->icao;
+                ImGui::PopID();
                 ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f", distTo(d, *s));
                 ImGui::TableSetColumnIndex(2); { const std::string c = flightCategory(r); ImGui::PushStyleColor(ImGuiCol_Text, v4(catColor(c))); ImGui::TextUnformatted(c.empty() ? "—" : c.c_str()); ImGui::PopStyleColor(); }
                 ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(windShort(r).c_str());
                 ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(visText(r, usUnits(s->icao)).c_str());
                 ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(r.wxText.empty() ? "—" : r.wxText.c_str());
-                ImGui::TableSetColumnIndex(6); ImGui::TextUnformatted(cloudText(r).c_str());
+                ImGui::TableSetColumnIndex(6); ImGui::TextWrapped("%s", cloudText(r).c_str());   // wraps instead of being cut off
                 ImGui::TableSetColumnIndex(7); if (r.hasTemp) ImGui::Text("%.0f/%.0f", r.tempC, r.dewpC); else muted("—");
             }
             ImGui::EndTable();
@@ -1150,6 +1256,16 @@ void tabAirports(const UiData& d, const UiFonts& f) {
     ImGui::SameLine(0, 12);
     if (panelBegin("adetail", ImVec2(0, H)) && d.res) {
         const Station* sel = nullptr;
+        if (selected == "@search") {
+            if (d.searchResult) {
+                sel = d.searchResult.get();
+                muted("Search result - shown here only, X-Plane's weather is not changed");
+                stationCard(d, f, *sel, true);
+            } else mutedWrapped(d.searchBusy ? "Searching..." : (d.searchError.empty() ? "Type an ICAO code and press Search." : d.searchError));
+            sel = nullptr;
+            panelEnd();
+            return;
+        }
         for (const auto& s : d.res->stations) if (s.icao == selected) sel = &s;
         if (sel) {
             stationCard(d, f, *sel, true);
@@ -1185,13 +1301,13 @@ void tabRadar(const UiData& d, const UiFonts& f) {
             for (const auto& k : r.cells) if (!k.synthetic) cs.push_back(&k);
             std::sort(cs.begin(), cs.end(), [](const RadarCell* a, const RadarCell* b) { return a->dbz > b->dbz; });
             if (ImGui::BeginTable("cells", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX)) {
-                ImGui::TableSetupColumn("dBZ", ImGuiTableColumnFlags_WidthFixed, 48);
-                ImGui::TableSetupColumn("Rain", ImGuiTableColumnFlags_WidthFixed, 70);
-                ImGui::TableSetupColumn("Top", ImGuiTableColumnFlags_WidthFixed, 86);
+                ImGui::TableSetupColumn("dBZ", ImGuiTableColumnFlags_WidthFixed, textColW("dBZ"));
+                ImGui::TableSetupColumn("Rain", ImGuiTableColumnFlags_WidthFixed, textColW("000 mm/h"));
+                ImGui::TableSetupColumn("Top", ImGuiTableColumnFlags_WidthFixed, textColW("FL000 est"));
                 ImGui::TableSetupColumn("Where", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
-                ImGui::TableHeadersRow();
+                plainHeaders();
                 ImGui::PopStyleColor();
                 for (size_t i = 0; i < cs.size() && i < 60; ++i) {
                     const RadarCell& k = *cs[i];
@@ -1266,34 +1382,72 @@ void tabTurbulence(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("treports", ImVec2(0, H))) {
         sectionTitle(f, "Pilot reports nearby");
         if (!d.reports || d.reports->pireps.empty()) mutedWrapped("No pilot reports in the last 90 minutes.");
-        else if (ImGui::BeginTable("pireps", 5, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX)) {
-            ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, 34);
-            ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 56);
-            ImGui::TableSetupColumn("Turbulence", ImGuiTableColumnFlags_WidthFixed, 96);
-            ImGui::TableSetupColumn("Aircraft", ImGuiTableColumnFlags_WidthFixed, 56);
-            ImGui::TableSetupColumn("Age", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupScrollFreeze(0, 1);
+        else {
+            // every report, nearest first; a click on a row opens (and closes) its details below it
+            static std::vector<std::string> open;
+            const float x0 = ImGui::GetCursorPosX();
+            const float cx[6] = {0, textColW("000"), textColW("000") + textColW("FL000"), textColW("000") + textColW("FL000") + textColW("UUA"),
+                                 textColW("000") + textColW("FL000") + textColW("UUA") + textColW("MOD-SEV CAT"), textColW("000") + textColW("FL000") + textColW("UUA") + textColW("MOD-SEV CAT") + textColW("B77W")};
+            const char* hd[6] = {"nm", "Level", "Type", "Turbulence", "Aircraft", "Age"};
             ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
-            ImGui::TableHeadersRow();
+            for (int k = 0; k < 6; ++k) { if (k) ImGui::SameLine(x0 + cx[k]); ImGui::TextUnformatted(hd[k]); }
             ImGui::PopStyleColor();
+            ImGui::Separator();
+            ImGui::BeginChild("pirepList", ImVec2(0, d.wsOn && !d.wsStrongest.empty() ? -40.0f : 0.0f), ImGuiChildFlags_None, 0);
             std::vector<const hz::Pirep*> v;
             for (const auto& p : d.reports->pireps) v.push_back(&p);
             auto dd = [&](const hz::Pirep* p) { return d.havePos ? distNm(d.lat, d.lon, p->lat, p->lon) : 0.0; };
             std::sort(v.begin(), v.end(), [&](const hz::Pirep* a, const hz::Pirep* b) { return dd(a) < dd(b); });
-            for (size_t i = 0; i < v.size() && i < 80; ++i) {
+            for (size_t i = 0; i < v.size() && i < 150; ++i) {
                 const hz::Pirep& p = *v[i];
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0); ImGui::Text("%.0f", dd(&p));
-                ImGui::TableSetColumnIndex(1); if (p.altFt > 0) ImGui::Text("FL%03.0f", p.altFt / 100.0); else muted("—");
-                ImGui::TableSetColumnIndex(2);
+                const std::string key = pirepKey(p);
+                const auto it = std::find(open.begin(), open.end(), key);
+                const bool isOpen = it != open.end();
+                ImGui::PushID((int)i);
+                const float rx = ImGui::GetCursorPosX();
+                if (ImGui::Selectable("##row", isOpen, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
+                    if (isOpen) open.erase(it); else open.push_back(key);
+                }
+                ImGui::SameLine(rx + cx[0]); ImGui::Text("%.0f", dd(&p));
+                ImGui::SameLine(rx + cx[1]); if (p.altFt > 0) ImGui::Text("FL%03.0f", p.altFt / 100.0); else muted("—");
+                ImGui::SameLine(rx + cx[2]);
+                ImGui::PushStyleColor(ImGuiCol_Text, v4(p.urgent ? IM_COL32(235, 64, 64, 255) : IM_COL32(240, 150, 40, 255)));
+                ImGui::TextUnformatted(p.urgent ? "UUA" : (p.kind == "AIREP" ? "ARP" : "UA"));
+                ImGui::PopStyleColor();
+                ImGui::SameLine(rx + cx[3]);
                 const double e = hz::edrForIntensity(p.intensity, p.acType);
                 if (p.intensity.empty()) muted(p.llws ? "LLWS" : "—");
-                else { ImGui::PushStyleColor(ImGuiCol_Text, v4(e >= 0.22 ? cWarn : (e > 0 ? cSoft : cMuted))); ImGui::TextUnformatted(p.intensity.c_str()); ImGui::PopStyleColor(); }
-                ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(p.acType.c_str());
-                ImGui::TableSetColumnIndex(4); if (p.obsTime > 0) ImGui::Text("%ld min", (long)((d.now - p.obsTime) / 60)); else muted("—");
-                if (ImGui::IsItemHovered() && !p.raw.empty()) ImGui::SetTooltip("%s", p.raw.c_str());
+                else { ImGui::PushStyleColor(ImGuiCol_Text, v4(e >= 0.22 ? cWarn : (e > 0 ? cSoft : cMuted))); ImGui::TextUnformatted((p.intensity + (p.tbType.empty() ? "" : " " + p.tbType)).c_str()); ImGui::PopStyleColor(); }
+                ImGui::SameLine(rx + cx[4]); ImGui::TextUnformatted(p.acType.empty() ? "—" : p.acType.c_str());
+                ImGui::SameLine(rx + cx[5]); if (p.obsTime > 0) ImGui::Text("%ld min", (long)((d.now - p.obsTime) / 60)); else muted("—");
+                if (isOpen) {   // the details, until the row is clicked again
+                    ImGui::Indent(14);
+                    ImGui::PushStyleColor(ImGuiCol_ChildBg, v4(cInset));
+                    const float tw = ImGui::GetContentRegionAvail().x - 6;
+                    std::string det;
+                    if (p.obsTime > 0) det += "Time " + hhmm(p.obsTime) + "    ";
+                    if (p.baseFt > 0 || p.topFt > 0) det += "Turbulence layer " + levelText(p.baseFt) + "-" + levelText(p.topFt) + "    ";
+                    if (!p.icing.empty()) det += "Icing " + p.icing + "    ";
+                    if (!p.sky.empty()) det += "Clouds " + p.sky + "    ";
+                    if (!p.wx.empty()) det += "Weather " + p.wx + "    ";
+                    if (p.tempC > -100) det += fmt("Temp %.0f °C    ", p.tempC);
+                    if (p.windKt >= 0) det += fmt("Wind %03.0f/%.0f kt    ", std::max(0.0, p.windDir), p.windKt);
+                    if (p.llws) det += "Low-level wind shear reported";
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tw);
+                    if (!det.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); ImGui::TextUnformatted(det.c_str()); ImGui::PopStyleColor(); }
+                    ImGui::PushFont(f.mono);
+                    ImGui::PushStyleColor(ImGuiCol_Text, v4(cMetar));
+                    ImGui::TextUnformatted(p.raw.empty() ? "(no report text)" : p.raw.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+                    ImGui::PopTextWrapPos();
+                    ImGui::PopStyleColor();
+                    ImGui::Unindent(14);
+                    ImGui::Spacing();
+                }
+                ImGui::PopID();
             }
-            ImGui::EndTable();
+            ImGui::EndChild();
         }
         if (d.wsOn && !d.wsStrongest.empty()) { ImGui::Spacing(); mutedWrapped("Windshear: strongest source " + d.wsStrongest); }
     }
@@ -1347,6 +1501,9 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         mutedWrapped(d.status1 + (d.status2.empty() ? "" : "  ·  " + d.status2));
         mutedWrapped("Advanced settings are in WXPlane.cfg (X-Plane's Output/preferences folder).");
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        sectionTitle(f, "Keyboard");
+        mutedWrapped("To open and close this window with a key or a joystick button: X-Plane's Settings > Keyboard (or Joystick), search for \"WXPlane\" and bind \"WXPlane: open/close the weather window (GUI)\" (command wxplane/weather_window). \"WXPlane: refresh the weather now\" (wxplane/refresh) is there too.");
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         // data and credits, in a darker grey: there for reference, not for attention
         ImGui::PushStyleColor(ImGuiCol_Text, v4(IM_COL32(112, 117, 126, 255)));
         ImGui::TextUnformatted("DATA & CREDITS");
@@ -1368,11 +1525,11 @@ void tabServices(const UiData& d, const UiFonts& f) {
         sectionTitle(f, "Data services");
         if (ImGui::BeginTable("svct", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 16);
-            ImGui::TableSetupColumn("Service", ImGuiTableColumnFlags_WidthFixed, 210);
-            ImGui::TableSetupColumn("Gives", ImGuiTableColumnFlags_WidthFixed, 230);
+            ImGui::TableSetupColumn("Service", ImGuiTableColumnFlags_WidthFixed, textColW("NOAA Aviation Weather Center"));
+            ImGui::TableSetupColumn("Gives", ImGuiTableColumnFlags_WidthFixed, textColW("clouds aloft, open-water weather"));
             ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthStretch);
             ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
-            ImGui::TableHeadersRow();
+            plainHeaders();
             ImGui::PopStyleColor();
             for (const auto& s : allServices(d)) {
                 ImGui::TableNextRow();
@@ -1489,6 +1646,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     if (d.forceDial >= 0) dialHeadingUp() = d.forceDial == 1;
     if (d.forceAdv >= 0) showAirmets() = showSigmets() = d.forceAdv == 1;
     updateViewRot(d);
+    updateShownRange();
     // X-Plane's own real weather on: nothing in the window can be clicked, and a red warning covers it (finish(), below)
     if (d.xpRealWeather) ImGui::BeginDisabled();
     auto finish = [&]() {
@@ -1548,8 +1706,8 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     for (const auto& s : allServices(d)) if (s.state == SvcState::Down || s.state == SvcState::Degraded) ++bad;
     if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_None)) {
         if (ImGui::BeginTabItem("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem(fmt("Airports (%zu)###air", d.res->stations.size()).c_str(), nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Radar", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem(fmt("Airports (%zu)###air", d.res->stations.size()).c_str(), nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Winds & Temps", nullptr, d.forceTab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAloft(d, f); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem(bad ? fmt("Services (%d)###svc", bad).c_str() : "Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }

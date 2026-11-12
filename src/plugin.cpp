@@ -100,6 +100,7 @@ bool g_reapplyRequested = false;   // settings that change the weather we send (
 bool g_manualRefresh = false;
 bool g_radarKick = false;          // radar was switched on / changed: fetch only the radar (stations and winds are kept), no full refresh
 bool g_eraseRequested = false;
+bool g_reenable = false;           // the weather was switched back on: the next download is not held, and fades in
 bool g_firstApplyDone = false;
 std::time_t g_fogUntil = 0;
 bool g_haveCenter = false;
@@ -1212,12 +1213,14 @@ bool nearlySame(const XPLMWeatherInfo_t& a, const XPLMWeatherInfo_t& b) {
     return true;
 }
 
-void eraseAll() {
+// `immediately`: at once (X-Plane rebuilds its weather, the sim pauses for a moment: plugin disable/stop), or faded out over
+// X-Plane's usual transition (the window's "WXPlane weather on" switch: no freeze).
+void eraseAll(bool immediately = true) {
     g_pendingTodo.clear();
     g_pendingGone.clear();
     g_heldLevel.clear();
     XPLMBeginWeatherUpdate();
-    XPLMEndWeatherUpdate(0 /*not incremental: wipes our previous records*/, 1 /*immediately*/);
+    XPLMEndWeatherUpdate(0 /*not incremental: wipes our previous records*/, immediately ? 1 : 0);
     g_recs.clear();
     logf("plugin weather records removed");
 }
@@ -2517,7 +2520,7 @@ float flightLoop(float, float, int, void*) {
         g_eraseRequested = false;
         g_checkPending = false;
         g_watchOn = false;
-        eraseAll();
+        eraseAll(false);   // switched off in the window: X-Plane fades back to its own weather (an immediate wipe froze the sim)
         regionRestore("weather off");
         g_haveCenter = false;
         setStatus("Disabled - X-Plane weather in control", "");
@@ -2537,7 +2540,7 @@ float flightLoop(float, float, int, void*) {
             if (catchUp) due = true;
             bool moved = g_haveCenter && since >= 60.0 && wx::distNm(lat, lon, g_centerLat, g_centerLon) > g_cfg.refetchMoveNm;
             // Menu refreshes are coalesced: at most one per 60 s, so clicking Refresh right after a radar toggle cannot stack rebuilds.
-            const bool manualHold = g_manualRefresh && g_everRequested && g_firstApplyDone && since < g_cfg.manualRefreshGapS;
+            const bool manualHold = g_manualRefresh && !g_reenable && g_everRequested && g_firstApplyDone && since < g_cfg.manualRefreshGapS;
             const bool manual = g_manualRefresh && !manualHold;
             if (manualHold) {   // say so (2026-11-10 customer: "refresh weather, nothing changes" right after switching on)
                 static Clock::time_point lastHoldMsg{};
@@ -2565,7 +2568,8 @@ float flightLoop(float, float, int, void*) {
                 rq.gsKt = g_drGsFetch ? XPLMGetDataf(g_drGsFetch) * 1.943844 : 0; rq.trackDeg = g_drTrkFetch ? XPLMGetDataf(g_drTrkFetch) : 0;
                 if (catchUp) g_radarDeferred = false;
                 else if (!g_firstApplyDone && g_cfg.startupStaged && g_cfg.radar) { rq.cfg.radar = false; g_radarDeferred = true; }
-                rq.immediate = manual || !g_firstApplyDone;
+                rq.immediate = (manual && !g_reenable) || !g_firstApplyDone;
+                g_reenable = false;
                 g_fetcher.request(rq);
                 g_lastRequest = now;
                 g_everRequested = true;
@@ -2795,6 +2799,32 @@ int cmdHandler(XPLMCommandRef, XPLMCommandPhase phase, void* ref) {
     return 1;
 }
 
+// The airport search (any ICAO code in the world): one lookup at a time on its own thread; the window shows its result.
+struct UiSearch {
+    std::mutex m;
+    std::thread th;
+    bool busy = false;
+    std::string error;
+    std::shared_ptr<const wx::Station> result;
+} g_search;
+void startSearch(const std::string& icao) {
+    std::lock_guard<std::mutex> l(g_search.m);
+    if (g_search.busy) return;
+    if (g_search.th.joinable()) g_search.th.join();
+    g_search.busy = true;
+    g_search.error.clear();
+    g_search.th = std::thread([icao]() {
+        wx::Station st;
+        std::string err;
+        const bool ok = wx::lookupStation(icao, st, err);
+        std::lock_guard<std::mutex> l(g_search.m);
+        g_search.busy = false;
+        if (ok) { g_search.result = std::make_shared<wx::Station>(st); g_search.error.clear(); }
+        else { g_search.result.reset(); g_search.error = err; }
+    });
+}
+void stopSearch() { if (g_search.th.joinable()) g_search.th.join(); }
+
 // The weather window (4.0): fills the window's data from what the plugin already has, and acts on its buttons.
 void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     wx::UiData d;
@@ -2815,8 +2845,13 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.reports = g_mapReports;
     d.wsOn = g_cfg.enabled && g_cfg.windshear;
     d.wsSources = g_uiTs.wsSources; d.wsHigh = g_uiTs.wsHigh; d.wsMed = g_uiTs.wsMed; d.wsLow = g_uiTs.wsLow; d.wsStrongest = g_uiTs.wsStrongest;
+    {
+        std::lock_guard<std::mutex> l(g_search.m);
+        d.searchBusy = g_search.busy; d.searchError = g_search.error; d.searchResult = g_search.result;
+    }
     wx::UiActions act;
     wx::uiDraw(d, fonts, w, h, poppedOut, act);
+    if (!act.search.empty()) startSearch(act.search);
     if (act.refresh) menuHandler(nullptr, (void*)(intptr_t)kRefresh);
     if (act.maxTurbChanged || act.maxTurbReleased) g_cfg.maxTurbulence = std::max(0.0, std::min(1.0, act.maxTurb));
     if (act.maxTurbReleased) {
@@ -2837,7 +2872,9 @@ void menuHandler(void*, void* item) {
     switch ((int)(intptr_t)item) {
         case kEnabled:
             g_cfg.enabled = !g_cfg.enabled;
-            if (g_cfg.enabled) { g_manualRefresh = true; setStatus("Enabled - downloading...", ""); }
+            // switched back on: download at once (not held by the manual-refresh gap) and fade in, instead of the immediate
+            // rebuild that paused the sim for seconds
+            if (g_cfg.enabled) { g_manualRefresh = true; g_reenable = true; setStatus("Enabled - downloading...", ""); }
             else g_eraseRequested = true;
             break;
         case kRefresh:
@@ -2905,7 +2942,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
 #ifndef WX_HARNESS
     // 4.0: one item, Plugins > WXPlane, opens the weather window, where every setting now is. It is a command, so it can be bound to a
     // key or a joystick button too (wxplane/weather_window); wxplane/refresh refreshes the weather.
-    g_cmdWindow = XPLMCreateCommand("wxplane/weather_window", "WXPlane: open or close the weather window");
+    g_cmdWindow = XPLMCreateCommand("wxplane/weather_window", "WXPlane: open/close the weather window (GUI)");
     g_cmdRefresh = XPLMCreateCommand("wxplane/refresh", "WXPlane: refresh the weather now");
     if (g_cmdWindow) XPLMRegisterCommandHandler(g_cmdWindow, cmdHandler, 1, (void*)(intptr_t)1);
     if (g_cmdRefresh) XPLMRegisterCommandHandler(g_cmdRefresh, cmdHandler, 1, (void*)(intptr_t)2);
@@ -2940,6 +2977,7 @@ PLUGIN_API void XPluginStop(void) {
     }
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
 #ifndef WX_HARNESS
+    stopSearch();
     wx::xpui::destroy();
     if (g_cmdWindow) XPLMUnregisterCommandHandler(g_cmdWindow, cmdHandler, 1, (void*)(intptr_t)1);
     if (g_cmdRefresh) XPLMUnregisterCommandHandler(g_cmdRefresh, cmdHandler, 1, (void*)(intptr_t)2);

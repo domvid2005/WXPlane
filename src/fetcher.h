@@ -44,6 +44,10 @@ struct FetchResult {
     std::vector<ServiceStatus> services;   // every data service of this fetcher, in a fixed order
 };
 
+// One station anywhere in the world, by ICAO code: its latest METAR (NOAA AWC) and, where D-ATIS has one, its ATIS. Blocking (a few
+// seconds at most): call it from a worker thread. Used by the weather window's search.
+bool lookupStation(const std::string& icao, Station& out, std::string& err);
+
 class Fetcher {
 public:
     void start();

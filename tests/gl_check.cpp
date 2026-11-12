@@ -56,6 +56,8 @@ void XPLMSetWindowResizingLimits(XPLMWindowID, int, int, int, int) {}
 void XPLMBringWindowToFront(XPLMWindowID) {}
 void XPLMSetWindowPositioningMode(XPLMWindowID, XPLMWindowPositioningMode, int) {}
 int XPLMWindowIsPoppedOut(XPLMWindowID) { return 0; }
+void XPLMTakeKeyboardFocus(XPLMWindowID) {}
+int XPLMHasKeyboardFocus(XPLMWindowID) { return 0; }
 
 namespace {
 wx::FetchResult g_res;

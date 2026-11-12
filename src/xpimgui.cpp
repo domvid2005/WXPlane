@@ -117,6 +117,7 @@ float g_logoAspect = 1;
 float g_fontScale = 0;          // pixels per window unit the atlas was built for
 bool g_fontsDirty = true;
 std::chrono::steady_clock::time_point g_last{};
+bool g_hasKeyFocus = false;   // the window holds X-Plane's keyboard focus (a text field is active)
 int g_cursorFrames = 0;         // frames since the cursor callback last reported the mouse over the window
 float g_mouseX = -1e9f, g_mouseY = -1e9f;
 XPLMDataRef g_drMv = nullptr, g_drProj = nullptr, g_drVp = nullptr, g_drVr = nullptr;
@@ -236,6 +237,8 @@ void renderDrawData(ImDrawData* dd, int left, int top) {
     }
     gl.PopMatrix();
     gl.PopClientAttrib();
+    gl.Color4f(1, 1, 1, 1);   // leave X-Plane's drawing as we found it (white, no texture of ours bound)
+    XPLMBindTexture2d(0, 0);
     if (sc) gl.Scissor(oldBox[0], oldBox[1], oldBox[2], oldBox[3]); else gl.Disable(GL_SCISSOR_TEST);
     if (cull) gl.Enable(GL_CULL_FACE);
 }
@@ -271,6 +274,9 @@ void draw(XPLMWindowID w, void*) {
     ImGui::NewFrame();
     g_build(g_fonts, ww, wh, XPLMWindowIsPoppedOut(w) != 0);
     ImGui::Render();
+    // keyboard focus only while text is being typed
+    if (io.WantTextInput && !g_hasKeyFocus) { XPLMTakeKeyboardFocus(w); g_hasKeyFocus = true; }
+    else if (!io.WantTextInput && g_hasKeyFocus) { if (XPLMHasKeyboardFocus(w)) XPLMTakeKeyboardFocus(nullptr); g_hasKeyFocus = false; }
     renderDrawData(ImGui::GetDrawData(), l, t);
 }
 
@@ -295,8 +301,28 @@ int wheel(XPLMWindowID, int x, int y, int axis, int clicks, void*) {
     else ImGui::GetIO().AddMouseWheelEvent(-(float)clicks, 0.0f);
     return 1;
 }
-void key(XPLMWindowID, char, XPLMKeyFlags, char, void*, int losing) {
-    (void)losing;   // no text fields: keys are not used (and not swallowed: X-Plane keeps its own shortcuts)
+// Keys reach the window only while it has X-Plane's keyboard focus, which it takes while a text field (the airport search) is being
+// typed in and gives back as soon as it is not, so X-Plane keeps its own shortcuts the rest of the time.
+void key(XPLMWindowID, char ch, XPLMKeyFlags flags, char vkey, void*, int losing) {
+    if (!g_ctx || losing) { if (losing) g_hasKeyFocus = false; return; }
+    ImGui::SetCurrentContext(g_ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    const bool down = (flags & 8) != 0, up = (flags & 16) != 0;   // xplm_DownFlag, xplm_UpFlag
+    ImGuiKey k = ImGuiKey_None;
+    switch ((unsigned char)vkey) {   // XPLM_VK_* codes
+        case 0x08: k = ImGuiKey_Backspace; break;
+        case 0x09: k = ImGuiKey_Tab; break;
+        case 0x0D: k = ImGuiKey_Enter; break;
+        case 0x1B: k = ImGuiKey_Escape; break;
+        case 0x23: k = ImGuiKey_End; break;
+        case 0x24: k = ImGuiKey_Home; break;
+        case 0x25: k = ImGuiKey_LeftArrow; break;
+        case 0x27: k = ImGuiKey_RightArrow; break;
+        case 0x2E: k = ImGuiKey_Delete; break;
+        default: break;
+    }
+    if (k != ImGuiKey_None) { if (down) io.AddKeyEvent(k, true); if (up || down) io.AddKeyEvent(k, false); }
+    else if (down && (unsigned char)ch >= 32 && (unsigned char)ch < 127) io.AddInputCharacter((unsigned int)(unsigned char)ch);
 }
 
 } // namespace
@@ -315,6 +341,8 @@ void open(BuildFn build) {
         io.BackendRendererName = "wxplane_gl1";
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
         io.ConfigWindowsMoveFromTitleBarOnly = true;
+        io.ConfigDebugHighlightIdConflicts = false;   // ImGui's red debug outlines (seen when clicking on the map)
+        io.ConfigErrorRecoveryEnableTooltip = false;  // and its red error tooltips
         uiStyle();
         g_fontsDirty = true;
         if (prev) ImGui::SetCurrentContext(prev);
@@ -350,7 +378,12 @@ void open(BuildFn build) {
 }
 
 bool isOpen() { return g_win && XPLMGetWindowIsVisible(g_win); }
-void hide() { if (g_win) XPLMSetWindowIsVisible(g_win, 0); }
+void hide() {
+    if (!g_win) return;
+    if (g_hasKeyFocus && XPLMHasKeyboardFocus(g_win)) XPLMTakeKeyboardFocus(nullptr);
+    g_hasKeyFocus = false;
+    XPLMSetWindowIsVisible(g_win, 0);
+}
 
 void togglePopOut() {
     if (!g_win) return;

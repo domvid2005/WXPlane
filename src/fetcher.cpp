@@ -1,4 +1,5 @@
 #include "fetcher.h"
+#include <cctype>
 #include <cstring>
 #include <sstream>
 
@@ -106,6 +107,28 @@ static std::string hhmm(std::time_t t) {
     char b[16];
     std::snprintf(b, sizeof b, "%02d:%02dZ", (int)((t / 3600) % 24), (int)((t / 60) % 60));
     return b;
+}
+
+bool lookupStation(const std::string& icaoIn, Station& out, std::string& err) {
+    std::string icao;
+    for (char c : icaoIn) if (std::isalnum((unsigned char)c)) icao.push_back((char)std::toupper((unsigned char)c));
+    if (icao.size() < 3 || icao.size() > 4) { err = "enter a 3- or 4-letter ICAO code"; return false; }
+    std::string body, e;
+    long st = 0;
+    if (!httpGet("https://aviationweather.gov/api/data/metar?ids=" + icao + "&format=json", body, st, e, 12)) { err = "NOAA METAR: " + e; return false; }
+    if (st == 204 || body.empty() || body == "[]") { err = "no recent METAR for " + icao; return false; }
+    std::vector<Station> v = parseAwcMetarJson(body, &e);
+    if (v.empty()) { err = e.empty() ? "no recent METAR for " + icao : e; return false; }
+    out = v[0];
+    for (const auto& s : v) if (s.obsTime > out.obsTime) out = s;   // the newest report
+    out.distNm = -1;
+    std::string ab, ae, text;
+    long ast = 0;
+    if (httpGet(datisUrl(out.icao), ab, ast, ae, 8) && parseDatisJson(ab, text)) {
+        Report ar;
+        if (parseReport(text, ar, true)) mergeAtis(out, ar, text);
+    }
+    return true;
 }
 
 FetchResult Fetcher::fetch(const FetchRequest& rq) {

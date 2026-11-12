@@ -17,6 +17,7 @@
 #endif
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "metar.h"
 #include "wxmodel.h"
 #include "wxui.h"
@@ -310,6 +311,31 @@ int main(int argc, char** argv) {
         d.cfg = &cfg;
     }
     d.xpRealWeather = false;
+    // duplicate ImGui IDs (ImGui outlines them in red when one is hovered): sweep the mouse over every tab with every map layer on
+    {
+        d.forceLayers = 7; d.forceAdv = 1;
+        int conflicts = 0;
+        for (int tab = 0; tab < 7; ++tab) {
+            for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? tab : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); }
+            d.forceTab = -1;
+            for (float y = 4; y < H; y += 9)
+                for (float x = 4; x < W; x += 23) {
+                    io.AddMousePosEvent(x, y);
+                    io.DeltaTime = 1.0f / 30.0f;
+                    ImGui::NewFrame();
+                    UiActions act;
+                    uiDraw(d, f, W, H, false, act);
+                    ImGui::Render();
+                    if (GImGui->DebugDrawIdConflicts != 0 && conflicts < 12) {
+                        ++conflicts;
+                        std::printf("ID conflict on tab %d at %.0f,%.0f (id 0x%08X, %s)\n", tab, x, y, GImGui->DebugDrawIdConflicts, GImGui->HoveredWindow ? GImGui->HoveredWindow->Name : "?");
+                    }
+                }
+        }
+        io.AddMousePosEvent(-1000, -1000);
+        d.forceLayers = 1; d.forceAdv = 0;
+        if (conflicts) { std::printf("UI: %d ID conflict(s)\n", conflicts); return 1; }
+    }
     // no data yet, and data with nothing in it
     UiData empty; empty.cfg = &cfg; empty.now = now; empty.status1 = "Starting...";
     FetchResult bare; bare.fetchedAt = now;

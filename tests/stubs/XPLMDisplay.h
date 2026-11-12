@@ -43,3 +43,4 @@ typedef int XPLMWindowPositioningMode;
 void XPLMSetWindowPositioningMode(XPLMWindowID, XPLMWindowPositioningMode, int);
 int XPLMWindowIsPoppedOut(XPLMWindowID);
 void XPLMSetWindowGeometry(XPLMWindowID, int, int, int, int);
+void XPLMTakeKeyboardFocus(XPLMWindowID); int XPLMHasKeyboardFocus(XPLMWindowID);
