@@ -161,9 +161,16 @@ std::string windShort(const Report& r) {
 
 // Airport winds in degrees true (as METARs report them) or magnetic (as runways, ATIS and performance figures use them): one switch
 // for the whole window, next to the airport lists (windRefSwitch)
-bool& windMagnetic() { static bool m = false; return m; }   // the airport lists (home page and Airports tab, one switch for both)
+// Units (°C / °F, °T / °M) are kept per part of the window: the home page's airport card and nearby list share one set, the
+// Airports tab has its own, the winds-aloft tables theirs, and the map (popups, pilot reports) its own. The part being drawn
+// sets which (UnitScope); the switches and the clickable boxes change that set only.
+struct Units { bool tempF = false, windMag = false; };
+Units g_unitsHome, g_unitsAir, g_unitsAloft, g_unitsMap;
+Units* g_units = &g_unitsMap;
+struct UnitScope { Units* prev; explicit UnitScope(Units& u) : prev(g_units) { g_units = &u; } ~UnitScope() { g_units = prev; } };
+bool& windMagnetic() { return g_units->windMag; }
 // the airport card's and map popups' wind: true or magnetic, swapped by clicking the small box with the other one
-bool& cardWindMagnetic() { static bool m = false; return m; }
+bool& cardWindMagnetic() { return g_units->windMag; }
 // a report's wind with its direction in the chosen reference: "030°T / 6 kt" or "044°M / 6 kt" (short: "030/6")
 int windDirIn(const Report& r, double varEast, bool mag) { return mag ? toMagnetic(r.windDir, varEast) : r.windDir; }
 std::string windTextRef(const Report& r, double varEast, bool mag) {
@@ -181,7 +188,7 @@ std::string windShortRef(const Report& r, double varEast, bool mag) {
     return s;
 }
 // Temperatures in degrees Celsius or Fahrenheit: one switch for the whole window, next to the wind one
-bool& tempF() { static bool v = false; return v; }
+bool& tempF() { return g_units->tempF; }
 double tempIn(double c) { return tempF() ? c * 9.0 / 5.0 + 32.0 : c; }
 const char* tempUnit() { return tempF() ? "°F" : "°C"; }
 std::string tempText(double c) { return fmt("%.0f %s", tempIn(c), tempUnit()); }
@@ -2069,16 +2076,17 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
     float maxKt = 100;
     for (const auto& r : rows) maxKt = std::max(maxKt, r.kt);
     const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | (scroll ? ImGuiTableFlags_ScrollY : 0);
+    UnitScope us(g_unitsAloft);   // the winds-aloft tables (home page and Winds & Temps tab) have their own units
     if (!ImGui::BeginTable("aloft", 7, fl)) return;
     ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, textColW("00000 ft"));
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 18);
     // winds in degrees true or magnetic: a click on a row's wind (or its small box) swaps them for the whole table
-    static bool aloftMag = false;
-    bool flipMag = false;
+    bool& aloftMag = windMagnetic();
+    bool flipMag = false, flipTemp = false;
     ImGui::TableSetupColumn(aloftMag ? "Wind °M###w" : "Wind °T###w", ImGuiTableColumnFlags_WidthFixed, textColW("Wind °T  "));
     ImGui::TableSetupColumn(aloftMag ? "°T###b" : "°M###b", ImGuiTableColumnFlags_WidthFixed, textColW("000°M") + 10);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Temp", ImGuiTableColumnFlags_WidthFixed, textColW("-00°"));
+    ImGui::TableSetupColumn(tempF() ? "Temp °F###t" : "Temp °C###t", ImGuiTableColumnFlags_WidthFixed, textColW("Temp °C"));
     ImGui::TableSetupColumn("ISA", ImGuiTableColumnFlags_WidthFixed, textColW("ISA +00"));
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
@@ -2112,12 +2120,29 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
             ImGui::PopID();
         }
         ImGui::TableSetColumnIndex(4); speedBar(r.kt, maxKt);
-        ImGui::TableSetColumnIndex(5); if (r.hasT) ImGui::Text("%.0f°", tempIn(r.tempC)); else muted("—");
+        // temperature and ISA deviation: a click on either swaps °C / °F for the whole table
+        ImGui::PushID(i + 10000);
+        ImGui::TableSetColumnIndex(5);
+        if (r.hasT) {
+            const std::string t = fmt("%.0f°", tempIn(r.tempC));
+            if (ImGui::Selectable(t.c_str(), false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(t.c_str()).x, 0))) flipTemp = true;
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        } else muted("—");
         ImGui::TableSetColumnIndex(6);
-        if (r.hasT) { const float dev = r.tempC - isaTempC(r.ft * 0.3048f); ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); const long dv = isaDevIn(dev); if (dv == 0) ImGui::TextUnformatted("ISA 0"); else ImGui::Text("ISA %+ld", dv); ImGui::PopStyleColor(); }
+        if (r.hasT) {
+            const float dev = r.tempC - isaTempC(r.ft * 0.3048f);
+            const long dv = isaDevIn(dev);
+            const std::string t = dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld", dv);
+            ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft));
+            if (ImGui::Selectable(t.c_str(), false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(t.c_str()).x, 0))) flipTemp = true;
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+        ImGui::PopID();
     }
     ImGui::EndTable();
     if (flipMag) aloftMag = !aloftMag;
+    if (flipTemp) tempF() = !tempF();
 }
 
 std::string turbWord(double edr) {
