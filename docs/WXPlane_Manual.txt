@@ -39,6 +39,11 @@ flown 40 nm, so the weather keeps up with you along your route.
      it with WXPlane's. While it is on, WXPlane's window shows a red warning
      and every control is locked until you turn it off.
 
+  Updates: WXPlane works with SkunkCrafts Updater. Its folder carries a
+  skunkcrafts_updater.cfg, so the updater app lists WXPlane with your other
+  add-ons and downloads only the files that changed. Your settings
+  (WXPlane.cfg in Output/preferences) are never touched by an update.
+
   macOS: if macOS blocks the plugin the first time, allow it in
   System Settings > Privacy & Security, then restart X-Plane.
 

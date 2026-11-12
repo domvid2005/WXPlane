@@ -139,6 +139,12 @@ add_custom_command(TARGET WXPlane POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if
 # The user manual (install, every tab and setting, troubleshooting, credits) ships next to it.
 add_custom_command(TARGET WXPlane POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
   "${CMAKE_SOURCE_DIR}/docs/WXPlane_Manual.txt" "${WX_OUT}/WXPlane_Manual.txt")
+# SkunkCrafts Updater: the plugin folder carries skunkcrafts_updater.cfg, which tells the updater app where WXPlane's update depot is
+# (the "release" branch of the GitHub repo, made by tools/skunkcrafts_release.sh) and which version this download is.
+file(STRINGS "${CMAKE_SOURCE_DIR}/src/version.h" WX_VERSION_LINE REGEX "#define WX_VERSION ")
+string(REGEX REPLACE ".*\"(.*)\".*" "\\1" WX_VERSION_STR "${WX_VERSION_LINE}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/version.h")
+configure_file("${CMAKE_SOURCE_DIR}/tools/skunkcrafts_updater.cfg.in" "${CMAKE_BINARY_DIR}/package/WXPlane/skunkcrafts_updater.cfg" @ONLY NEWLINE_STYLE UNIX)
 set_target_properties(WXPlane PROPERTIES
   PREFIX "" OUTPUT_NAME "WXPlane" SUFFIX ".xpl"
   LIBRARY_OUTPUT_DIRECTORY "${WX_OUT}" RUNTIME_OUTPUT_DIRECTORY "${WX_OUT}")

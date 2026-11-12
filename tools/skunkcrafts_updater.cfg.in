@@ -1,0 +1,6 @@
+name|WXPlane
+version|@WX_VERSION_STR@
+locked|false
+disabled|false
+zone|custom
+module|https://raw.githubusercontent.com/domvid2005/WXPlane/refs/heads/release/WXPlane/

@@ -54,7 +54,7 @@ Open it from **Plugins → WXPlane**, or bind it to a key or joystick button. It
 
 ## Installation
 
-Copy the `WXPlane` folder into `X-Plane 12/Resources/plugins/` and restart X-Plane. Delete any older WXPlane folder first. A full user manual (`WXPlane_Manual.txt`, next to the plugin in its platform folder) is in the download.
+Copy the `WXPlane` folder into `X-Plane 12/Resources/plugins/` and restart X-Plane. Delete any older WXPlane folder first. Updates come through **SkunkCrafts Updater**: WXPlane shows up in the updater app like your other add-ons. A full user manual (`WXPlane_Manual.txt`, next to the plugin in its platform folder) is in the download.
 
 ## Credits
 

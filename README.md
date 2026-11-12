@@ -67,6 +67,8 @@ Settings are saved to `Output/preferences/WXPlane.cfg`.
 
 Copy the `WXPlane` folder (containing `lin_x64`, `mac_x64`, `win_x64`) into `X-Plane 12/Resources/plugins/`, then restart X-Plane. The user manual, `WXPlane_Manual.txt`, is next to the plugin. If you have the old `WeatherFix` folder, delete it.
 
+**Updates:** the folder carries `skunkcrafts_updater.cfg`, so [SkunkCrafts Updater](#releasing-skunkcrafts-updater) keeps WXPlane up to date (only changed files are downloaded; settings live in `Output/preferences/WXPlane.cfg` and are never touched).
+
 **Turn off X-Plane's own real-world weather** (X-Plane's weather settings). Left on, X-Plane keeps downloading and re-reading its own
 weather files every minute and blends them with WXPlane's. WXPlane checks `sim/weather/region/weather_source` (1 = real weather) and
 `change_mode` (7 = using real weather) every 10 s: when it is on, the log says so ("X-Plane's own real-world weather is ON"), the
@@ -620,3 +622,20 @@ ground dry for 90 s while X-Plane loads (it sets its own start-up ground state t
     gave 0.
 - **What it never touches:** snow or ice (7–15), or anything after snow or freezing precipitation in the last hour.
 - **Log:** every decision is logged as "dry runway: …".
+
+## Releasing (SkunkCrafts Updater)
+
+The updater reads WXPlane's depot from the `release` branch:
+`https://raw.githubusercontent.com/domvid2005/WXPlane/refs/heads/release/WXPlane/` (the `module` line of
+`tools/skunkcrafts_updater.cfg.in`, which CMake writes into every build's `WXPlane/skunkcrafts_updater.cfg` with the version from
+`src/version.h`).
+
+1. Bump `WX_VERSION` in `src/version.h` on main (every release needs a new version) and push; wait for the GitHub build to pass.
+2. `tools/skunkcrafts_release.sh 5.1` - a dry run: downloads that commit's built bundle, makes the depot
+   (`tools/skunkcrafts_depot.py`: the files, `skunkcrafts_updater_whitelist.txt` with each file's CRC32, the sizes list, the
+   blacklist from `tools/skunkcrafts_blacklist.txt`) and checks it.
+3. `tools/skunkcrafts_release.sh 5.1 --publish` - commits it to `release` and pushes. Users see the update in the updater app.
+
+The release branch only gets new commits; main is untouched. To take a bad release back: revert the change on main, bump the
+version, and release that.
+
