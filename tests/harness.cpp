@@ -25,6 +25,7 @@
 #include "geo.h"
 #include <zlib.h>
 #include "../src/turbulence.h"
+#include "../src/fetcher.h"
 
 extern "C" {
 int XPluginStart(char*, char*, char*);
@@ -354,6 +355,11 @@ CURLcode curl_easy_perform(CURL* c) {
         static std::string b;
         b = "[{\"icaoId\":\"LEMD\",\"lat\":40.4722,\"lon\":-3.5608,\"elev\":609,\"rawOb\":\"LEMD " + utcStamp(90) + " 24012KT 9999 -RA BKN020 OVC040 12/10 Q1008\"},"
             "{\"icaoId\":\"LETO\",\"lat\":40.4967,\"lon\":-3.4458,\"elev\":617,\"rawOb\":\"LETO " + utcStamp(90) + " 23010KT 9999 -RA BKN025 12/10 Q1008\"}]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
+    if (e->url.find("metar?ids=35D,K35D&") != std::string::npos) {   // the airport search: NOAA knows the field as K35D
+        static std::string b;
+        b = "[{\"icaoId\":\"K35D\",\"lat\":42.47,\"lon\":-85.93,\"elev\":204,\"rawOb\":\"K35D " + utcStamp(20) + " AUTO 27008KT 10SM CLR 08/M01 A3002 RMK AO2\"}]";
         e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
     }
     if (g_ocean && e->url.find("aviationweather.gov/api/data/metar?bbox") != std::string::npos) { ++g_oceanMetar; e->status = 204; return 0; }   // open water: no METARs
@@ -867,6 +873,15 @@ static int runTurb() {
 
 int main() {
     initMockTimes();
+    if (std::getenv("HARNESS_SEARCH")) {   // the Airports tab's search: "35d" finds K35D (no K needed for a US identifier)
+        wx::Station st; std::string err;
+        const bool ok = wx::lookupStation("35d", st, err);
+        std::printf("[search] 35d -> %s %s\n", ok ? st.icao.c_str() : "-", err.c_str());
+        CHECK(ok && st.icao == "K35D");
+        CHECK(!wx::lookupStation("12", st, err) && err.find("3- or 4-character") != std::string::npos);
+        std::printf(g_fail ? "HARNESS_SEARCH FAILED (%d)\n" : "HARNESS_SEARCH OK (%d failures)\n", g_fail);
+        return g_fail ? 1 : 0;
+    }
     if (std::getenv("HARNESS_BUMPS")) { return runBumps(); }
     if (std::getenv("HARNESS_DEBOUNCE")) { return runDebounce(); }
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }

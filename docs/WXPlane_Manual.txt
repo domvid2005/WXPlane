@@ -179,7 +179,8 @@ MAP
     rain rate, top, distance and bearing).
 
 AIRPORTS
-  * Search: type any ICAO code in the world (for example EGLL, KJFK, RJTT)
+  * Search: type any ICAO code in the world (for example EGLL, KJFK, RJTT),
+    or a US field's 3-character FAA code without the K (35D, 1B9, BOS),
     to see its current METAR and, where one exists, its ATIS. This is for
     reading only. It does not change the weather in the sim.
   * Below the search box: every station WXPlane is using, with category,

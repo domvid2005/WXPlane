@@ -2614,7 +2614,7 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("alist", ImVec2(listW, H)) && d.res) {
         // any airport in the world: its METAR and ATIS (only shown here, X-Plane's weather is not changed)
         ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - textColW("Search") - 10));
-        const bool enter = ImGui::InputTextWithHint("##search", "Search any airport worldwide (ICAO, e.g. EGLL)", query, sizeof query,
+        const bool enter = ImGui::InputTextWithHint("##search", "Search any airport worldwide (ICAO or FAA code, e.g. EGLL, 35D)", query, sizeof query,
                                                     ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank | ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine(0, 6);
         if (d.searchBusy) ImGui::BeginDisabled();
