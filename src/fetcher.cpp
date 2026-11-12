@@ -416,10 +416,12 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
     const Config& cfg = rq.cfg;
     const GribWindow win = windowFor(rq.lat, rq.lon, cfg.radarRangeNm);
     const std::time_t newest = operaNewestSlot(now);
-    for (int k = 0; k < 4; ++k) {
-        const std::time_t slot = newest - k * 300;
-        const std::string url = operaUrl(slot);
-        if (slot != operaSlot_) {
+    // the bucket that worked last time first, then the other one (EUMETNET's backup while the main one is down)
+    for (int k = 0; k < 4 * kOperaStores; ++k) {
+        const int store = (operaStore_ + k / 4) % kOperaStores;
+        const std::time_t slot = newest - (k % 4) * 300;
+        const std::string url = operaUrl(slot, store);
+        if (slot != operaSlot_ || store != operaSlotStore_) {
             std::string head, e;
             long st = 0;
             OperaHeader h;
@@ -437,10 +439,13 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
                     char tb[80];
                     std::snprintf(tb, sizeof tb, "no composite for %02d:%02dZ (HTTP %ld)", (int)((slot / 3600) % 24), (int)((slot / 60) % 60), st);
                     err = tb;
+                } else if (k % 4 != 3) {
+                    k = (k / 4) * 4 + 3;   // this bucket does not answer at all: straight on to the other one
                 }
                 continue;
             }
-            operaSlot_ = slot; operaHead_ = h; operaTiles_.clear();
+            operaSlot_ = slot; operaSlotStore_ = store; operaHead_ = h; operaTiles_.clear();
+            operaStore_ = store;
         }
         int fetched = 0;
         GribField refl;
@@ -469,7 +474,7 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
         out = buildRadarCells(refl, nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr);
         radarPrev_.clear();
         for (const auto& c : out.cells) radarPrev_.insert(c.key);
-        out.source = "EUMETNET OPERA (Europe)";
+        out.source = store == 1 ? "EUMETNET OPERA (Europe, backup store)" : "EUMETNET OPERA (Europe)";
         out.dataTime = slot;
         char b[120];
         std::snprintf(b, sizeof b, "OPERA: %d tile(s) downloaded, %zu cached", fetched, operaTiles_.size());
@@ -486,7 +491,7 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
             const long m = (long)((now - newest) / 60);
             std::snprintf(b, sizeof b, "feed down: newest composite is %s (%ld h %02ld min old)", hhmm(newest).c_str(), m / 60, m % 60);
         } else {
-            std::snprintf(b, sizeof b, "feed down: no composite published in the last 12 h");
+            std::snprintf(b, sizeof b, "feed down: no composite published in the last 12 h (main and backup store)");
         }
         err = b;
     }
@@ -499,12 +504,16 @@ std::time_t Fetcher::operaNewestPublished(std::time_t now) {
     if (operaNewestCheckedAt_ && now - operaNewestCheckedAt_ < 600) return operaNewestKnown_;
     operaNewestCheckedAt_ = now;
     operaNewestKnown_ = 0;
-    for (int h = 0; h < 12; ++h) {
-        std::string body, e;
-        long st = 0;
-        if (!httpGet(operaListUrl(now - h * 3600), body, st, e, 10, 1u << 20) || st != 200) { operaNewestCheckedAt_ = 0; break; }
-        const std::time_t t = operaNewestInListing(body);
-        if (t > 0) { operaNewestKnown_ = t; break; }
+    for (int store = 0; store < kOperaStores; ++store) {   // the newest in either bucket
+        bool reached = true;
+        for (int h = 0; h < 12; ++h) {
+            std::string body, e;
+            long st = 0;
+            if (!httpGet(operaListUrl(now - h * 3600, store), body, st, e, 10, 1u << 20) || st != 200) { reached = false; break; }
+            const std::time_t t = operaNewestInListing(body);
+            if (t > 0) { operaNewestKnown_ = std::max(operaNewestKnown_, t); break; }
+        }
+        if (!reached && store == kOperaStores - 1 && operaNewestKnown_ == 0) operaNewestCheckedAt_ = 0;   // try again next time
     }
     return operaNewestKnown_;
 }

@@ -10,6 +10,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <sstream>
 #include <map>
@@ -523,6 +524,39 @@ std::string utcHM(std::time_t t) {
     char b[16]; std::strftime(b, sizeof b, "%H:%MZ", &g); return b;
 }
 
+// Another add-on that does the turbulence (ActiveSky XP, xProTurb, XPRealistic ...): WXPlane then leaves X-Plane's turbulence to
+// it (the window says so and locks its turbulence controls). Checked when enabled and every 15 s: the name of the first such
+// enabled plugin, "" when none.
+std::string g_turbConflict;
+std::string findTurbConflict() {
+    const XPLMPluginID me = XPLMGetMyID();
+    const int n = XPLMCountPlugins();
+    for (int i = 0; i < n; ++i) {
+        const XPLMPluginID id = XPLMGetNthPlugin(i);
+        if (id == me || id < 0 || !XPLMIsPluginEnabled(id)) continue;
+        char name[512] = {0}, path[1024] = {0}, sig[512] = {0}, desc[1024] = {0};
+        XPLMGetPluginInfo(id, name, path, sig, desc);
+        std::string key;   // name, signature and the plugin's folder, lower case letters and digits only
+        for (const char* src : {(const char*)name, (const char*)sig, (const char*)path})
+            for (const char* c = src; *c; ++c) if (std::isalnum((unsigned char)*c)) key += (char)std::tolower((unsigned char)*c);
+        static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic"};
+        for (const char* k : kTurbAddons)
+            if (key.find(k) != std::string::npos) return name[0] ? std::string(name) : std::string(sig);
+    }
+    return "";
+}
+void turbConflictCheck(bool force) {
+    static Clock::time_point next{};
+    const auto now = Clock::now();
+    if (!force && now < next) return;
+    next = now + std::chrono::seconds(15);
+    const std::string c = findTurbConflict();
+    if (c == g_turbConflict) return;
+    g_turbConflict = c;
+    if (!c.empty()) logf("turbulence: %s is running and does the turbulence - WXPlane leaves X-Plane's turbulence to it", c.c_str());
+    else logf("turbulence: no other turbulence add-on running any more - WXPlane's turbulence is back");
+}
+
 void turbRestore(const char* why) {
     TurbState& t = g_ts;
     if (!t.writing) return;
@@ -549,11 +583,12 @@ void turbulenceTick() {
     }
     const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
     const double altFt = t.elev ? XPLMGetDatad(t.elev) / 0.3048 : 0;
-    const bool on = g_cfg.enabled && g_cfg.realisticTurbulence && !(lat == 0 && lon == 0);
+    turbConflictCheck(false);
+    const bool on = g_cfg.enabled && g_cfg.realisticTurbulence && g_turbConflict.empty() && !(lat == 0 && lon == 0);
     // Pilot reports are kept current whenever the weather is on (for the map layer and the floor).
     g_turbFetch.update(lat, lon, altFt, on, g_cfg.enabled && !(lat == 0 && lon == 0));
     g_mapReports = g_turbFetch.reports();
-    if (!on) { turbRestore(g_cfg.realisticTurbulence ? "weather off" : "realistic turbulence off"); return; }
+    if (!on) { turbRestore(!g_turbConflict.empty() ? "another turbulence add-on is running" : (g_cfg.realisticTurbulence ? "weather off" : "realistic turbulence off")); return; }
     if (!t.arr || !XPLMCanWriteDataRef(t.arr) || t.n <= 0) {
         if (!t.loggedNoArr) { t.loggedNoArr = true; turbLog("sim/weather/region/turbulence %s: realistic turbulence not possible", t.arr ? "is not writable" : "not found"); }
         return;
@@ -2995,7 +3030,8 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     if (g_everRequested && g_cfg.enabled) d.nextUpdateS = std::max(0.0, g_cfg.updateMinutes * 60.0 - std::chrono::duration<double>(Clock::now() - g_lastRequest).count());
     d.status1 = g_status1; d.status2 = g_status2;
     d.xpRealWeather = g_xpRealWx;
-    d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence;
+    d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence && g_turbConflict.empty();
+    d.turbConflict = g_turbConflict;
     d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
     d.turbGridAltFt = g_uiTs.gridAltFt; d.turbGridSeq = g_uiTs.gridSeq;
     d.magVarAt = magVarEastAt;

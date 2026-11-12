@@ -58,6 +58,19 @@ XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t* p) { g_cb = p->cal
 void XPLMDestroyFlightLoop(XPLMFlightLoopID) {}
 void XPLMScheduleFlightLoop(XPLMFlightLoopID, float, int) {}
 static float g_turbArr[13] = {0}; static int g_turbWrites = 0;
+// the plugin list: WXPlane itself (id 0) and, when set, another add-on (id 1) for the turbulence-conflict check
+static std::string g_otherPlugin;
+XPLMPluginID XPLMGetMyID() { return 0; }
+int XPLMCountPlugins() { return g_otherPlugin.empty() ? 1 : 2; }
+XPLMPluginID XPLMGetNthPlugin(int i) { return i; }
+void XPLMGetPluginInfo(XPLMPluginID id, char* n, char* p, char* s, char* d) {
+    const std::string nm = id == 0 ? std::string("WXPlane") : g_otherPlugin;
+    if (n) std::strcpy(n, nm.c_str());
+    if (p) std::strcpy(p, id == 0 ? "Resources/plugins/WXPlane/win_x64/WXPlane.xpl" : "Resources/plugins/other/win_x64/other.xpl");
+    if (s) std::strcpy(s, id == 0 ? "com.wxplane.xp12.noaa" : "com.example.other");
+    if (d) d[0] = 0;
+}
+int XPLMIsPluginEnabled(XPLMPluginID) { return 1; }
 XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
 int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
     if (r == (void*)79) { if (!out) return 13; for (int i = 0; i < n && off + i < 13; ++i) out[i] = g_turbArr[off + i]; return n; }
@@ -233,14 +246,16 @@ CURLcode curl_easy_setopt(CURL* c, int opt, ...) {
 // European radar mock (HARNESS_OPERA): the real composite header, tiles made here (a 50 dBZ block over LEMD in 20 dBZ rain)
 static std::string g_operaHead;
 static int g_operaTiles = 0;
-static bool g_operaDown = false;   // the feed stalled 4 h 48 min ago: composites answer 404, the listing names the last one
+static bool g_operaDown = false;
+static bool g_operaMainDead = false;   // the main bucket (CloudFerro) does not answer: the backup (ECMWF) has the composites   // the feed stalled 4 h 48 min ago: composites answer 404, the listing names the last one
 static std::string operaTileFor(uint64_t off);
 CURLcode curl_easy_perform(CURL* c) {
     Easy* e = (Easy*)c;
     ++g_netRequests;
     std::printf("  net: GET %s\n", e->url.c_str());
     { static std::mutex m; std::lock_guard<std::mutex> l(m); g_urls.push_back(e->url); }   // several worker threads download at once
-    if (!g_operaHead.empty() && e->url.find("cloudferro.com/openradar-24h") != std::string::npos) {
+    if (!g_operaHead.empty() && g_operaMainDead && e->url.find("cloudferro.com/openradar-24h") != std::string::npos) return CURLE_COULDNT_CONNECT;
+    if (!g_operaHead.empty() && e->url.find("/openradar-24h") != std::string::npos) {
         if (e->url.find("?list-type=2") != std::string::npos) {
             std::time_t last = ((std::time(nullptr) - 288 * 60) / 300) * 300;
             std::tm g{}; gmtime_r(&last, &g);
@@ -670,12 +685,14 @@ static int runOpera() {
         CHECK(g_operaTiles == 0);
     }
     g_operaDown = false;
+    g_operaMainDead = true;   // and the main bucket does not answer (2026-11-12: EUMETNET's cloud-provider problem): the backup store has it
     g_logAll.clear();
     g_menuHandler(nullptr, (void*)(intptr_t)2);
     for (int i = 0; i < 1500 && g_logAll.find("radar: EUMETNET OPERA") == std::string::npos && g_logAll.find("radar: none") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     const size_t at = g_logAll.find("radar: ");
     if (at != std::string::npos) std::printf("[opera] %s\n", g_logAll.substr(at, g_logAll.find('\n', at) - at).c_str());
-    CHECK(g_logAll.find("radar: EUMETNET OPERA (Europe)") != std::string::npos);
+    CHECK(g_logAll.find("radar: EUMETNET OPERA (Europe, backup store)") != std::string::npos);
+    g_operaMainDead = false;
     const int tiles1 = g_operaTiles;
     std::printf("[opera] tiles downloaded: %d\n", tiles1);
     CHECK(tiles1 >= 1 && tiles1 <= 6);
@@ -683,7 +700,7 @@ static int runOpera() {
     const size_t mark = g_logAll.size();
     g_menuHandler(nullptr, (void*)(intptr_t)2);
     for (int i = 0; i < 1500 && g_logAll.find("radar: ", mark) == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-    CHECK(g_logAll.find("radar: EUMETNET OPERA (Europe)", mark) != std::string::npos);
+    CHECK(g_logAll.find("radar: EUMETNET OPERA (Europe", mark) != std::string::npos);   // still the backup store
     CHECK(g_operaTiles == tiles1 || (std::time(nullptr) % 300) < 20);   // unless a new slot began meanwhile
     XPluginDisable(); XPluginStop();
     std::printf(g_fail ? "HARNESS_OPERA FAILED (%d)\n" : "HARNESS_OPERA OK (%d failures)\n", g_fail);
@@ -828,6 +845,15 @@ static int runTurb() {
         std::printf("[turb]   map labels: %zu, first '%s'\n", g_mapLabels.size(), g_mapLabels.empty() ? "" : g_mapLabels[0].c_str());
         CHECK(!g_mapLabels.empty() && g_mapLabels[0].find("MOD FL330 A320") != std::string::npos);
     }
+    std::printf("[turb] 2b) ActiveSky XP starts: WXPlane hands the turbulence back and leaves it alone\n");
+    g_otherPlugin = "ActiveSky XP";
+    CHECK(pumpUntil("ActiveSky XP is running and does the turbulence", 30));
+    CHECK(pumpUntil("another turbulence add-on is running: X-Plane's region turbulence put back", 10));
+    { bool back2 = true; for (float v : g_turbArr) if (!nr(v, 0.7f)) back2 = false; CHECK(back2); }
+    { const int w0 = g_turbWrites; for (int i = 0; i < 60; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); } CHECK(g_turbWrites == w0); }
+    g_otherPlugin.clear();
+    CHECK(pumpUntil("no other turbulence add-on running any more", 30));
+    { const int w1 = g_turbWrites; for (int i = 0; i < 400 && g_turbWrites == w1; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); } CHECK(g_turbWrites > w1); }   // writing again
     std::printf("[turb] 3) the menu toggle puts X-Plane's values back\n");
     g_menuHandler(nullptr, (void*)(intptr_t)10 /*kTurbulence*/);
     CHECK(pumpUntil("realistic turbulence off: X-Plane's region turbulence put back", 5));

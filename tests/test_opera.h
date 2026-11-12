@@ -68,6 +68,8 @@ void pixelOf(const OperaHeader& h, double lat, double lon, int& col, int& row) {
 void run() {
     // URLs and slots
     CHECK(operaUrl(1794427800) == "https://s3.waw3-1.cloudferro.com/openradar-24h/2026/11/11/OPERA/COMP/OPERA@20261111T2010@0@DBZH.tiff");
+    CHECK(operaUrl(1794427800, 1) == "https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup/2026/11/11/OPERA/COMP/OPERA@20261111T2010@0@DBZH.tiff");
+    CHECK(operaListUrl(1794427800, 1).rfind("https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup?list-type=2", 0) == 0);
     CHECK(operaNewestSlot(1794427800 + 239) == 1794427800 - 300);   // 20:13:59Z: 20:10 is not published yet
     CHECK(operaNewestSlot(1794427800 + 240) == 1794427800);
     // coverage: Europe yes, the US / Africa south of the domain / Asia no

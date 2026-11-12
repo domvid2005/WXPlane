@@ -98,6 +98,7 @@ private:
     std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
     // European radar (EUMETNET OPERA): the composite's header and the tiles already downloaded, for the slot they belong to
     std::time_t operaSlot_ = 0;
+    int operaStore_ = 0, operaSlotStore_ = 0;   // the bucket that last worked (opera.h), and the one the cached slot came from
     OperaHeader operaHead_;
     std::map<int, std::vector<float>> operaTiles_;
     RadarResult lastOpera_;

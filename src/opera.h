@@ -23,12 +23,15 @@ struct OperaHeader {
     int tilesAcross() const { return tileW > 0 ? (width + tileW - 1) / tileW : 0; }
 };
 
+// Where the composites are: 0 the main bucket (CloudFerro), 1 the backup EUMETNET moved to while the main one has a cloud-provider
+// problem (ECMWF; same keys). The fetcher tries the one that last worked first, then the other.
+constexpr int kOperaStores = 2;
 // The file for the 5-minute slot that ends at t (UTC, rounded down to 5 minutes).
-std::string operaUrl(std::time_t t);
+std::string operaUrl(std::time_t t, int store = 0);
 // The slot to try first: composites appear about 4 minutes after their time.
 std::time_t operaNewestSlot(std::time_t now);
 // The bucket listing of the composites of one UTC hour (S3 ListObjectsV2), for finding the newest one when the feed stalls.
-std::string operaListUrl(std::time_t hour);
+std::string operaListUrl(std::time_t hour, int store = 0);
 // The newest DBZH GeoTIFF composite named in a listing, 0 if none.
 std::time_t operaNewestInListing(const std::string& xml);
 // Inside the composite's grid (the standard OPERA domain; coverage inside it is decided by the data).

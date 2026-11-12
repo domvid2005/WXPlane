@@ -202,6 +202,11 @@ TURBULENCE
   * Every nearby pilot report. Click one to open its details below it, and
     click again to close it.
   * Windshear near you.
+  * Another turbulence add-on running (ActiveSky XP, xProTurb,
+    XPRealistic ...): WXPlane leaves X-Plane's turbulence to it. A red
+    TURBULENCE CONFLICT caution covers this tab, its controls are locked,
+    and the turbulence switch in Settings is greyed out until that add-on
+    is disabled.
 
 SERVICES
   Every data source WXPlane uses, with its state:
@@ -297,8 +302,9 @@ SETTINGS
   The weather looks old, or there is no radar
       Open the Services tab. A red or amber service is having problems,
       and the tab shows when it last worked. The European radar feed
-      (OPERA) sometimes stops for a few hours. The Services tab then says
-      how old the newest picture is. There is no radar outside the US and
+      (OPERA) sometimes stops for a few hours. WXPlane then tries
+      EUMETNET's backup store as well; if neither has a picture, the
+      Services tab says how old the newest one is. There is no radar outside the US and
       Europe. There, storms come from the airport reports and the GFS
       model.
 

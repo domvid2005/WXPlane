@@ -402,6 +402,17 @@ int main(int argc, char** argv) {
         d.cfg = &cfg;
     }
     d.xpRealWeather = false;
+    // another turbulence add-on running: the caution over the Turbulence tab (its controls locked), the setting greyed out
+    d.turbConflict = "ActiveSky XP";
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? (pass == 0 ? 4 : 6) : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        const std::string p = out + (pass == 0 ? "/ui_turb_conflict.png" : "/ui_settings_conflict.png");
+        if (!writePng(cv, p)) return 1;
+        std::printf("wrote %s\n", p.c_str());
+    }
+    d.turbConflict.clear();
     {   // turbulence & windshear switched off: the home page says so, the Turbulence tab fades out
         Config nt = cfg; nt.realisticTurbulence = false; nt.windshear = false;
         d.cfg = &nt; d.turbOn = false; d.wsOn = false;

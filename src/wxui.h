@@ -50,6 +50,7 @@ struct UiData {
     double nextUpdateS = -1;            // seconds to the next scheduled update, -1 unknown
     std::string status1, status2;       // the menu's status lines
     bool xpRealWeather = false;         // X-Plane's own real weather is on (it should be off)
+    std::string turbConflict;           // another add-on that does turbulence (ActiveSky XP, xProTurb ...): WXPlane leaves it to it
     // turbulence at the aircraft
     bool turbOn = false;
     double turbEdr = -1;                // EDR at the aircraft (before Max turbulence), -1 = no data

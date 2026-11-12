@@ -55,7 +55,11 @@ double qOf(double phi, double e2, double e) {
 
 std::time_t operaNewestSlot(std::time_t now) { return ((now - 240) / 300) * 300; }
 
-std::string operaUrl(std::time_t t) {
+static const char* operaBase(int store) {
+    return store == 1 ? "https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup" : "https://s3.waw3-1.cloudferro.com/openradar-24h";
+}
+
+std::string operaUrl(std::time_t t, int store) {
     t = (t / 300) * 300;
     std::tm g{};
 #if defined(_WIN32)
@@ -63,13 +67,13 @@ std::string operaUrl(std::time_t t) {
 #else
     gmtime_r(&t, &g);
 #endif
-    char b[200];
-    std::snprintf(b, sizeof b, "https://s3.waw3-1.cloudferro.com/openradar-24h/%04d/%02d/%02d/OPERA/COMP/OPERA@%04d%02d%02dT%02d%02d@0@DBZH.tiff",
+    char b[240];
+    std::snprintf(b, sizeof b, "%s/%04d/%02d/%02d/OPERA/COMP/OPERA@%04d%02d%02dT%02d%02d@0@DBZH.tiff", operaBase(store),
                   g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour, g.tm_min);
     return b;
 }
 
-std::string operaListUrl(std::time_t t) {
+std::string operaListUrl(std::time_t t, int store) {
     t = (t / 3600) * 3600;
     std::tm g{};
 #if defined(_WIN32)
@@ -77,8 +81,8 @@ std::string operaListUrl(std::time_t t) {
 #else
     gmtime_r(&t, &g);
 #endif
-    char b[220];
-    std::snprintf(b, sizeof b, "https://s3.waw3-1.cloudferro.com/openradar-24h?list-type=2&max-keys=200&prefix=%04d/%02d/%02d/OPERA/COMP/OPERA@%04d%02d%02dT%02d",
+    char b[260];
+    std::snprintf(b, sizeof b, "%s?list-type=2&max-keys=200&prefix=%04d/%02d/%02d/OPERA/COMP/OPERA@%04d%02d%02dT%02d", operaBase(store),
                   g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour);
     return b;
 }

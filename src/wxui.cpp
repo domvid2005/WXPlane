@@ -2340,7 +2340,8 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
     if (!slider) {   // the home page: three rows
         int withTurb = 0, total = 0;
         if (d.reports) for (const auto& p : d.reports->pireps) { ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }
-        statRow(f, "At the aircraft", d.turbOn ? turbWord(d.turbEdr) : std::string("Off"), d.turbOn && d.turbEdr >= 0 ? fmt("EDR %.2f · %s", d.turbEdr, d.turbSource.c_str()) : std::string());
+        if (!d.turbConflict.empty()) statRow(f, "At the aircraft", "Other add-on", d.turbConflict + " controls it", cDown);
+        else statRow(f, "At the aircraft", d.turbOn ? turbWord(d.turbEdr) : std::string("Off"), d.turbOn && d.turbEdr >= 0 ? fmt("EDR %.2f · %s", d.turbEdr, d.turbSource.c_str()) : std::string());
         (void)total;
         statRow(f, "Pilot reports", d.reports ? fmt("%d", withTurb) : std::string("—"), d.reports ? std::string("with turbulence") : std::string());
         const char* risk = !d.wsOn ? "Off" : (d.wsHigh > 0 ? "High" : (d.wsMed > 0 ? "Medium" : (d.wsSources > 0 ? "Low" : "None")));
@@ -2456,10 +2457,21 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     for (int c = 0; c < 5; ++c) {
         if (!ImGui::TableSetColumnIndex(c)) continue;
         if (c == 0) {
-            static const char* lbl[] = {"ICAO###icao", "ICAO \xe2\x96\xb2###icao", "ICAO \xe2\x96\xbc###icao", "Cat \xe2\x96\xb2###icao", "Cat \xe2\x96\xbc###icao"};
-            if (icaoMode >= 3) ImGui::PushStyleColor(ImGuiCol_Text, v4(cAccent));
-            ImGui::TableHeader(lbl[icaoMode]);
-            if (icaoMode >= 3) ImGui::PopStyleColor();
+            // the label, then a small arrow drawn like the other columns' sort arrows (the font has no arrow characters)
+            const char* lbl = icaoMode >= 3 ? "Cat###icao" : "ICAO###icao";
+            const ImU32 col = icaoMode >= 3 ? cAccent : cMuted;
+            ImGui::PushStyleColor(ImGuiCol_Text, v4(col));
+            ImGui::TableHeader(lbl);
+            ImGui::PopStyleColor();
+            if (icaoMode > 0) {
+                const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                const float tw = ImGui::CalcTextSize(icaoMode >= 3 ? "Cat" : "ICAO").x, fs = ImGui::GetFontSize();
+                const float cx = r0.x + tw + ImGui::GetStyle().ItemInnerSpacing.x + fs * 0.32f, cy = (r0.y + r1.y) * 0.5f, a = fs * 0.27f;
+                const bool up = icaoMode == 1 || icaoMode == 3;   // ascending, as ImGui draws it
+                ImDrawList* hd = ImGui::GetWindowDrawList();
+                if (up) hd->AddTriangleFilled(ImVec2(cx, cy - a), ImVec2(cx + a, cy + a * 0.7f), ImVec2(cx - a, cy + a * 0.7f), col);
+                else hd->AddTriangleFilled(ImVec2(cx - a, cy - a * 0.7f), ImVec2(cx + a, cy - a * 0.7f), ImVec2(cx, cy + a), col);
+            }
             if (ImGui::IsItemClicked()) icaoMode = (icaoMode + 1) % 5;
         } else ImGui::TableHeader(ImGui::TableGetColumnName(c));
     }
@@ -2493,7 +2505,7 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
 // The tabs along the top: a little larger (padding, the bold font) and clearer than ImGui's defaults
 ImFont*& tabFont() { static ImFont* f = nullptr; return f; }
 ImFont*& tabFontBig() { static ImFont* f = nullptr; return f; }   // the semibold face a size up (loaded with the others)
-const ImVec2 kTabPad(17, 9);
+const ImVec2 kTabPad(17, 4);   // the same text, a shorter tab
 float tabWidth(const char* label) {
     ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
     return tf->CalcTextSizeA(tf->FontSize, FLT_MAX, 0.0f, label).x + 2 * kTabPad.x;
@@ -2749,7 +2761,35 @@ void tabAloft(const UiData& d, const UiFonts& f) {
     panelEnd();
 }
 
+// Another add-on controls the turbulence (ActiveSky XP, xProTurb ...): a red caution over the Turbulence tab, whose controls are
+// locked meanwhile (like X-Plane's real weather over the whole window)
+void turbConflictCaution(const UiFonts& f, const std::string& who, ImVec2 a, ImVec2 b) {
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    fg->PushClipRect(a, b, true);
+    fg->AddRectFilled(a, b, IM_COL32(10, 10, 12, 170), 6.0f);
+    const float w = b.x - a.x, h = b.y - a.y;
+    const float bw = std::min(w - 40, 700.0f), bh = 160;
+    const ImVec2 b0(a.x + (w - bw) * 0.5f, a.y + (h - bh) * 0.5f), b1(b0.x + bw, b0.y + bh);
+    fg->AddRectFilled(b0, b1, IM_COL32(150, 24, 24, 245), 10.0f);
+    fg->AddRect(b0, b1, IM_COL32(255, 120, 120, 255), 10.0f, 0, 2.0f);
+    const float big = ImGui::GetFontSize() * 1.7f, mid = ImGui::GetFontSize() * 1.05f;
+    const char* l1 = "TURBULENCE CONFLICT";
+    const std::string l2 = who + " is running and controls the turbulence.";
+    const std::string l3 = "WXPlane leaves turbulence to it. Disable " + who + "'s turbulence (or the add-on) to use WXPlane's.";
+    const ImVec2 t1 = f.title->CalcTextSizeA(big, FLT_MAX, 0, l1), t2 = f.body->CalcTextSizeA(mid, FLT_MAX, 0, l2.c_str()), t3 = f.body->CalcTextSizeA(mid, bw - 30, bw - 30, l3.c_str());
+    fg->AddText(f.title, big, ImVec2(b0.x + (bw - t1.x) * 0.5f, b0.y + 26), IM_COL32(255, 255, 255, 255), l1);
+    fg->AddText(f.body, mid, ImVec2(b0.x + (bw - t2.x) * 0.5f, b0.y + 26 + t1.y + 16), IM_COL32(255, 225, 225, 255), l2.c_str());
+    fg->AddText(f.body, mid, ImVec2(b0.x + (bw - t3.x) * 0.5f, b0.y + 26 + t1.y + 16 + t2.y + 6), IM_COL32(255, 225, 225, 255), l3.c_str(), nullptr, bw - 30);
+    fg->PopClipRect();
+}
+
 void tabTurbulence(const UiData& d, const UiFonts& f, UiActions& act) {
+    const bool conflict = !d.turbConflict.empty();
+    const ImVec2 area0 = ImGui::GetCursorScreenPos();
+    if (conflict) ImGui::BeginDisabled();
+    struct Lock { bool on; const UiData& d; const UiFonts& f; ImVec2 a, b;
+                  ~Lock() { if (on) { ImGui::EndDisabled(); turbConflictCaution(f, d.turbConflict, a, b); } } };
+    const Lock lock{conflict, d, f, area0, ImVec2(area0.x + ImGui::GetContentRegionAvail().x, area0.y + ImGui::GetContentRegionAvail().y)};
     const float W = ImGui::GetContentRegionAvail().x, H = ImGui::GetContentRegionAvail().y;
     const float leftW = std::floor(W * 0.45f);
     ImGui::BeginGroup();
@@ -2821,8 +2861,23 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         {   // one switch for both: turbulence at every altitude, and windshear near storms
             const bool on = d.cfg->realisticTurbulence || d.cfg->windshear;
             bool flip = false;
+            const bool conflict = !d.turbConflict.empty();   // another add-on does the turbulence: the switch is locked (greyed)
+            if (conflict && !off) {
+                ImGui::BeginDisabled();
+                ImGui::PushStyleColor(ImGuiCol_CheckMark, v4(IM_COL32(88, 92, 100, 255)));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, v4(IM_COL32(32, 34, 38, 255)));
+            }
             settingRow("Realistic turbulence & windshear", on, "Turbulence at every altitude from NOAA GTGN (US) / ECMWF (elsewhere) and pilot reports, and gust fronts and microbursts near convective storms. Off: X-Plane's own turbulence, no windshear, and no Turbulence tab. Max turbulence is on the Turbulence tab.", flip);
-            if (flip) act.setTurbWs = on ? 0 : 1;
+            if (conflict && !off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
+            if (conflict) {
+                ImGui::Indent(30);
+                ImGui::PushStyleColor(ImGuiCol_Text, v4(cDown));
+                ImGui::TextWrapped("Locked: %s is running and controls the turbulence, so WXPlane leaves it alone.", d.turbConflict.c_str());
+                ImGui::PopStyleColor();
+                ImGui::Unindent(30);
+                ImGui::Spacing();
+            }
+            if (flip && !conflict) act.setTurbWs = on ? 0 : 1;
         }
         if (off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
         ImGui::Separator(); ImGui::Spacing();
@@ -3102,7 +3157,17 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     int bad = 0;
     for (const auto& s : allServices(d)) if (s.state == SvcState::Down || s.state == SvcState::Degraded) ++bad;
     tabFont() = tabFontBig() ? tabFontBig() : f.bold;
-    if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_None)) {
+    {   // the line across the window sits between the logo row and the tops of the tabs (not behind the tabs)
+        ImGui::Dummy(ImVec2(0, 1));
+        const ImVec2 q = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x;
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(q.x, q.y), ImVec2(q.x + w, q.y), IM_COL32(58, 62, 70, 255), 1.0f);
+        ImGui::Dummy(ImVec2(0, 2));
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0.0f);
+    const bool tabBarOpen = ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_None);
+    ImGui::PopStyleVar();
+    if (tabBarOpen) {
         if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
         if (bigTab("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
         if (bigTab(fmt("Airports (%zu)###air", d.res->stations.size()).c_str(), nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
@@ -3111,14 +3176,20 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             static float vis = -1;
             const bool want = !d.cfg || d.cfg->realisticTurbulence || d.cfg->windshear;
             if (vis < 0) vis = want ? 1.0f : 0.0f;
-            vis = want ? std::min(1.0f, vis + ImGui::GetIO().DeltaTime * 4.0f) : std::max(0.0f, vis - ImGui::GetIO().DeltaTime * 4.0f);
+            const float dt = std::min(ImGui::GetIO().DeltaTime, 1.0f / 20.0f);   // a slow frame does not make it jump
+            vis = want ? std::min(1.0f, vis + dt / 0.45f) : std::max(0.0f, vis - dt / 0.45f);   // 0.45 s each way
             if (vis > 0.0f) {
-                // the tab narrows as it fades (and widens as it comes back), so the tabs after it slide over instead of jumping
+                // the tab narrows as it fades (and widens as it comes back), so the tabs after it slide over instead of jumping;
+                // eased at both ends (smootherstep), and its label fades out before the tab gets too narrow for it (no "..." on the way)
                 const float full = tabWidth("Turbulence");
-                const float e = vis * vis * (3 - 2 * vis);
+                const float e = vis * vis * vis * (vis * (vis * 6 - 15) + 10);
+                const float textA = std::max(0.0f, std::min(1.0f, (e - 0.45f) / 0.5f));
                 if (vis < 1.0f) ImGui::SetNextItemWidth(std::max(1.0f, full * e));
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * e);
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * std::min(1.0f, e * 1.4f));
+                ImVec4 tc = ImGui::GetStyleColorVec4(ImGuiCol_Text); tc.w *= textA;
+                ImGui::PushStyleColor(ImGuiCol_Text, tc);
                 const bool open = bigTab("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
+                ImGui::PopStyleColor();
                 ImGui::PopStyleVar();
                 if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
             }
