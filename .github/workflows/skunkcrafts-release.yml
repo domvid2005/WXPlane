@@ -1,0 +1,61 @@
+# Releases a finished build to SkunkCrafts Updater users: the bundle that build.yml made for a commit on main becomes the updater's
+# depot on the "release" branch (tools/skunkcrafts_release.sh). Only started by hand:
+#   gh workflow run skunkcrafts-release.yml -f version=5.1              (dry run: the depot is built and checked, kept as an artifact)
+#   gh workflow run skunkcrafts-release.yml -f version=5.1 -f publish=true
+name: SkunkCrafts release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (must be WX_VERSION in src/version.h at that commit, and new)"
+        required: true
+      commit:
+        description: "Commit on main (empty: the newest)"
+        required: false
+        default: ""
+      publish:
+        description: "Push it to the release branch (off: dry run)"
+        type: boolean
+        default: false
+permissions:
+  contents: write
+  actions: read
+concurrency: skunkcrafts-release
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Find the commit's passed build
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          SHA=$(git rev-parse "${COMMIT:-origin/main}")
+          RUN=$(gh run list --commit "$SHA" --workflow build.yml --json databaseId,conclusion,status \
+                -q '[.[] | select(.status=="completed" and .conclusion=="success")][0].databaseId')
+          [ -n "$RUN" ] || { echo "no passed build for $SHA"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"; echo "run=$RUN" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: WXPlane
+          path: bundle
+          run-id: ${{ steps.build.outputs.run }}
+          github-token: ${{ github.token }}
+      - name: Build the depot (and publish it)
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ steps.build.outputs.sha }}
+          RUN: ${{ steps.build.outputs.run }}
+          PUBLISH: ${{ inputs.publish }}
+          DEPOT_OUT: ${{ github.workspace }}/depot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ARGS=()
+          [ "$PUBLISH" = "true" ] && ARGS+=(--publish)
+          bash tools/skunkcrafts_release.sh "$VERSION" "$SHA" --bundle bundle/WXPlane --run "$RUN" "${ARGS[@]}"
+      - uses: actions/upload-artifact@v4
+        with: { name: WXPlane-skunkcrafts-depot, path: depot }

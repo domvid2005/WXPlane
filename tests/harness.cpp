@@ -1115,6 +1115,22 @@ int main() {
             for (size_t i = before; i < g_calls.size(); ++i) { const auto& L = g_calls[i].info.cloud_layers; if (L[0].coverage <= 0 && L[0].alt_base == 0 && (L[1].coverage > 0 || L[2].coverage > 0)) ++groundSlot; }
             std::printf("  clear records within 30 nm of a deck: %d, records with a 0-0 m slot under their layers: %d\n", clearNear, groundSlot);
             CHECK(clearNear == 0);
+            // no spires: a layer's top never stands more than 650 m per nm (1,200 m for CB) above a neighbour's top in that slot (KJFK 2026-11-12)
+            int spires = 0;
+            for (size_t i = before; i < g_calls.size(); ++i)
+                for (int k = 0; k < 3; ++k) {
+                    const auto& c = g_calls[i].info.cloud_layers[k];
+                    if (!(c.coverage > 0.05f && c.alt_top > c.alt_base)) continue;
+                    for (size_t j = before; j < g_calls.size(); ++j) {
+                        const auto& o = g_calls[j].info.cloud_layers[k];
+                        if (j == i || !(o.coverage > 0.05f && o.alt_top > o.alt_base)) continue;
+                        const double d = wx::distNm(g_calls[i].lat, g_calls[i].lon, g_calls[j].lat, g_calls[j].lon);
+                        if (d > 19.0) continue;
+                        if (c.alt_top > o.alt_top + (c.cloud_type >= 2.5f ? 1200.0 : 650.0) * d * 1.02 + 350.0 && c.alt_top > c.alt_base + 301.0f) { ++spires; break; }
+                    }
+                }
+            std::printf("  layer tops standing far above a neighbour's (spires): %d\n", spires);
+            CHECK(spires == 0);
         }
         if (const char* dp = std::getenv("WX_DUMP")) {   // for the cloud-edge picture (tools)
             FILE* f = std::fopen(dp, "w");

@@ -173,11 +173,16 @@ void buildFonts(float scale) {
         if (uiLogoRgba(rgba, lw, lh)) {
             XPLMGenerateTextureNumbers(&g_logoTex, 1);
             XPLMBindTexture2d(g_logoTex, 0);
-            gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (GLint)GL_LINEAR);
+            const std::vector<UiImage> mips = uiLogoMips(rgba, lw, lh);
+            // trilinear (GL_LINEAR_MIPMAP_LINEAR) over the smaller copies: clean edges at any size it is drawn at
+            gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (GLint)(mips.empty() ? GL_LINEAR : 0x2703));
             gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (GLint)GL_LINEAR);
             gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (GLint)GL_CLAMP_TO_EDGE);
             gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (GLint)GL_CLAMP_TO_EDGE);
+            gl.TexParameteri(GL_TEXTURE_2D, 0x813D /* GL_TEXTURE_MAX_LEVEL */, (GLint)mips.size());
             gl.TexImage2D(GL_TEXTURE_2D, 0, (GLint)GL_RGBA, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            for (size_t m = 0; m < mips.size(); ++m)
+                gl.TexImage2D(GL_TEXTURE_2D, (GLint)(m + 1), (GLint)GL_RGBA, mips[m].w, mips[m].h, 0, GL_RGBA, GL_UNSIGNED_BYTE, mips[m].rgba.data());
             g_logoAspect = (float)lw / (float)lh;
         }
     }

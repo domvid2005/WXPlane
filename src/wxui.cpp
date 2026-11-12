@@ -805,6 +805,7 @@ void selOpen(int kind, const std::string& key, ImVec2 at) {
 }
 std::string pirepKey(const hz::Pirep& p) { return p.raw + "|" + std::to_string((long long)p.obsTime); }
 void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, std::vector<std::string>& open);
+std::string pirepConditions(const hz::Pirep& p);
 std::string advKey(const hz::Advisory& a) { return a.name + "|" + std::to_string((long long)a.from) + "|" + std::to_string(a.pts.size()); }
 
 bool& showAirports() { static bool v = true; return v; }
@@ -813,6 +814,9 @@ bool& showRadar() { static bool v = true; return v; }   // the radar echoes (sto
 // stays on the aircraft)
 ImVec2& mapPan() { static ImVec2 v(0, 0); return v; }
 bool& recentering() { static bool v = false; return v; }   // "Center on aircraft": the map glides back (updateShownRange)
+// a click on a storm cell in the list: the map glides until its centre (the +) is over that cell (nm east, north of the aircraft)
+bool& panGliding() { static bool v = false; return v; }
+ImVec2& panGoal() { static ImVec2 v(0, 0); return v; }
 bool& mapLocalTime() { static bool v = false; return v; }   // the map's time bubble: local time instead of Zulu
 double& popupFullUntil() { static double t = -1; return t; }   // "MAX AMOUNT OF POPUPS" shows until then (ImGui time)
 // The range shown, eased towards the chosen one (in log space) like the North/Heading Lock turn
@@ -823,6 +827,14 @@ void updateShownRange() {
     const float k = 1.0f - std::exp(-dt * 9.0f);
     const float a = std::log(shownRange()), b = std::log(target);
     shownRange() = std::fabs(a - b) < 0.002f ? target : std::exp(a + (b - a) * k);
+    if (panGliding()) {
+        if (recentering()) panGliding() = false;
+        else {
+            const float kp = 1.0f - std::exp(-dt * 7.0f);
+            mapPan().x += (panGoal().x - mapPan().x) * kp; mapPan().y += (panGoal().y - mapPan().y) * kp;
+            if (std::fabs(panGoal().x - mapPan().x) < 0.005f * target && std::fabs(panGoal().y - mapPan().y) < 0.005f * target) { mapPan() = panGoal(); panGliding() = false; }
+        }
+    }
     if (recentering()) {
         const float kp = 1.0f - std::exp(-dt * 7.0f);
         mapPan().x -= mapPan().x * kp; mapPan().y -= mapPan().y * kp;
@@ -1290,7 +1302,22 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         static std::vector<float> v, sw, swv;
         v.assign((size_t)n * (size_t)n, 0.0f); sw.assign(v.size(), 0.0f); swv.assign(v.size(), 0.0f);
         bool any = false;
+        // With the natural picture the map shows the radar mosaic itself (1 nm, lightly smoothed), not the records' squares: the real
+        // shapes of the echoes at every zoom ("radar too blocky", 2026-11-12). Without it, the blocks are spread as before.
+        const bool raster = !d.res->radar.view.empty();
+        if (raster) {
+            for (int iy = 0; iy < n; ++iy)
+                for (int ix = 0; ix < n; ++ix) {
+                    const float X = ix * step + p.x - c.x, Yp = c.y - (iy * step + p.y);
+                    const double ex = (X * cr + Yp * sr) / px, ny = (-X * sr + Yp * cr) / px;
+                    const float z = d.res->radar.viewAt(cLat + ny / 60.0, cLon + ex / (60.0 * kx));
+                    if (z < 8.0f) continue;
+                    const size_t q = (size_t)iy * n + ix;
+                    sw[q] = 1.0f; swv[q] = z; any = true;
+                }
+        }
         for (const auto& k : d.res->radar.cells) {
+            if (raster) break;
             if (k.dbz < 10) continue;
             const double sz = k.natural && k.sizeNm > 0 ? k.sizeNm : cell;
             const float half = std::max(1.0f, (float)(sz * 0.5 * px)), r1 = std::max(step * 1.5f, half * 1.45f), r0 = half * 0.7f;
@@ -1336,6 +1363,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     const double ex = (X * cr + Yp * sr) / px, ny = (-X * sr + Yp * cr) / px;
                     const double gx = (cLon * 60.0 * kx + ex), gy = (cLat * 60.0 + ny);
                     const float nz = 0.65f * (vnoise(gx / 1.6, gy / 1.6) - 0.5f) + 0.35f * (vnoise(gx / 0.6 + 17.3, gy / 0.6 - 4.1) - 0.5f);
+                    if (raster) { v[c] = val + nz * 3.0f; continue; }   // the mosaic's own edges: only a fine speckle on top
                     val += nz * 9.0f * cov;
                     // the edge: weak and ragged where the coverage runs out
                     val *= 0.55f + 0.45f * cov;
@@ -1518,12 +1546,13 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     };
     if (interactive) {
         const bool movedOff = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
-        if (movedOff && !recentering()) {   // the map moved off the aircraft: a small dark + marks its centre (the local time's place)
-            const float a = 6.0f;
-            dl->AddLine(ImVec2(c.x - a - 1, c.y), ImVec2(c.x + a + 1, c.y), IM_COL32(130, 136, 146, 110), 3.5f);
-            dl->AddLine(ImVec2(c.x, c.y - a - 1), ImVec2(c.x, c.y + a + 1), IM_COL32(130, 136, 146, 110), 3.5f);
-            dl->AddLine(ImVec2(c.x - a, c.y), ImVec2(c.x + a, c.y), IM_COL32(18, 20, 24, 255), 2.0f);
-            dl->AddLine(ImVec2(c.x, c.y - a), ImVec2(c.x, c.y + a), IM_COL32(18, 20, 24, 255), 2.0f);
+        if (movedOff && !recentering()) {   // the map moved off the aircraft: a small + marks its centre (the local time's place):
+            // see-through inside, outlined in white (with a faint dark edge, so it shows on light radar colours too)
+            const float a = 7.0f, w = 2.0f;   // arm length, half the arm width
+            const ImVec2 pts[12] = {{c.x - w, c.y - a}, {c.x + w, c.y - a}, {c.x + w, c.y - w}, {c.x + a, c.y - w}, {c.x + a, c.y + w}, {c.x + w, c.y + w},
+                                    {c.x + w, c.y + a}, {c.x - w, c.y + a}, {c.x - w, c.y + w}, {c.x - a, c.y + w}, {c.x - a, c.y - w}, {c.x - w, c.y - w}};
+            dl->AddPolyline(pts, 12, IM_COL32(0, 0, 0, 110), ImDrawFlags_Closed, 2.6f);
+            dl->AddPolyline(pts, 12, IM_COL32(255, 255, 255, 235), ImDrawFlags_Closed, 1.1f);
         }
         {   // the time: Zulu, or (clicked: blue) local time at the aircraft, or at the + in the middle while the map is moved off it
             bool est = false;
@@ -2049,9 +2078,11 @@ void radarPanel(const UiData& d, const UiFonts& f, bool big) {
         // every pilot report, nearest first, in the space left under the map (scrolls like the airport list)
         ImGui::Spacing();
         sectionTitle(f, "Pilot reports");
-        if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", d.reports->pireps.size()).c_str()); }
+        size_t shown = 0;   // the ones the list shows (a report that says nothing is not listed)
+        if (d.reports) for (const auto& q : d.reports->pireps) if (pirepConditions(q) != "—") ++shown;
+        if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", shown).c_str()); }
         const float lh = ImGui::GetContentRegionAvail().y - 4;
-        if (!d.reports || d.reports->pireps.empty()) mutedWrapped("No pilot reports in the last 90 minutes.");
+        if (!d.reports || shown == 0) mutedWrapped("No pilot reports in the last 90 minutes.");
         else if (lh > 40) { static std::vector<std::string> open; pirepTable(d, f, "homepireps", ImVec2(0, lh), open); }
     }
 }
@@ -2095,7 +2126,8 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableHeadersRow();
     std::vector<const hz::Pirep*> v;
-    if (d.reports) for (const auto& q : d.reports->pireps) v.push_back(&q);
+    // reports that say nothing (no turbulence, icing, weather, clouds, wind or temperature: an empty line of dashes) are left out
+    if (d.reports) for (const auto& q : d.reports->pireps) if (pirepConditions(q) != "—") v.push_back(&q);
     auto dd = [&](const hz::Pirep* q) { return d.havePos ? distNm(d.lat, d.lon, q->lat, q->lon) : 0.0; };
     int col = kPrDist; bool desc = false;
     if (ImGuiTableSortSpecs* sp = ImGui::TableGetSortSpecs())
@@ -2195,19 +2227,21 @@ bool aloftAt(const UiData& d, std::vector<AloftRow>& rows, float& tropoFt, float
     return true;
 }
 
-void windArrow(float dirDeg, float size) {
+// points where the wind goes (from dirDeg towards dirDeg+180). North Lock: north is up, in blue; Heading Lock: the aircraft's heading
+// is up (like the wind dial), in white
+void windArrow(float dirDeg, float size, float upDeg = 0.0f, bool headingUp = false) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float h = ImGui::GetTextLineHeight();
     const ImVec2 c(p.x + size * 0.5f, p.y + h * 0.5f);
-    // points where the wind goes (from dirDeg towards dirDeg+180)
-    const double a = (dirDeg + 180.0) * kPi / 180.0;
+    const double a = (dirDeg + 180.0 - upDeg) * kPi / 180.0;
+    const ImU32 col = headingUp ? IM_COL32(236, 239, 244, 255) : IM_COL32(127, 182, 255, 255);
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
     const float L = size * 0.45f;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 tip(c.x + dir.x * L, c.y + dir.y * L), tail(c.x - dir.x * L, c.y - dir.y * L);
-    dl->AddLine(tail, tip, IM_COL32(127, 182, 255, 255), 1.8f);
-    dl->AddLine(tip, ImVec2(tip.x - dir.x * 5 + n.x * 4, tip.y - dir.y * 5 + n.y * 4), IM_COL32(127, 182, 255, 255), 1.8f);
-    dl->AddLine(tip, ImVec2(tip.x - dir.x * 5 - n.x * 4, tip.y - dir.y * 5 - n.y * 4), IM_COL32(127, 182, 255, 255), 1.8f);
+    dl->AddLine(tail, tip, col, 1.8f);
+    dl->AddLine(tip, ImVec2(tip.x - dir.x * 5 + n.x * 4, tip.y - dir.y * 5 + n.y * 4), col, 1.8f);
+    dl->AddLine(tip, ImVec2(tip.x - dir.x * 5 - n.x * 4, tip.y - dir.y * 5 - n.y * 4), col, 1.8f);
     ImGui::Dummy(ImVec2(size, h));
 }
 
@@ -2263,7 +2297,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
         }
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0); ImGui::PushFont(f.bold); ImGui::Text(r.ft >= 18000 ? "FL%03.0f" : "%.0f ft", r.ft >= 18000 ? r.ft / 100.0f : r.ft); ImGui::PopFont();
-        ImGui::TableSetColumnIndex(1); windArrow(r.dir, 16);
+        ImGui::TableSetColumnIndex(1); windArrow(r.dir, 16, viewRot(), dialHeadingUp() && d.havePos);   // turns with the dial's North / Heading Lock
         {
             const int dT = (int)std::lround(r.dir) % 360 == 0 ? 360 : (int)std::lround(r.dir) % 360, dM = toMagnetic(r.dir, magVar(d, d.lat, d.lon));
             ImGui::TableSetColumnIndex(2);
@@ -2508,7 +2542,8 @@ ImFont*& tabFontBig() { static ImFont* f = nullptr; return f; }   // the semibol
 const ImVec2 kTabPad(17, 4);   // the same text, a shorter tab
 float tabWidth(const char* label) {
     ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
-    return tf->CalcTextSizeA(tf->FontSize, FLT_MAX, 0.0f, label).x + 2 * kTabPad.x;
+    const float fs = tf->FontSize * ImGui::GetIO().FontGlobalScale;   // the atlas is made at the screen's pixel scale
+    return tf->CalcTextSizeA(fs, FLT_MAX, 0.0f, label).x + 2 * kTabPad.x;
 }
 bool bigTab(const char* label, bool* open, ImGuiTabItemFlags flags) {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, kTabPad);
@@ -2722,7 +2757,17 @@ void tabRadar(const UiData& d, const UiFonts& f) {
                 for (size_t i = 0; i < cs.size() && i < 60; ++i) {
                     const RadarCell& k = *cs[i];
                     ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::PushStyleColor(ImGuiCol_Text, v4(dbzColor(k.dbz, 255))); ImGui::Text("%.0f", k.dbz); ImGui::PopStyleColor();
+                    ImGui::TableSetColumnIndex(0);
+                    // a click on a row: the map glides there (its + over the cell)
+                    ImGui::PushID((int)i);
+                    if (ImGui::Selectable("##cell", false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap) && d.havePos) {
+                        panGoal() = ImVec2((float)((k.lon - d.lon) * 60.0 * std::cos(d.lat * kPi / 180.0)), (float)((k.lat - d.lat) * 60.0));
+                        panGliding() = true; recentering() = false;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    ImGui::PopID();
+                    ImGui::SameLine(0, 0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, v4(dbzColor(k.dbz, 255))); ImGui::Text("%.0f", k.dbz); ImGui::PopStyleColor();
                     ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f mm/h", k.rateMmH);
                     ImGui::TableSetColumnIndex(2); if (k.topM > 0) ImGui::Text("FL%03.0f%s", k.topM / 0.3048 / 100.0, k.topKnown ? "" : " est"); else muted("—");
                     ImGui::TableSetColumnIndex(3);
@@ -2738,13 +2783,35 @@ void tabRadar(const UiData& d, const UiFonts& f) {
     panelEnd();
 }
 
+// A North Lock / Heading Lock bubble at the right end of the current line (the same switch as a click on the wind dial)
+float lockButtonWidth() { return ImGui::CalcTextSize("Heading Lock").x + 2 * ImGui::GetStyle().FramePadding.x + 8; }
+void lockButton(const char* id) {
+    const float w = lockButtonWidth();
+    ImGui::SameLine();
+    const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - w;
+    ImGui::SetCursorPosX(x);
+    const bool on = dialHeadingUp();
+    ImGui::PushID(id);
+    ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(40, 62, 98, 255) : IM_COL32(36, 39, 46, 255)));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v4(on ? IM_COL32(52, 78, 120, 255) : IM_COL32(48, 52, 62, 255)));
+    ImGui::PushStyleColor(ImGuiCol_Text, v4(on ? cAccent : cSoft));
+    ImGui::PushStyleColor(ImGuiCol_Border, v4(on ? cAccent : cBorder));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+    if (ImGui::SmallButton(on ? "Heading Lock" : "North Lock")) dialHeadingUp() = !dialHeadingUp();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(4);
+    ImGui::PopID();
+}
+
 void tabAloft(const UiData& d, const UiFonts& f) {
     const float H = ImGui::GetContentRegionAvail().y;
     if (panelBegin("aloftfull", ImVec2(0, H))) {
         sectionTitle(f, "Winds & temperatures aloft at the aircraft");
         const Station* st = nearestStation(d);
         if (st) { ImGui::SameLine(); muted(fmt("GFS, blended for %s", st->icao.c_str()).c_str()); }
-        { UnitScope us(g_unitsAloft); windRefSwitch("wrAloftTab"); }
+        { UnitScope us(g_unitsAloft); windRefSwitch("wrAloftTab", lockButtonWidth() + 10); }
+        lockButton("lkAloftTab");   // North / Heading Lock, the same as the wind dial's (the arrows turn with it)
         // as many levels as fit without scrolling (the densest set of these that fits the window's height)
         const float rowH = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
         const int rows = std::max(6, (int)((ImGui::GetContentRegionAvail().y - 4) / rowH) - 2);   // header and tropopause rows
@@ -2909,7 +2976,7 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
 
 bool isRadarService(const ServiceStatus& s) { return s.use.find("radar") != std::string::npos || s.name.find("MRMS") != std::string::npos || s.name.find("OPERA") != std::string::npos; }
 
-void serviceTable(const UiData& d, const char* id, const std::vector<ServiceStatus>& list) {
+void serviceTable(const UiData& d, const char* id, const std::vector<ServiceStatus>& list, bool radar = false) {
     if (!ImGui::BeginTable(id, 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) return;
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 16);
     ImGui::TableSetupColumn("Service", ImGuiTableColumnFlags_WidthFixed, textColW("NOAA Aviation Weather Center"));
@@ -2927,6 +2994,14 @@ void serviceTable(const UiData& d, const char* id, const std::vector<ServiceStat
         std::string t = std::string(svcLabel(s.state)) + (s.detail.empty() ? "" : ": " + s.detail);
         if ((s.state == SvcState::Down || s.state == SvcState::Degraded) && s.lastOk > 0)
             t += fmt(" (last good %s, %ld min ago)", hhmm(s.lastOk).c_str(), (long)((d.now - s.lastOk) / 60));
+        if (radar) {   // the radar sources say it short: where they do not reach, or when they last came in
+            const std::string last = s.lastOk > 0 ? hhmm(s.lastOk) : std::string();   // (hhmm ends in Z)
+            if (s.state == SvcState::NotHere) t = "Outside of Service Area";
+            else if (s.state == SvcState::Ok) t = "OK: Last Update " + (last.empty() ? hhmm(d.now) : last);
+            else if (s.state == SvcState::Waiting) t = "Waiting for the first update";
+            else if (s.state == SvcState::Off) t = "Off";
+            else t = std::string(svcLabel(s.state)) + (last.empty() ? "" : ": Last Update " + last);
+        }
         if (s.state == SvcState::NotHere) mutedWrapped(t); else ImGui::TextWrapped("%s", t.c_str());
     }
     ImGui::EndTable();
@@ -2959,7 +3034,7 @@ void tabServices(const UiData& d, const UiFonts& f) {
         };
         pick("MRMS", "NOAA MRMS", "radar storms (US)", "US");
         pick("OPERA", "EUMETNET OPERA", "radar storms (Europe)", "Europe");
-        serviceTable(d, "svcr", radar);
+        serviceTable(d, "svcr", radar, true);
     }
     panelEnd();
 }
@@ -3034,6 +3109,31 @@ bool uiLogoRgba(std::vector<unsigned char>& rgba, int& w, int& h) {
     return true;
 }
 
+std::vector<UiImage> uiLogoMips(const std::vector<unsigned char>& rgba, int w, int h) {
+    std::vector<UiImage> out;
+    UiImage cur; cur.w = w; cur.h = h; cur.rgba = rgba;
+    while (cur.h > 8 && cur.w > 8) {
+        UiImage nx; nx.w = std::max(1, cur.w / 2); nx.h = std::max(1, cur.h / 2);
+        nx.rgba.assign((size_t)nx.w * nx.h * 4, 0);
+        for (int y = 0; y < nx.h; ++y)
+            for (int x = 0; x < nx.w; ++x) {
+                double a = 0, r = 0, g = 0, b = 0; int n = 0;
+                for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+                    const int sx = std::min(cur.w - 1, 2 * x + dx), sy = std::min(cur.h - 1, 2 * y + dy);
+                    const unsigned char* q = &cur.rgba[((size_t)sy * cur.w + sx) * 4];
+                    const double al = q[3] / 255.0;
+                    r += q[0] * al; g += q[1] * al; b += q[2] * al; a += al; ++n;
+                }
+                unsigned char* o = &nx.rgba[((size_t)y * nx.w + x) * 4];
+                if (a > 0) { o[0] = (unsigned char)std::lround(r / a); o[1] = (unsigned char)std::lround(g / a); o[2] = (unsigned char)std::lround(b / a); }
+                o[3] = (unsigned char)std::lround(255.0 * a / n);
+            }
+        out.push_back(nx);
+        cur = std::move(nx);
+    }
+    return out;
+}
+
 UiFonts uiLoadFonts(float pixelScale) {
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
@@ -3099,7 +3199,12 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
         const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
         if (f.logo) {   // the WXPLANE logo (assets/wxplane_logo.png), about the height of a button row
             const float h = ImGui::GetFrameHeight() + 2;
-            ImGui::Image((ImTextureID)(intptr_t)f.logo, ImVec2(h * f.logoAspect, h));
+            // on whole pixels, so its edges are not smeared over two
+            const float ps = std::max(1.0f, ImGui::GetIO().DisplayFramebufferScale.x);
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            cp.x = std::round(cp.x * ps) / ps; cp.y = std::round(cp.y * ps) / ps;
+            ImGui::SetCursorScreenPos(cp);
+            ImGui::Image((ImTextureID)(intptr_t)f.logo, ImVec2(std::round(h * f.logoAspect * ps) / ps, std::round(h * ps) / ps));
         } else {
             ImGui::PushFont(f.title);
             ImGui::TextUnformatted("WXPlane");
@@ -3174,18 +3279,22 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             const float dt = std::min(ImGui::GetIO().DeltaTime, 1.0f / 20.0f);   // a slow frame does not make it jump
             vis = want ? std::min(1.0f, vis + dt / 0.45f) : std::max(0.0f, vis - dt / 0.45f);   // 0.45 s each way
             if (vis > 0.0f) {
-                // the tab narrows as it fades (and widens as it comes back), so the tabs after it slide over instead of jumping;
-                // eased at both ends (smootherstep), and its label fades out before the tab gets too narrow for it (no "..." on the way)
+                // the tab narrows (and widens as it comes back) at exactly the pace the tabs after it slide over: it is not faded
+                // separately, its label is simply cut off by its edge as it closes (drawn here, clipped to the tab, so ImGui's "..."
+                // never shows); eased at both ends (smootherstep)
                 const float full = tabWidth("Turbulence");
                 const float e = vis * vis * vis * (vis * (vis * 6 - 15) + 10);
-                const float textA = std::max(0.0f, std::min(1.0f, (e - 0.45f) / 0.5f));
-                if (vis < 1.0f) ImGui::SetNextItemWidth(std::max(1.0f, full * e));
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * std::min(1.0f, e * 1.4f));
-                ImVec4 tc = ImGui::GetStyleColorVec4(ImGuiCol_Text); tc.w *= textA;
-                ImGui::PushStyleColor(ImGuiCol_Text, tc);
-                const bool open = bigTab("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
-                ImGui::PopStyleColor();
-                ImGui::PopStyleVar();
+                ImGui::SetNextItemWidth(std::max(1.0f, full * e));   // always: its label is drawn here, so ImGui would size it empty
+                const bool open = bigTab("###turbtab", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
+                {
+                    const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                    ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
+                    ImDrawList* tdl = ImGui::GetWindowDrawList();
+                    tdl->PushClipRect(r0, ImVec2(r1.x - 1, r1.y), true);
+                    const float fs = tf->FontSize * ImGui::GetIO().FontGlobalScale;
+                    tdl->AddText(tf, fs, ImVec2(r0.x + kTabPad.x, r0.y + (r1.y - r0.y - fs) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), "Turbulence");
+                    tdl->PopClipRect();
+                }
                 if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
             }
         }

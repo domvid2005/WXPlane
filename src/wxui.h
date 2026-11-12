@@ -116,6 +116,11 @@ std::string flightCategory(const Report& r);
 
 // The logo's pixels (RGBA, from the embedded assets/wxplane_logo.png), for the backend to upload as a texture.
 bool uiLogoRgba(std::vector<unsigned char>& rgba, int& w, int& h);
+// ...and its smaller copies (each half the size of the one before, down to 8 px high; the colour averaged by alpha, so the edges get no
+// dark fringe), for the backend to upload as mipmap levels 1, 2, ...: the logo is drawn far smaller than its 570 x 112 pixels, and
+// without them the GPU skipped pixels and the edges looked jagged ("logo slightly pixelated", 2026-11-12).
+struct UiImage { int w = 0, h = 0; std::vector<unsigned char> rgba; };
+std::vector<UiImage> uiLogoMips(const std::vector<unsigned char>& rgba, int w, int h);
 // Applies the WXPlane look to the current ImGui context.
 void uiStyle();
 // Loads the embedded fonts into the current context's atlas at `pixelScale` (pixels per window unit). Call before building the atlas.

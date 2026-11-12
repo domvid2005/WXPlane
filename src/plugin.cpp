@@ -400,6 +400,34 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             isReal[i] = outReal[i];
         }
     }
+    // 2c) No spires (2026-11-12, an upward cone over KJFK): X-Plane blends a layer's top between records, so one record whose top stands
+    // far above its neighbours' (an airport's CB with an estimated 10 km top in 6 km storm records around it) grew a smooth cone up out
+    // of the deck. A top now rises at most 650 m per nm above the tops of the records around it (1,200 m for cumulonimbus), the same
+    // idea as the downward-cone fix (the slots under a deck keep its height).
+    {
+        const double cosL = std::cos(todo[0].rec.lat * 3.14159265358979 / 180.0);
+        for (int k = 0; k < K; ++k) {
+            for (int pass = 0; pass < 3; ++pass) {
+                bool changed = false;
+                for (size_t i = 0; i < n; ++i) {
+                    if (!isReal[i][k]) continue;
+                    XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
+                    const double G = c.cloud_type >= 2.5f ? 1200.0 : 650.0;
+                    double cap = c.alt_top;
+                    for (size_t j = 0; j < n; ++j) {
+                        if (j == i || !isReal[j][k]) continue;
+                        const double dy = (todo[j].rec.lat - todo[i].rec.lat) * 60.0, dx = (todo[j].rec.lon - todo[i].rec.lon) * 60.0 * cosL;
+                        const double d2 = dx * dx + dy * dy;
+                        if (d2 > 400.0) continue;   // 20 nm
+                        cap = std::min(cap, (double)todo[j].rec.info.cloud_layers[k].alt_top + G * std::sqrt(d2));
+                    }
+                    const float nt = std::max((float)cap, c.alt_base + 300.0f);
+                    if (nt < c.alt_top - 1.0f) { c.alt_top = nt; changed = true; }
+                }
+                if (!changed) break;
+            }
+        }
+    }
     if (ph <= 0.0f) {
         for (size_t i = 0; i < n; ++i) for (int k = 0; k < K; ++k) { auto& c = todo[i].rec.info.cloud_layers[k]; if (c.coverage <= 0) { c.cloud_type = 0; c.alt_base = 0; c.alt_top = 0; } }
         return;

@@ -1,5 +1,6 @@
 // Turns radar reflectivity (and echo tops) into storm cells that are applied through X-Plane's weather API.
 #pragma once
+#include <cmath>
 #include <ctime>
 #include <set>
 #include <string>
@@ -93,6 +94,20 @@ struct RadarResult {
     std::vector<RadarCell> dryCells;
     double rootNm = 24, cosRef = 1;
     std::set<std::pair<long, long>> roots;
+    // the radar picture itself for the map (natural picture only): the lightly smoothed mosaic on its 1 nm raster, dBZ x 3 in a byte,
+    // at X = lon * 60 * cosRef, Y = lat * 60 (nm); the map draws this instead of the records' squares, so it shows the real shapes
+    std::vector<unsigned char> view;
+    double viewX0 = 0, viewY0 = 0, viewG = 1;
+    int viewW = 0, viewH = 0;
+    float viewAt(double lat, double lon) const {   // dBZ, bilinear; 0 outside
+        if (view.empty()) return 0;
+        const double u = (lon * 60.0 * cosRef - viewX0) / viewG - 0.5, v = (lat * 60.0 - viewY0) / viewG - 0.5;
+        const int i = (int)std::floor(u), j = (int)std::floor(v);
+        if (i < 0 || j < 0 || i + 1 >= viewW || j + 1 >= viewH) return 0;
+        const double fu = u - i, fv = v - j;
+        auto A = [&](int a, int b) { return view[(size_t)b * viewW + a] / 3.0; };
+        return (float)((A(i, j) * (1 - fu) + A(i + 1, j) * fu) * (1 - fv) + (A(i, j + 1) * (1 - fu) + A(i + 1, j + 1) * fu) * fv);
+    }
 };
 
 // Is this spot inside the area the natural picture covers (rain and dry records)? Always false without it.

@@ -631,10 +631,12 @@ The updater reads WXPlane's depot from the `release` branch:
 `src/version.h`).
 
 1. Bump `WX_VERSION` in `src/version.h` on main (every release needs a new version) and push; wait for the GitHub build to pass.
-2. `tools/skunkcrafts_release.sh 5.1` - a dry run: downloads that commit's built bundle, makes the depot
-   (`tools/skunkcrafts_depot.py`: the files, `skunkcrafts_updater_whitelist.txt` with each file's CRC32, the sizes list, the
-   blacklist from `tools/skunkcrafts_blacklist.txt`) and checks it.
-3. `tools/skunkcrafts_release.sh 5.1 --publish` - commits it to `release` and pushes. Users see the update in the updater app.
+2. `gh workflow run skunkcrafts-release.yml -f version=5.1` - a dry run of the **SkunkCrafts release** workflow (started by hand
+   only): it takes that commit's built bundle, makes the depot (`tools/skunkcrafts_depot.py`: the files,
+   `skunkcrafts_updater_whitelist.txt` with each file's CRC32, the sizes list, the blacklist from `tools/skunkcrafts_blacklist.txt`)
+   and keeps it as an artifact to look at.
+3. `gh workflow run skunkcrafts-release.yml -f version=5.1 -f publish=true` - commits it to `release` and pushes. Users see the
+   update in the updater app. (`tools/skunkcrafts_release.sh` does the same from a checkout that can download build artifacts.)
 
 The release branch only gets new commits; main is untouched. To take a bad release back: revert the change on main, bump the
 version, and release that.

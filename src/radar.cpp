@@ -760,6 +760,10 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
         }
         T.swap(t2);
     }
+    // the picture for the map (the smoothed mosaic, not the records)
+    res.viewX0 = X0; res.viewY0 = Y0; res.viewG = g; res.viewW = W; res.viewH = H;
+    res.view.resize((size_t)W * H);
+    for (size_t q = 0; q < res.view.size(); ++q) res.view[q] = (unsigned char)std::max(0.0f, std::min(255.0f, std::round(Z[q] * 3.0f)));
     auto bil = [&](const std::vector<float>& A, double X, double Y) {
         const double u = (X - X0) / g - 0.5, v = (Y - Y0) / g - 0.5;
         const int i = (int)std::floor(u), j = (int)std::floor(v);
@@ -839,7 +843,7 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
     auto prio = [&](const Leaf& L) {
         if (!L.mixed || L.s / 2 < fine - 1e-6) return -1.0;
         const double d = distNm(acLat, acLon, toLat(L.Y), toLon(L.X));
-        return L.s / (1.0 + std::pow(d / 30.0, 1.5));
+        return L.s / (1.0 + std::pow(d / 40.0, 1.5));   // (40 nm: the rim further out is split finer too, so it shows no big squares)
     };
     std::vector<Leaf> leaves;
     for (const auto& r : used) leaves.push_back(measure(r.first * root, r.second * root, root));
@@ -902,6 +906,15 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
             if (cls(Zn(L.X + rr * std::cos(a), L.Y + rr * std::sin(a))) == 0) ++dry;
         }
         c.edge = clampf(dry / 5.0f, 0.0f, 1.0f);
+        // no square outlines (2026-11-12, "storm fronts too square"): each record stands for a square, and squares of the same intensity
+        // side by side drew walls and flat plateaus along the record grid. Along the rim the coverage now breaks up with smooth noise
+        // fixed to the ground (the outer squares thin out unevenly, into separate towers, instead of ending in a straight wall), and
+        // every square's top varies a little with the same kind of noise (the slope limit below keeps neighbours together)
+        if (c.edge > 0.01f) {
+            const double nz = fbm(L.X, L.Y, 9.0, 41);
+            c.coverScale = clampf((float)(1.0 - c.edge * (0.22 + 0.18 * nz)), 0.45f, 1.0f);
+        }
+        c.topM = std::max(3000.0f, c.topM + (float)(std::round(fbm(L.X, L.Y, 7.0, 43) * 450.0 / step) * step));
         res.cells.push_back(c);
     }
     res.roots = used;

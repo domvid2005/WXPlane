@@ -187,6 +187,23 @@ int main(int argc, char** argv) {
         res.radar.cells.push_back(c);
     }
     res.radar.echoBlocks = (int)res.radar.cells.size();
+    {   // the radar picture for the map (like the natural picture's 1 nm mosaic): the cells' echoes, soft-edged and blended
+        RadarResult& R = res.radar;
+        R.natural = true; R.cosRef = std::cos(42.0 * 3.14159265358979 / 180.0);
+        const double X0 = -73.6 * 60 * R.cosRef, Y0 = 40.6 * 60, g = 1.0;
+        R.viewX0 = X0; R.viewY0 = Y0; R.viewG = g; R.viewW = 200; R.viewH = 200;
+        R.view.assign(200 * 200, 0);
+        for (int j = 0; j < 200; ++j) for (int i = 0; i < 200; ++i) {
+            const double X = X0 + (i + 0.5) * g, Y = Y0 + (j + 0.5) * g;
+            double best = 0;
+            for (const auto& c : R.cells) {
+                const double dx = X - c.lon * 60 * R.cosRef, dy = Y - c.lat * 60, sg = 3.2;
+                const double w = std::exp(-(dx * dx + dy * dy) / (2 * sg * sg));
+                best = std::max(best, c.dbz * (0.55 + 0.45 * w) * (w > 0.12 ? 1.0 : w / 0.12));
+            }
+            R.view[(size_t)j * 200 + i] = (unsigned char)std::min(255.0, std::round(best * 3));
+        }
+    }
     res.services = {
         {"NOAA Aviation Weather Center", "METARs", SvcState::Ok, "40 report(s)", now - 70},
         {"D-ATIS (clowd.io)", "ATIS", SvcState::Ok, "1 airport(s)", now - 70},
