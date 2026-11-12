@@ -204,9 +204,9 @@ TURBULENCE
   * Windshear near you.
   * Another turbulence add-on running (ActiveSky XP, xProTurb,
     XPRealistic ...): WXPlane leaves X-Plane's turbulence to it. A red
-    TURBULENCE CONFLICT caution covers this tab, its controls are locked,
-    and the turbulence switch in Settings is greyed out until that add-on
-    is disabled.
+    TURBULENCE CONFLICT caution covers this tab and its controls are
+    locked until that add-on is disabled. The switch in Settings still
+    works (to turn WXPlane's turbulence and windshear off altogether).
 
 SERVICES
   Every data source WXPlane uses, with its state:

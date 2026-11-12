@@ -2861,23 +2861,18 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         {   // one switch for both: turbulence at every altitude, and windshear near storms
             const bool on = d.cfg->realisticTurbulence || d.cfg->windshear;
             bool flip = false;
-            const bool conflict = !d.turbConflict.empty();   // another add-on does the turbulence: the switch is locked (greyed)
-            if (conflict && !off) {
-                ImGui::BeginDisabled();
-                ImGui::PushStyleColor(ImGuiCol_CheckMark, v4(IM_COL32(88, 92, 100, 255)));
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, v4(IM_COL32(32, 34, 38, 255)));
-            }
+            // another add-on does the turbulence: the switch stays as it is (blue, and can still be switched off), with a red note
+            const bool conflict = !d.turbConflict.empty();
             settingRow("Realistic turbulence & windshear", on, "Turbulence at every altitude from NOAA GTGN (US) / ECMWF (elsewhere) and pilot reports, and gust fronts and microbursts near convective storms. Off: X-Plane's own turbulence, no windshear, and no Turbulence tab. Max turbulence is on the Turbulence tab.", flip);
-            if (conflict && !off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
             if (conflict) {
                 ImGui::Indent(30);
                 ImGui::PushStyleColor(ImGuiCol_Text, v4(cDown));
-                ImGui::TextWrapped("Locked: %s is running and controls the turbulence, so WXPlane leaves it alone.", d.turbConflict.c_str());
+                ImGui::TextWrapped("%s is running and controls the turbulence, so WXPlane leaves it alone while it runs (windshear still works).", d.turbConflict.c_str());
                 ImGui::PopStyleColor();
                 ImGui::Unindent(30);
                 ImGui::Spacing();
             }
-            if (flip && !conflict) act.setTurbWs = on ? 0 : 1;
+            if (flip) act.setTurbWs = on ? 0 : 1;
         }
         if (off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
         ImGui::Separator(); ImGui::Spacing();
