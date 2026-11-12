@@ -65,7 +65,7 @@ Settings are saved to `Output/preferences/WXPlane.cfg`.
 
 ## Install
 
-Copy the `WXPlane` folder (containing `lin_x64`, `mac_x64`, `win_x64`) into `X-Plane 12/Resources/plugins/`, then restart X-Plane. If you have the old `WeatherFix` folder, delete it.
+Copy the `WXPlane` folder (containing `lin_x64`, `mac_x64`, `win_x64`) into `X-Plane 12/Resources/plugins/`, then restart X-Plane. The user manual, `WXPlane_Manual.txt`, is next to the plugin. If you have the old `WeatherFix` folder, delete it.
 
 **Turn off X-Plane's own real-world weather** (X-Plane's weather settings). Left on, X-Plane keeps downloading and re-reading its own
 weather files every minute and blends them with WXPlane's. WXPlane checks `sim/weather/region/weather_source` (1 = real weather) and
@@ -113,45 +113,33 @@ X-Plane blends cloud layers between neighbouring reports slot by slot. When any 
 
 ## The weather window (4.0)
 
-Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, with six tabs:
+**Plugins → WXPlane** (or the `wxplane/weather_window` command bound to a key) opens a window drawn with Dear ImGui. Tabs:
+Overview, Map, Airports, Winds & Temps, Turbulence, Services, Settings. The user manual that ships with the plugin
+(`docs/WXPlane_Manual.txt`, copied next to the .xpl) describes every one of them for users.
 
-* **Overview** (the data services are on the Services tab) - the nearest airport (raw report, wind dial, decoded wind, visibility, weather, pressure, temperature, ceiling and
-  flight category; click the wind dial to turn it from north up to the aircraft's heading up, which shows the headwind or tailwind (H/T) and crosswind (X, from the left or right) in the middle), the nearby airports, a 50/100/150 nm radar picture (storm cells by reflectivity, airports coloured by flight
-  category, the aircraft in the middle), winds and temperatures aloft with the tropopause, turbulence and windshear at the aircraft
-  with the Max turbulence slider, and the data services.
-* **Airports** - a search box for any airport in the world (its METAR and, where D-ATIS has one, its ATIS; shown only, X-Plane's
-  weather is not changed), then every station in use. Click a column header to sort by it (again for the other way, a third time
-  back to unsorted: nearest first); equal values are sorted nearest first. The arrow only shows while a column is sorted. The Overview's nearby list sorts the same way. Every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
-  its report, its ATIS and exactly what WXPlane sent to X-Plane for it.
-* **Map** (was Radar) - the map larger: drag it to move it, "Center on aircraft" brings it back; the zoom eases between steps; the
-  **Radar** button turns the echoes on and off. The radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
-  The map's layers (buttons above it): **Airports** (by flight category; click one for its METAR and ATIS), **AIRMET**
-  (G-AIRMETs, US: IFR purple, mountain obscuration pink, turbulence yellow, icing light blue, surface wind green, LLWS rose) and
-  **SIGMET** (SIGMETs worldwide and convective SIGMETs: convective red, turbulence orange, icing blue, volcanic ash brown, cyclone
-  magenta; click an area for its hazard, levels, validity, movement and text; airports and reports stay clickable inside them),
-  **Map** (coastlines, borders, state/province lines and lakes from Natural Earth,
-  public domain, embedded - no map downloads), **Turb** (the turbulence at the aircraft's altitude on a 12 nm grid, 300 x 300 nm,
-  from the realistic-turbulence data) and **PIREPs** (pilot reports as triangles: urgent UUA red, routine UA orange, labelled with
-  their level). On the Radar tab, click a report for a small window with its time, level, aircraft, turbulence, distance and text.
-  The mouse wheel over the map zooms through 1, 2, 5, 10, 20, 40, 80 and 160 nm (or the - / + buttons). Click the wind dial (or, on
-  the Radar tab, the North Lock / Heading Lock button) to turn the dial and the map between **North Lock** and **Airplane Heading Lock** (an eased turn; the aircraft symbol uses its heading,
-  not its ground track, so it no longer swings around on the ground).
-* **Winds & Temps** - the profile at the aircraft every 1,000-2,000 ft up to FL600, with ISA deviation and the tropopause.
-* **Turbulence** - EDR by altitude at the aircraft, every nearby pilot report (click one to open its details below it: time,
-  turbulence layer, icing, clouds, weather, temperature, wind, text; click again to close), windshear.
-* **Settings** - every on/off setting and the Max turbulence slider (the 3.0 menu). With the weather off, the other settings are
-  greyed out and cannot be changed.
+* **Overview** - the nearest airport decoded, the wind dial (click: North Lock / Airplane Heading Lock, with H/T and crosswind
+  components in the middle), nearby airports, a map with the Map tab's layers, winds and temperatures aloft, turbulence and windshear
+  (risk coloured white to red). It never scrolls.
+* **Map** - eased zoom 1-160 nm (mouse wheel, - / +), drag to pan, "Center on aircraft", North Lock / Heading Lock button. Layers:
+  Radar, Map (Natural Earth, embedded), Airports (click for METAR/ATIS), Turb (12 nm grid at your altitude), PIREPs (UUA red, UA
+  orange, click for details), AIRMET (G-AIRMETs) and SIGMET (SIGMETs, international and convective), coloured by hazard and clickable;
+  info windows stay inside the map. Titled "Map · US" (MRMS) or "Map · Europe" (OPERA). The strongest cells are listed beside it.
+* **Airports** - worldwide METAR/ATIS search (display only), then every station in use. Column headers sort (one way, the other,
+  off); ties nearest first. Select a station for its report, ATIS and what was sent to X-Plane.
+* **Winds & Temps** - the profile up to FL600 with ISA deviation and the tropopause.
+* **Turbulence** - EDR by altitude, every nearby pilot report (click to expand), windshear.
+* **Services** - every data service with its state.
+* **Settings** - every on/off setting and the Max turbulence slider (greyed out while the weather is off), keyboard binding, data
+  and credits.
 
 When X-Plane's own real weather is on, a red warning covers the window and nothing in it can be clicked until it is turned off.
-* **Services** - every data service with its state.
-
-Refresh and Pop out are at the top right. The window follows X-Plane's UI scale (its text is rebuilt at the screen's pixel density),
-and the fonts (IBM Plex Sans, JetBrains Mono) are embedded. `tests/ui_shot.cpp` draws every tab off-line (ctest "weather_window").
-Version 3.0 (commit b71f294) was the last version with the text window.
+Refresh and Pop out are at the top right. The window follows X-Plane's UI scale, works in VR and pops out to its own OS window;
+the fonts (IBM Plex Sans, JetBrains Mono) are embedded. `tests/ui_shot.cpp` draws every tab off-line (ctest "weather_window").
+Version 3.0 (commit b71f294) was the last version with the text window. The forum post text is in `docs/forum-description.md`.
 
 ## Data services
 
-The bottom of the weather window's Overview (and its Services tab) lists every service WXPlane downloads from, with its state: **OK** (green),
+The weather window's Services tab lists every service WXPlane downloads from, with its state: **OK** (green),
 **DEGRADED** (amber: the last download failed and an earlier one is in use), **DOWN** (red), or "not used here" / "off" / "waiting"
 (grey), with what it last delivered and, when it is failing, when it last worked. Radar and turbulence services that belong to
 another region (MRMS and GTGN outside the US, OPERA outside Europe) are left out. The radar section above it is titled by region:
