@@ -175,7 +175,6 @@ void windRefSwitch(const char* id) {
         if (m) ImGui::SameLine();
         if (ImGui::SmallButton(m ? "°M" : "°T")) windMagnetic() = m == 1;
         ImGui::PopStyleColor();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip(m ? "Airport winds in degrees magnetic (runways, ATIS, performance calculations)" : "Airport winds in degrees true (as the METAR reports them)");
     }
     ImGui::PopStyleVar();
     ImGui::PopID();
@@ -361,6 +360,7 @@ void updateViewRot(const UiData& d) {
 }
 
 void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
+    ImGui::BeginGroup();   // the dial and the small mode box under it
     const ImVec2 p = ImGui::GetCursorScreenPos();
     // the whole dial is a button: north up <-> aircraft heading up
     ImGui::InvisibleButton("winddial", ImVec2(size, size));
@@ -420,7 +420,20 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
         centred(f.title, ImGui::GetFontSize() * 20.0f / 14.5f, kt, c.y - fs * 0.15f, IM_COL32(255, 255, 255, 255));
         centred(f.body, fs * 0.75f, "kt", c.y + fs * 0.75f, cMuted);
     }
-    if (hovered) ImGui::SetTooltip(dialHeadingUp() ? "Airplane Heading Lock" : "North Lock");
+    {   // which way the dial (and the map) is turned: a small box under the dial, its text changing with a click on the dial
+        const char* mode = dialHeadingUp() ? "Heading Lock" : "North Lock";
+        const float sfs = fs * 0.8f;
+        const ImVec2 ts = f.body->CalcTextSizeA(sfs, FLT_MAX, 0.0f, mode);
+        const ImVec2 q = ImGui::GetCursorScreenPos();
+        const float bw = ts.x + 14, bh = ts.y + 6, x0 = p.x + (size - bw) * 0.5f;
+        ImDrawList* dl2 = ImGui::GetWindowDrawList();
+        dl2->AddRectFilled(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), cInset, 4.0f);
+        dl2->AddRect(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), dialHeadingUp() ? cAccentDim : IM_COL32(58, 62, 70, 255), 4.0f);
+        dl2->AddText(f.body, sfs, ImVec2(x0 + 7, q.y + 3), dialHeadingUp() ? IM_COL32(150, 195, 255, 255) : cSoft, mode);
+        ImGui::InvisibleButton("dialmode", ImVec2(size, bh));
+        if (ImGui::IsItemClicked()) dialHeadingUp() = !dialHeadingUp();
+    }
+    ImGui::EndGroup();
 }
 
 void field(const UiFonts& f, const char* label, const std::string& value) {
@@ -476,7 +489,6 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
         if (r.hasWind && r.windKt >= 1 && !r.windVariable) {   // the other reference in the small box
             ImGui::SameLine(0, 8);
             magBox(fmt(mag ? "%03d°T" : "%03d°M", windDirIn(r, var, !mag)).c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(mag ? "The same wind referenced to true north (as the METAR reports it)" : "The same wind referenced to magnetic north (runways and ATIS use magnetic)");
         }
         ImGui::PushFont(f.bold);
         ImGui::TextUnformatted(windTextRef(r, var, mag).c_str());
@@ -571,8 +583,8 @@ ImU32 edrColor(double edr, int alpha) {
 
 // The radar picture: map, turbulence, storm cells, pilot reports, airports by flight category, the aircraft in the middle.
 // North up, or turned with the aircraft's heading together with the wind dial (viewRot).
-const double kRanges[] = {1, 2, 5, 10, 20, 40, 80, 160};   // nm, the mouse wheel steps through these
-const int kRangeCount = 8;
+const double kRanges[] = {1, 2, 5, 10, 20, 40, 80, 160, 320};   // nm, the mouse wheel steps through these
+const int kRangeCount = 9;
 int& radarRange() { static int r = 6; return r; }   // index into kRanges (80 nm)
 double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k))]; }
 
@@ -690,10 +702,21 @@ std::string altLabel(float ft) { return ft >= 18000 ? fmt("FL%03.0f", std::round
 
 // A slider whose knob glides (instead of jumping) to where it is clicked or dragged: `target` is what the user chose, `shown` what is
 // drawn and used, eased towards it every frame. Returns true while the user holds it; `released` is set when they let go.
+// The altitude slider's pull: whole thousands of feet catch the knob within 300 ft, every 5,000 ft within 700 ft, and every 10,000 ft
+// within 1,200 ft, so the round levels are easy to land on
+float altSnap(float v) {
+    const struct { float step, radius; } tiers[] = {{10000, 1200}, {5000, 700}, {1000, 300}};
+    for (const auto& t : tiers) {
+        const float r = std::round(v / t.step) * t.step;
+        if (std::fabs(v - r) <= t.radius) return r;
+    }
+    return v;
+}
+
 // snapStep / snapRadius: values within snapRadius of a multiple of snapStep are pulled onto it (the knob "clicks" into whole thousands
-// of feet, or tenths), and the mouse wheel steps from one multiple to the next.
+// of feet, or tenths), and the mouse wheel steps from one multiple to the next. snapFn, when given, decides the pull instead.
 bool smoothSlider(const char* id, float& shown, float& target, float vmin, float vmax, ImVec2 size, bool vertical, const std::string& label, bool& released,
-                  bool disabled = false, float snapStep = 0.0f, float snapRadius = 0.0f) {
+                  bool disabled = false, float snapStep = 0.0f, float snapRadius = 0.0f, float (*snapFn)(float) = nullptr, ImU32 knobColour = 0) {
     released = false;
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton(id, size);
@@ -704,7 +727,8 @@ bool smoothSlider(const char* id, float& shown, float& target, float vmin, float
         const ImVec2 m = ImGui::GetIO().MousePos;
         const float fr = vertical ? 1.0f - (m.y - p.y - knobR) / std::max(1.0f, size.y - 2 * knobR) : (m.x - p.x - knobR) / std::max(1.0f, size.x - 2 * knobR);
         target = vmin + std::max(0.0f, std::min(1.0f, fr)) * (vmax - vmin);
-        if (snapStep > 0) {
+        if (snapFn) target = std::max(vmin, std::min(vmax, snapFn(target)));
+        else if (snapStep > 0) {
             const float snapTo = std::round(target / snapStep) * snapStep;
             if (std::fabs(target - snapTo) <= snapRadius) target = std::max(vmin, std::min(vmax, snapTo));
         }
@@ -737,7 +761,7 @@ bool smoothSlider(const char* id, float& shown, float& target, float vmin, float
         kc = ImVec2(x0 + (x1 - x0) * fr, y);
         dl->AddRectFilled(ImVec2(x0, y - 3), ImVec2(kc.x, y + 3), fillC, 3);
     }
-    dl->AddCircleFilled(kc, knobR, knobC, 20);
+    dl->AddCircleFilled(kc, knobR, knobColour && !disabled ? knobColour : knobC, 20);
     dl->AddCircle(kc, knobR, IM_COL32(15, 17, 20, 255), 20, 1.5f);
     if (!label.empty()) {   // the value next to the knob (vertical: in a small box to its left; horizontal: centred in the track)
         const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
@@ -1226,7 +1250,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     ImGui::InvisibleButton("radarclick", ImVec2(size, size));
     if (interactive) { mapSel().mapMin = p; mapSel().mapMax = ImVec2(p.x + size, p.y + size); }   // the info window stays inside this
     const bool hov = ImGui::IsItemHovered();
-    // the mouse wheel zooms: 1, 2, 5, 10, 20, 40, 80, 160 nm (eased)
+    // the mouse wheel zooms: 1, 2, 5, 10, 20, 40, 80, 160, 320 nm (eased)
     if (hov && ImGui::GetIO().MouseWheel != 0.0f) radarRange() = std::max(0, std::min(kRangeCount - 1, radarRange() - (ImGui::GetIO().MouseWheel > 0 ? 1 : -1)));
     if (interactive) {
         // drag to move the map (the Map tab only); a click without a drag selects
@@ -1315,7 +1339,6 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
     if (ImGui::Begin(("##mapinfo" + std::to_string(sel.kind) + sel.key).c_str(), nullptr, fl)) {
         auto title = [&](const std::string& t, ImU32 col) {   // the close button top left, then the title
             if (ImGui::SmallButton("x")) sel.kind = 0;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close");
             ImGui::SameLine(0, 10);
             ImGui::PushFont(f.bold);
             ImGui::PushStyleColor(ImGuiCol_Text, v4(col));
@@ -1526,30 +1549,22 @@ void toggleButton(const char* label, bool& v) {
 
 void layerButtons(bool lockButton) {
     toggleButton("Radar", showRadar());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Radar echoes (NOAA MRMS in the US, EUMETNET OPERA in Europe)");
     wrapBefore("Map", 4);
     toggleButton("Map", showMap());
     wrapBefore("Airports", 4);
     toggleButton("Airports", showAirports());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Airports by flight category (radar page: click one for its METAR and ATIS)");
     wrapBefore("Turb", 4);
     toggleButton("Turb", showTurb());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turbulence at the map's altitude (the slider beside the map)");
     wrapBefore("Winds", 4);
     toggleButton("Winds", showWinds());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Wind barbs at the map's altitude (NOAA winds aloft, GFS above and between them); click one to decode it");
     wrapBefore("Clouds", 4);
     toggleButton("Clouds", showClouds());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The clouds WXPlane gave X-Plane at the map's altitude: outlined, darker grey the deeper the layer");
     wrapBefore("PIREPs", 4);
     toggleButton("PIREPs", showPireps());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pilot reports: urgent (UUA) red, routine (UA) orange, label = flight level");
     wrapBefore("AIRMET", 4);
     toggleButton("AIRMET", showAirmets());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("G-AIRMETs (US): IFR purple, mountain obscuration pink, turbulence yellow, icing light blue, surface wind green, LLWS rose");
     wrapBefore("SIGMET", 4);
     toggleButton("SIGMET", showSigmets());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("SIGMETs worldwide and convective SIGMETs: convective red, turbulence orange, icing blue, volcanic ash brown, cyclone magenta");
     if (lockButton) {   // the Map tab: re-centre after dragging, and (it has no wind dial) the North / Airplane Heading Lock switch
         wrapBefore("Center on aircraft", 12);
         const bool off = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
@@ -1558,7 +1573,6 @@ void layerButtons(bool lockButton) {
         if (!off) ImGui::EndDisabled();
         wrapBefore("Heading Lock", 4);
         if (ImGui::SmallButton(dialHeadingUp() ? "Heading Lock###lock" : "North Lock###lock")) dialHeadingUp() = !dialHeadingUp();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip(dialHeadingUp() ? "Airplane Heading Lock (click for North Lock)" : "North Lock (click for Airplane Heading Lock)");
     }
 }
 
@@ -1573,7 +1587,7 @@ void rangeButtons() {
     if (ImGui::SmallButton("+")) radarRange() = std::min(kRangeCount - 1, radarRange() + 1);
 }
 float rangeButtonsWidth() {
-    return ImGui::CalcTextSize("-").x + ImGui::CalcTextSize("+").x + ImGui::CalcTextSize("160 nm").x + 4 * ImGui::GetStyle().FramePadding.x + 8;
+    return ImGui::CalcTextSize("-").x + ImGui::CalcTextSize("+").x + ImGui::CalcTextSize("320 nm").x + 4 * ImGui::GetStyle().FramePadding.x + 8;
 }
 
 // The map's altitude slider (beside the Map tab's map): for the turbulence, cloud and wind layers; greyed out without them
@@ -1584,12 +1598,11 @@ void altitudeSlider(const UiData& d, float w, float h) {
     ImGui::BeginGroup();
     const float bh = ImGui::GetFrameHeight();
     // ACFT and SFC: on/off switches; switching one off goes back to the altitude chosen with the slider
-    auto modeButton = [&](const char* label, AltMode m, const char* tip) {
+    auto modeButton = [&](const char* label, AltMode m, const char*) {
         const bool on = a.mode == m;
         ImGui::PushStyleColor(ImGuiCol_Button, v4(on && !off ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
         if (ImGui::Button(label, ImVec2(w, bh))) a.mode = on ? AltMode::Chosen : m;
         ImGui::PopStyleColor();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", off ? "Turn on Turb, Winds or Clouds to choose their altitude" : tip);
     };
     modeButton("ACFT##alt", AltMode::Acft, "Follow the aircraft's altitude as it climbs and descends (click again: back to the altitude you chose)");
     modeButton("SFC##alt", AltMode::Sfc, "The surface: airport winds (METAR), the lowest clouds (click again: back to the altitude you chose)");
@@ -1597,18 +1610,21 @@ void altitudeSlider(const UiData& d, float w, float h) {
     bool released = false;
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float sh = std::max(60.0f, h - 3 * bh - 3 * ImGui::GetStyle().ItemSpacing.y);
-    // scale marks every 10,000 ft on the right of the track
+    // scale marks every 10,000 ft on the right of the track; the mark the slider sits on lights amber
     ImDrawList* dl = ImGui::GetWindowDrawList();
     for (int k = 0; k <= 6; ++k) {
         const float y = p.y + 7 + (sh - 14) * (1.0f - k / 6.0f);
-        dl->AddLine(ImVec2(p.x + w * 0.5f + 5, y), ImVec2(p.x + w * 0.5f + 10, y), cRing, 1.0f);
+        const bool here = !off && a.mode != AltMode::Comp && k > 0 && std::fabs(a.shown - k * 10000.0f) < 50.0f;
+        const ImU32 col = here ? cWarn : cIdle;
+        dl->AddLine(ImVec2(p.x + w * 0.5f + 5, y), ImVec2(p.x + w * 0.5f + (here ? 12 : 10), y), here ? cWarn : cRing, here ? 2.0f : 1.0f);
         const std::string t = k == 0 ? std::string("0") : fmt("%d", k * 10);
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.72f, ImVec2(p.x + w * 0.5f + 12, y - ImGui::GetFontSize() * 0.36f), cIdle, t.c_str());
+        dl->AddText(here ? ImGui::GetFont() : ImGui::GetFont(), ImGui::GetFontSize() * (here ? 0.8f : 0.72f), ImVec2(p.x + w * 0.5f + 13, y - ImGui::GetFontSize() * (here ? 0.4f : 0.36f)), col, t.c_str());
     }
     float tgt = a.target < 0 ? 0.0f : a.target;
     const std::string label = a.mode == AltMode::Sfc ? std::string("SFC") : (a.mode == AltMode::Comp ? std::string("ALL") : altLabel(a.shown));
     // dragging (or the wheel) chooses an altitude: ACFT / SFC end there
-    if (smoothSlider("##mapalt", a.shown, tgt, 0.0f, kMapAltMax, ImVec2(w, sh), true, label, released, off, 1000.0f, 300.0f) || released) { a.mode = AltMode::Chosen; a.chosen = tgt; a.target = tgt; }
+    const bool on10k = !off && a.mode != AltMode::Comp && a.shown > 50.0f && std::fabs(a.shown - std::round(a.shown / 10000.0f) * 10000.0f) < 50.0f;   // a 10,000 ft level: amber
+    if (smoothSlider("##mapalt", a.shown, tgt, 0.0f, kMapAltMax, ImVec2(w, sh), true, label, released, off, 1000.0f, 300.0f, altSnap, on10k ? cWarn : 0) || released) { a.mode = AltMode::Chosen; a.chosen = tgt; a.target = tgt; }
     (void)d;
     ImGui::EndGroup();
     if (off) ImGui::EndDisabled();
@@ -1837,8 +1853,6 @@ void servicesStrip(const UiData& d, const UiFonts& f) {
         ImGui::SameLine(0, 6);
         muted(detail.c_str());
         ImGui::EndGroup();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s - %s\n%s%s", s.name.c_str(), s.use.c_str(), s.detail.c_str(),
-                                                      s.lastOk > 0 && s.state != SvcState::Ok ? fmt("\nlast good %s", hhmm(s.lastOk).c_str()).c_str() : "");
     }
 }
 
@@ -1939,7 +1953,6 @@ void timeBox(const UiData& d, const UiFonts& f) {
     ImGui::TextUnformatted(clockText(d.now + (std::time_t)off, true).c_str());
     ImGui::PopFont();
     ImGui::EndGroup();
-    if (est && ImGui::IsItemHovered()) ImGui::SetTooltip("Estimated from the longitude (X-Plane's time zone is not known yet)");
 }
 
 void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
@@ -2263,7 +2276,6 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
             ImGui::PushStyleColor(ImGuiCol_FrameBg, v4(IM_COL32(32, 34, 38, 255)));
         }
         settingRow("Use ATIS", d.cfg->useAtis, "Merge the digital ATIS (D-ATIS, major US airports) over the METAR.", act.toggleAtis);
-        settingRow("Global winds/temps & clouds aloft (GFS)", d.cfg->useAloft, "Winds and temperatures from the surface to FL600, clouds above what airports report, and the weather over open water.", act.toggleAloft);
         ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Turbulence & windshear");
         settingRow("Realistic turbulence", d.cfg->realisticTurbulence, "WXPlane sets the turbulence at every altitude from NOAA GTGN (US) / ECMWF (elsewhere) and pilot reports. Max turbulence is on the Turbulence tab.", act.toggleTurbulence);
@@ -2280,7 +2292,7 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         sectionTitle(f, "Map & radar");
         mutedWrapped("Radar is always on: NOAA MRMS over the US, EUMETNET OPERA over Europe. The buttons above the map choose its layers (radar, map, "
                      "airports, turbulence, winds, clouds, pilot reports, AIRMETs, SIGMETs); the slider beside it sets the altitude of the turbulence, "
-                     "wind and cloud layers. The mouse wheel zooms (1 to 160 nm), and a click on the wind dial turns the dial and the map between North Lock "
+                     "wind and cloud layers. The mouse wheel zooms (1 to 320 nm), and a click on the wind dial turns the dial and the map between North Lock "
                      "and Airplane Heading Lock.");
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Keyboard");
@@ -2301,31 +2313,59 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
     panelEnd();
 }
 
+bool isRadarService(const ServiceStatus& s) { return s.use.find("radar") != std::string::npos || s.name.find("MRMS") != std::string::npos || s.name.find("OPERA") != std::string::npos; }
+
+void serviceTable(const UiData& d, const char* id, const std::vector<ServiceStatus>& list) {
+    if (!ImGui::BeginTable(id, 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) return;
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 16);
+    ImGui::TableSetupColumn("Service", ImGuiTableColumnFlags_WidthFixed, textColW("NOAA Aviation Weather Center"));
+    ImGui::TableSetupColumn("Gives", ImGuiTableColumnFlags_WidthFixed, textColW("clouds aloft, open-water weather"));
+    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
+    plainHeaders();
+    ImGui::PopStyleColor();
+    for (const auto& s : list) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0); statusDot(s.state);
+        ImGui::TableSetColumnIndex(1); if (s.state == SvcState::NotHere) muted(s.name.c_str()); else ImGui::TextUnformatted(s.name.c_str());
+        ImGui::TableSetColumnIndex(2); muted(s.use.c_str());
+        ImGui::TableSetColumnIndex(3);
+        std::string t = std::string(svcLabel(s.state)) + (s.detail.empty() ? "" : ": " + s.detail);
+        if ((s.state == SvcState::Down || s.state == SvcState::Degraded) && s.lastOk > 0)
+            t += fmt(" (last good %s, %ld min ago)", hhmm(s.lastOk).c_str(), (long)((d.now - s.lastOk) / 60));
+        if (s.state == SvcState::NotHere) mutedWrapped(t); else ImGui::TextWrapped("%s", t.c_str());
+    }
+    ImGui::EndTable();
+}
+
 void tabServices(const UiData& d, const UiFonts& f) {
     const float H = ImGui::GetContentRegionAvail().y;
     if (panelBegin("svcfull", ImVec2(0, H))) {
         sectionTitle(f, "Data services");
-        if (ImGui::BeginTable("svct", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
-            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 16);
-            ImGui::TableSetupColumn("Service", ImGuiTableColumnFlags_WidthFixed, textColW("NOAA Aviation Weather Center"));
-            ImGui::TableSetupColumn("Gives", ImGuiTableColumnFlags_WidthFixed, textColW("clouds aloft, open-water weather"));
-            ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
-            plainHeaders();
-            ImGui::PopStyleColor();
-            for (const auto& s : allServices(d)) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0); statusDot(s.state);
-                ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(s.name.c_str());
-                ImGui::TableSetColumnIndex(2); muted(s.use.c_str());
-                ImGui::TableSetColumnIndex(3);
-                std::string t = std::string(svcLabel(s.state)) + (s.detail.empty() ? "" : ": " + s.detail);
-                if ((s.state == SvcState::Down || s.state == SvcState::Degraded) && s.lastOk > 0)
-                    t += fmt(" (last good %s, %ld min ago)", hhmm(s.lastOk).c_str(), (long)((d.now - s.lastOk) / 60));
-                ImGui::TextWrapped("%s", t.c_str());
+        std::vector<ServiceStatus> data;
+        for (const auto& s : allServices(d)) if (!isRadarService(s)) data.push_back(s);
+        serviceTable(d, "svct", data);
+        // the radar sources, both always listed: the one that does not cover this place says so
+        ImGui::Spacing(); ImGui::Spacing();
+        sectionTitle(f, "Radar");
+        const double la = d.havePos ? d.lat : (d.res ? d.res->centerLat : 0), lo = d.havePos ? d.lon : (d.res ? d.res->centerLon : 0);
+        const std::string reg = radarRegion(la, lo);
+        std::vector<ServiceStatus> radar;
+        auto pick = [&](const char* key, const char* name, const char* use, const char* region) {
+            ServiceStatus r;
+            bool found = false;
+            if (d.res) for (const auto& s : d.res->services) if (s.name.find(key) != std::string::npos) { r = s; found = true; }
+            if (!found) { r.name = name; r.use = use; r.state = SvcState::Waiting; r.detail = "waiting for the first download"; }
+            if (reg != region) {   // not used: the aircraft is outside this radar's coverage
+                r.state = SvcState::NotHere;
+                r.detail = std::string("this place is outside it; it covers ") + (std::string(region) == "US" ? "the United States only" : "Europe only") +
+                           (reg.empty() ? " (no radar composite covers this place)" : "");
             }
-            ImGui::EndTable();
-        }
+            radar.push_back(r);
+        };
+        pick("MRMS", "NOAA MRMS", "radar storms (US)", "US");
+        pick("OPERA", "EUMETNET OPERA", "radar storms (Europe)", "Europe");
+        serviceTable(d, "svcr", radar);
     }
     panelEnd();
 }
@@ -2497,7 +2537,6 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn));
             ImGui::TextUnformatted(live.c_str());
             ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("WXPlane is building the weather from scratch (start-up, switched back on, or a new location).\nUntil the countdown ends, the sky may not match the reports yet.");
         } else if (!live.empty()) { statusDot(d.busy ? SvcState::Degraded : SvcState::Ok, 4); ImGui::SameLine(0, 2); muted(live.c_str()); }
         ImGui::SameLine(right - bw);
         if (ImGui::Button("Refresh", ImVec2(84, 0))) act.refresh = true;

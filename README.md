@@ -19,7 +19,7 @@ Since 4.0, **Plugins → WXPlane** opens the weather window directly; every sett
 | **WXPlane weather on** | On/off. Off removes all of the plugin's weather and gives control back to X-Plane. |
 | **Refresh** (top right) | Downloads fresh data and applies it without freezing the sim; X-Plane fades it in over 1–2 minutes (`manual_refresh_immediate` = 1 applies at once). |
 | **Use ATIS** | Merge D-ATIS data for airports near you. |
-| **Global winds/temps & clouds aloft (GFS)** | On (default): winds and temperatures at every level, clouds above what airports report, and the weather over open water. |
+| GFS winds/temps & clouds aloft | Always on (no switch since 4.0): winds and temperatures at every level, clouds above what airports report, and the weather over open water. |
 | **Realistic windshear** | Gust fronts and microburst outflow near real convection (see below). On by default. |
 | **Realistic turbulence** | Turbulence from real data at every altitude: NOAA GTGN in the US, an ECMWF-based estimate elsewhere, pilot reports (see below). On by default. |
 | **Max turbulence** | A slider from 0 (no turbulence from WXPlane at all) to 1.0 (full realism, as the data says). |
@@ -120,7 +120,7 @@ Overview, Map, Airports, Winds & Temps, Turbulence, Services, Settings. The user
 * **Overview** - the nearest airport decoded, the wind dial (click: North Lock / Airplane Heading Lock, with H/T and crosswind
   components in the middle), nearby airports, a map with the Map tab's layers, winds and temperatures aloft, turbulence and windshear
   (risk coloured white to red). It never scrolls.
-* **Map** - eased zoom 1-160 nm (mouse wheel, - / +), drag to pan, "Center on aircraft", North Lock / Heading Lock button. Layers:
+* **Map** - eased zoom 1-320 nm (mouse wheel, - / +), drag to pan, "Center on aircraft", North Lock / Heading Lock button. Layers:
   Radar, Map (Natural Earth, embedded), Airports (click for METAR/ATIS), Turb (12 nm grid), Winds (barbs from FD stations and GFS
   points, click to decode), Clouds (the records sent to X-Plane, outlined, darker grey for deeper layers), PIREPs (UUA red, UA
   orange, click for details), AIRMET (G-AIRMETs) and SIGMET (SIGMETs, international and convective), coloured by hazard and clickable;

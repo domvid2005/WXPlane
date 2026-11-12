@@ -3096,6 +3096,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
 
     g_cfgPath = configPath();
     wx::loadConfig(g_cfgPath, g_cfg);
+    g_cfg.useAloft = true;   // the GFS winds/temps and clouds aloft are always on (their switch was removed from the window, 2026-11-12)
     wx::saveConfig(g_cfgPath, g_cfg); // writes defaults on first run so the file can be edited
 
     g_drLat = XPLMFindDataRef("sim/flightmodel/position/latitude");

@@ -84,7 +84,8 @@ OVERVIEW
         Airplane Heading Lock - your heading is up. The centre then shows
                                 the headwind or tailwind (H/T) and the
                                 crosswind (X, from the left or right).
-    The map turns with the dial, and the turn is smooth.
+    The map turns with the dial, and the turn is smooth. The small box under
+    the dial says which: North Lock or Heading Lock.
   * Nearby airports. Click a column header to sort (see AIRPORTS below).
   * A small map that shows the same layers you chose on the Map tab.
   * Winds and temperatures aloft, with the tropopause.
@@ -93,8 +94,8 @@ OVERVIEW
 
 MAP
   A larger map around your aircraft.
-  * Zoom with the mouse wheel or the - / + buttons: 1, 2, 5, 10, 20, 40, 80
-    and 160 nm. The zoom eases smoothly between steps.
+  * Zoom with the mouse wheel or the - / + buttons: 1, 2, 5, 10, 20, 40, 80,
+    160 and 320 nm. The zoom eases smoothly between steps.
   * Drag to pan. "Center on aircraft" glides back to you.
   * North Lock / Airplane Heading Lock button (the same as clicking the
     wind dial).
@@ -141,8 +142,9 @@ MAP
                level).
     Click ACFT, SFC or COMP again to go back to the altitude you chose
     with the slider. Dragging the slider ends them. The slider clicks into
-    whole thousands of feet when it comes within 300 ft of one, and the
-    mouse wheel steps 1,000 ft at a time. Max turbulence clicks into
+    whole thousands of feet when it comes within 300 ft of one, harder
+    into every 5,000 ft and hardest into every 10,000 ft (which light
+    amber when the slider sits on them); the mouse wheel steps 1,000 ft. Max turbulence clicks into
     tenths the same way.
   * Radar echoes are drawn as a radar picture: green edges into yellow,
     orange and red cores.
@@ -197,16 +199,17 @@ SERVICES
       DOWN      (red)    not working. It also shows when it last worked.
       grey               not used in this region, off, or waiting.
   The tab title shows how many services have a problem, for example
-  "Services (1)".
+  "Services (1)". The Radar section below lists both radar sources, NOAA
+  MRMS (US) and EUMETNET OPERA (Europe), and says which one is not used
+  because the aircraft is outside its coverage.
 
 SETTINGS
   * WXPlane weather on - turns all of WXPlane's weather on or off. When it
     is off, the weather fades back to X-Plane's own, and the other settings
     are greyed out.
   * Use ATIS - merge the digital ATIS (major US airports) over the METAR.
-  * Global winds/temps & clouds aloft (GFS) - winds and temperatures from
-    the surface to FL600, clouds above what the airports report, and the
-    weather over open water.
+  (GFS winds and temperatures aloft, clouds above what the airports
+  report and the weather over open water are always on.)
   * Realistic turbulence - WXPlane sets the turbulence at every altitude
     from real data (NOAA GTGN in the US, an ECMWF-based estimate
     elsewhere, and pilot reports), instead of X-Plane's own.
