@@ -138,6 +138,10 @@ While the weather is built from scratch (start-up, switched back on, a jump of 2
 "Loading weather" countdown (src/loadclock.h; `load_fade_s`, default 60, is the time allowed for X-Plane's fade-in). A jump also
 downloads at once instead of after the usual minute.
 
+`tests/emu/` is a browser emulator of the window (not part of the plugin): the real `src/wxui.cpp` compiled with Emscripten and
+drawn with WebGL2, on recorded Boston data and a simulated flight. `EMCC=/path/to/em++ tests/emu/build.sh out` writes one
+self-contained `out/index.html`.
+
 When X-Plane's own real weather is on, a red warning covers the window and nothing in it can be clicked until it is turned off.
 Refresh and Pop out are at the top right. The window follows X-Plane's UI scale, works in VR and pops out to its own OS window;
 the fonts (IBM Plex Sans, JetBrains Mono) are embedded. `tests/ui_shot.cpp` draws every tab off-line (ctest "weather_window").

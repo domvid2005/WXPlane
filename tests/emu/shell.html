@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>WXPlane Emulator</title>
+<style>
+:root { --bg: #17181b; --panel: #212328; --text: #e6e7ea; --muted: #9aa0a8; --accent: #4c9aff; --border: #2e3138; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #17181b; } }
+:root[data-theme="light"] { --bg: #17181b; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+header .note { color: var(--muted); font-size: 12.5px; flex: 1 1 260px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 16px; }
+button { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+label { color: var(--muted); font-size: 13px; display: flex; gap: 8px; align-items: center; }
+input[type=range] { width: 160px; accent-color: var(--accent); }
+#stage { padding: 0 16px 16px; }
+#wrap { position: relative; width: 100%; max-width: 1240px; aspect-ratio: 1240 / 820; margin: 0 auto; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #17181b; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#txt { position: absolute; left: -1000px; top: 0; width: 10px; height: 10px; opacity: 0; }
+#status { color: var(--muted); font-size: 12.5px; padding: 0 16px 8px; }
+.hint { color: var(--muted); font-size: 12px; text-align: center; padding: 6px 16px 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WXPlane 4.0 · weather window emulator</h1>
+  <div class="note">The plugin's real window, compiled for the browser, on recorded Boston weather. A simulated flight takes off from KBOS after 30 s and climbs to FL350 heading south-west.</div>
+</header>
+<div class="controls">
+  <button id="pause">Pause flight</button>
+  <button id="restart">Back to KBOS (new location)</button>
+  <label>Aircraft altitude <input id="alt" type="range" min="0" max="45000" step="100" value="0"><span id="altv">0 ft</span></label>
+</div>
+<div id="status">Loading…</div>
+<div id="stage"><div id="wrap"><canvas id="canvas" width="1240" height="820"></canvas><input id="txt" autocomplete="off" autocapitalize="characters"></div></div>
+<div class="hint">Click, drag the map, scroll (or − / +) to zoom. On a phone: tap and drag; rotate to landscape for a bigger window.</div>
+<script>
+(function () {
+  const canvas = document.getElementById('canvas'), wrap = document.getElementById('wrap'), txt = document.getElementById('txt');
+  function scaleNow() { const r = wrap.getBoundingClientRect(); return Math.max(1, Math.min(3, (window.devicePixelRatio || 1) * r.width / 1240)); }
+  window.emuScale = scaleNow;
+  function sizeCanvas() { const s = scaleNow(); canvas.width = Math.round(1240 * s); canvas.height = Math.round(820 * s); if (window.Module && Module._emu_scale) Module._emu_scale(s); }
+  sizeCanvas();
+  window.Module = {
+    canvas: canvas,
+    print: (t) => console.log(t), printErr: (t) => console.warn(t),
+    onRuntimeInitialized: function () {
+      document.getElementById('status').textContent = 'Running. The countdown in the header is the start-up load; Settings → WXPlane weather on/off shows it again.';
+      wire();
+    }
+  };
+  function pos(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * 1240 / r.width, (e.clientY - r.top) * 820 / r.height]; }
+  function wire() {
+    const M = Module;
+    canvas.addEventListener('pointermove', (e) => { const p = pos(e); M._emu_mouse(p[0], p[1], -1); e.preventDefault(); });
+    canvas.addEventListener('pointerdown', (e) => { const p = pos(e); canvas.setPointerCapture(e.pointerId); M._emu_mouse(p[0], p[1], -1); M._emu_mouse(p[0], p[1], 1); e.preventDefault(); });
+    canvas.addEventListener('pointerup', (e) => { const p = pos(e); M._emu_mouse(p[0], p[1], 0); if (e.pointerType !== 'mouse') setTimeout(() => M._emu_mouse(-1000, -1000, -1), 50);
+      setTimeout(() => { if (M._emu_wants_text()) { txt.value = ''; txt.focus(); } }, 30); e.preventDefault(); });
+    canvas.addEventListener('pointercancel', () => M._emu_mouse(-1000, -1000, 0));
+    canvas.addEventListener('wheel', (e) => { M._emu_wheel(-Math.sign(e.deltaY)); e.preventDefault(); }, { passive: false });
+    const keyCode = { Backspace: 8, Tab: 9, Enter: 13, Escape: 27, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46 };
+    function onKey(e, down) { const k = keyCode[e.key]; if (k) { M._emu_key(k, down ? 1 : 0); e.preventDefault(); } else if (down && e.key.length === 1 && !e.ctrlKey && !e.metaKey) { M._emu_char(e.key.charCodeAt(0)); e.preventDefault(); } }
+    window.addEventListener('keydown', (e) => { if (e.target === txt || M._emu_wants_text()) onKey(e, true); });
+    window.addEventListener('keyup', (e) => { if (e.target === txt || M._emu_wants_text()) onKey(e, false); });
+    txt.addEventListener('input', () => { for (const ch of txt.value) M._emu_char(ch.charCodeAt(0)); txt.value = ''; });
+    window.addEventListener('resize', sizeCanvas);
+    let paused = false;
+    document.getElementById('pause').onclick = (e) => { paused = !paused; M._emu_pause(paused ? 1 : 0); e.target.textContent = paused ? 'Resume flight' : 'Pause flight'; };
+    document.getElementById('restart').onclick = () => M._emu_teleport();
+    const alt = document.getElementById('alt'), altv = document.getElementById('altv');
+    let dragging = false;
+    alt.addEventListener('input', () => { dragging = true; M._emu_set_alt(+alt.value); });
+    alt.addEventListener('change', () => { dragging = false; });
+    setInterval(() => { const a = M._emu_alt(); if (!dragging) alt.value = a; altv.textContent = a >= 18000 ? 'FL' + String(Math.round(a / 100)).padStart(3, '0') : Math.round(a / 10) * 10 + ' ft'; }, 250);
+  }
+})();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
