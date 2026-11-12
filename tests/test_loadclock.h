@@ -33,3 +33,30 @@ inline void run() {
     CHECK(c.update(p, 0.25) < 0);
 }
 } // namespace tl
+
+#include "../src/suntime.h"
+namespace tsun {
+inline void run() {
+    using namespace wx;
+    const std::time_t nov12 = utcOf(2026, 11, 12, 15);
+    std::time_t r = 0, s = 0;
+    CHECK(sunTimes(42.36, -71.01, nov12, r, s) == 1);   // Boston: sunrise 06:32 EST (11:32Z), sunset 16:24 EST (21:24Z)
+    NEAR((double)(r - utcOf(2026, 11, 12, 11)) / 60.0, 32, 3);
+    NEAR((double)(s - utcOf(2026, 11, 12, 21)) / 60.0, 24, 3);
+    CHECK(sunTimes(78.2, 15.6, utcOf(2026, 6, 21, 12), r, s) == 0);    // Svalbard in June: midnight sun
+    CHECK(sunTimes(78.2, 15.6, utcOf(2026, 12, 21, 12), r, s) == -1);  // and polar night in December
+    CHECK(dayOfWeek(2026, 11, 12) == 4);                                // a Thursday
+    CHECK(zoneName(42.36, -71.0, -5 * 3600, nov12) == "EST");
+    CHECK(zoneName(42.36, -71.0, -4 * 3600, utcOf(2026, 7, 1, 12)) == "EDT");
+    CHECK(zoneName(33.4, -112.0, -7 * 3600, utcOf(2026, 7, 1, 12)) == "MST");   // Arizona, no DST
+    CHECK(zoneName(41.98, -87.9, -6 * 3600, nov12) == "CST");
+    CHECK(zoneName(51.47, -0.45, 0, nov12) == "GMT");
+    CHECK(zoneName(51.47, -0.45, 3600, utcOf(2026, 7, 1, 12)) == "BST");
+    CHECK(zoneName(50.03, 8.57, 3600, nov12) == "CET");
+    CHECK(zoneName(50.03, 8.57, 7200, utcOf(2026, 7, 1, 12)) == "CEST");
+    CHECK(zoneName(35.55, 139.78, 9 * 3600, nov12).empty());           // elsewhere: shown as UTC+9
+    // the US change days: 8 March 2026 (2:00 EST = 07:00Z) and 1 November 2026 (2:00 EDT = 06:00Z)
+    CHECK(!usDst(utcOf(2026, 3, 8, 6), -5) && usDst(utcOf(2026, 3, 8, 7), -5));
+    CHECK(usDst(utcOf(2026, 11, 1, 5), -5) && !usDst(utcOf(2026, 11, 1, 6), -5));
+}
+} // namespace tsun

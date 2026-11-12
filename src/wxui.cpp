@@ -15,6 +15,7 @@
 #include "png.h"
 #include "version.h"
 #include "radar.h"
+#include "suntime.h"
 #include "viewer.h"
 #include "wxmodel.h"
 
@@ -78,6 +79,11 @@ double localOffsetAt(const UiData& d, double lat, double lon, bool& estimate) {
 std::string utcOffsetText(double offS) {
     const int m = (int)std::lround(std::fabs(offS) / 60.0);
     return m % 60 ? fmt("UTC%s%d:%02d", offS < 0 ? "-" : "+", m / 60, m % 60) : fmt("UTC%s%d", offS < 0 ? "-" : "+", m / 60);
+}
+// the time zone's name where it has one (EST, CDT, GMT, CEST ...), else the offset (UTC+9)
+std::string zoneText(double lat, double lon, double offS, std::time_t now) {
+    const std::string n = zoneName(lat, lon, offS, now);
+    return n.empty() ? utcOffsetText(offS) : n;
 }
 std::string clockText(std::time_t t, bool seconds) {
     std::tm tm{};
@@ -444,8 +450,16 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
         {   // local time at the airport
             bool est = false;
             const double off = localOffsetAt(d, st.lat, st.lon, est);
-            ImGui::TableNextColumn(); field(f, "Local time", (est ? "~" : "") + clockText(d.now + (std::time_t)off, false) + "  " + utcOffsetText(off));
-            ImGui::TableNextColumn(); field(f, "Zulu", clockText(d.now, false) + "Z");
+            const std::string zn = zoneText(st.lat, st.lon, off, d.now);
+            ImGui::TableNextColumn(); field(f, "Local time", (est ? "~" : "") + clockText(d.now + (std::time_t)off, false) + " " + zn);
+            ImGui::TableNextColumn(); field(f, "Zulu", clockText(d.now, false) + "Z  UTC");
+            if (full) {   // the airport page: sunrise and sunset today (local)
+                std::time_t rise = 0, set = 0;
+                const int sun = sunTimes(st.lat, st.lon, d.now + (std::time_t)off, rise, set);
+                auto loc = [&](std::time_t t) { return clockText(t + (std::time_t)off, false) + " " + zn + "  (" + clockText(t, false) + "Z)"; };
+                ImGui::TableNextColumn(); field(f, "Sunrise", sun > 0 ? loc(rise) : (sun == 0 ? std::string("sun up all day") : std::string("no sunrise today")));
+                ImGui::TableNextColumn(); field(f, "Sunset", sun > 0 ? loc(set) : (sun == 0 ? std::string("no sunset today") : std::string("sun down all day")));
+            }
         }
         ImGui::EndTable();
     }
@@ -1775,14 +1789,15 @@ void timeBox(const UiData& d, const UiFonts& f) {
     bool est = false;
     const double off = localOffsetAt(d, d.lat, d.lon, est);
     ImGui::BeginGroup();
-    muted("Zulu");
+    muted("Zulu  UTC");
     ImGui::PushFont(f.title);
     ImGui::TextUnformatted((clockText(d.now, true) + "Z").c_str());
     ImGui::PopFont();
     ImGui::EndGroup();
     ImGui::SameLine(x0 + w);
     ImGui::BeginGroup();
-    muted(("Local  " + std::string(est ? "~" : "") + utcOffsetText(off)).c_str());
+    const std::string zn = zoneName(d.lat, d.lon, off, d.now);
+    muted(("Local  " + std::string(est ? "~" : "") + (zn.empty() ? utcOffsetText(off) : zn + "  (" + utcOffsetText(off) + ")")).c_str());
     ImGui::PushFont(f.title);
     ImGui::TextUnformatted(clockText(d.now + (std::time_t)off, true).c_str());
     ImGui::PopFont();

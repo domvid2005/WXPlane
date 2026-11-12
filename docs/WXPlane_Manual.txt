@@ -147,6 +147,11 @@ MAP
     wind is a white circle.
   * Zulu and local time: in a box under the airport on the Overview, in
     every airport's details, and at the top left of the Map tab's map.
+    Local times carry their time zone's name (EST, CDT, GMT, CEST ...) in
+    North America and Europe, and the UTC offset elsewhere; "~" marks a
+    time estimated from the longitude (far from the aircraft).
+  * The Airports tab also shows today's sunrise and sunset at the
+    airport (local time and Zulu).
   * The map title shows the radar region: "Map - US" (NOAA MRMS) or
     "Map - Europe" (EUMETNET OPERA). There is no radar elsewhere.
   * The list next to the map shows the strongest storm cells (strength,

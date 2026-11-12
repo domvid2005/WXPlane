@@ -1513,6 +1513,7 @@ int main() {
     th::run();
     to::run();
     tl::run();
+    tsun::run();
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
