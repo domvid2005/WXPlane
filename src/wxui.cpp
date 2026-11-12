@@ -420,7 +420,10 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
     ImGui::InvisibleButton("winddial", ImVec2(size, size));
     if (ImGui::IsItemClicked()) dialHeadingUp() = !dialHeadingUp();
     if (d.forceDial >= 0) dialHeadingUp() = d.forceDial == 1;
-    const bool hovered = ImGui::IsItemHovered();
+    // hovering the dial or the mode box under it flips both outlines (and the box's text), to show they can be clicked
+    const float boxH = ImGui::GetFontSize() * 0.8f + 6;
+    const ImVec2 boxMin(p.x, p.y + size + ImGui::GetStyle().ItemSpacing.y);
+    const bool hovered = ImGui::IsItemHovered() || ImGui::IsMouseHoveringRect(boxMin, ImVec2(p.x + size, boxMin.y + boxH));
     const bool up = dialHeadingUp() && d.havePos;
     const double rot = viewRot();   // screen-up direction, degrees true (animated)
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -453,8 +456,8 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
         const double a = (r.windDir - rot) * kPi / 180.0;
         const ImVec2 dir((float)std::sin(a), -(float)std::cos(a));
         const ImVec2 n(-dir.y, dir.x);
-        // the wind triangle inside the outer band: its base near the outer ring, its tip on the middle ring, pointing in
-        const float rb = R - 2.5f, rt = mid + 1.0f, hw = std::min(7.0f, (rb - rt) * 0.6f);
+        // the wind triangle in the inner band: its base on the middle ring, its tip at the centre circle, pointing in
+        const float rb = mid - 1.0f, rt = hub + 1.5f, hw = std::min(7.0f, (rb - rt) * 0.6f);
         const ImVec2 tip(c.x + dir.x * rt, c.y + dir.y * rt), base(c.x + dir.x * rb, c.y + dir.y * rb);
         dl->AddTriangleFilled(tip, ImVec2(base.x + n.x * hw, base.y + n.y * hw), ImVec2(base.x - n.x * hw, base.y - n.y * hw), cAccent);
     }
@@ -499,8 +502,9 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
         const float bw = ts.x + 14, bh = ts.y + 6, x0 = p.x + (size - bw) * 0.5f;
         ImDrawList* dl2 = ImGui::GetWindowDrawList();
         dl2->AddRectFilled(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), cInset, 4.0f);
-        dl2->AddRect(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), dialHeadingUp() ? cLockBlue : IM_COL32(58, 62, 70, 255), 4.0f);
-        dl2->AddText(f.body, sfs, ImVec2(x0 + 7, q.y + 3), dialHeadingUp() ? cLockBlue : cSoft, mode);   // Heading Lock: text and outline blue
+        // the same rule as the dial's outline: blue in Heading Lock, flipped while hovered
+        dl2->AddRect(ImVec2(x0, q.y), ImVec2(x0 + bw, q.y + bh), blueRing ? cLockBlue : IM_COL32(58, 62, 70, 255), 4.0f);
+        dl2->AddText(f.body, sfs, ImVec2(x0 + 7, q.y + 3), blueRing ? cLockBlue : cSoft, mode);
         ImGui::InvisibleButton("dialmode", ImVec2(size, bh));
         if (ImGui::IsItemClicked()) dialHeadingUp() = !dialHeadingUp();
     }
