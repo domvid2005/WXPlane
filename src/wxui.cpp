@@ -155,7 +155,7 @@ std::string windShort(const Report& r) {
     if (r.windKt < 1) return "calm";
     std::string s = r.windVariable ? std::string("VRB") : fmt("%03d", r.windDir);
     s += fmt("/%.0f", r.windKt);
-    if (r.gustKt > r.windKt) s += fmt(" G%.0f", r.gustKt);
+    if (r.gustKt > r.windKt) s += fmt("G%.0f", r.gustKt);
     return s;
 }
 
@@ -184,7 +184,7 @@ std::string windTextRef(const Report& r, double varEast, bool mag) {
 std::string windShortRef(const Report& r, double varEast, bool mag) {
     if (!r.hasWind || r.windKt < 1 || r.windVariable || !mag) return windShort(r);
     std::string s = fmt("%03d", windDirIn(r, varEast, mag)) + fmt("/%.0f", r.windKt);
-    if (r.gustKt > r.windKt) s += fmt(" G%.0f", r.gustKt);
+    if (r.gustKt > r.windKt) s += fmt("G%.0f", r.gustKt);
     return s;
 }
 // Temperatures in degrees Celsius or Fahrenheit: one switch for the whole window, next to the wind one
@@ -196,7 +196,7 @@ long isaDevIn(double devC) { return std::lround(tempF() ? devC * 9.0 / 5.0 : dev
 
 // The units switch, right-aligned on the current line: a slightly bigger bubble holding two small labelled switches,
 // TEMP (°C / °F) and WIND (°T / °M); the airport lists use it (the home page's and the Airports tab's are the same switch)
-void windRefSwitch(const char* id) {
+void windRefSwitch(const char* id, float rightGap = 0.0f) {
     // one row, the height of the text: WIND °T °M | TEMP °C °F, in one bubble, right-aligned on the current line
     ImGui::PushID(id);
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -207,7 +207,7 @@ void windRefSwitch(const char* id) {
     const float pad = 6, inner = 4, gapG = 12;
     const float boxW = pad + lt + inner + bw("°C") + 2 + bw("°F") + gapG + lw + inner + bw("°T") + 2 + bw("°M") + pad;
     const float boxH = ImGui::GetTextLineHeight() + 4;
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - boxW));
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - boxW - rightGap));
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(30, 32, 37, 255), boxH * 0.5f);
@@ -1424,15 +1424,19 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         if (bubble(ImVec2(p.x + size - 8 - wl - 6 - wc, p.y + 8), nullptr, ce, !panned || recentering(), false).first && panned) bubbleHit = 1;   // lit as soon as it is pressed
         if (bubbleHit) { hitKind = 0; }
     }
-    if (interactive && ImGui::GetTime() < popupFullUntil()) {   // the map is full of popups: a short notice in the middle
+    if (interactive && ImGui::GetTime() < popupFullUntil()) {   // the map is full of popups: a short notice in the middle, over them
+        ImDrawList* fg = ImGui::GetForegroundDrawList();   // drawn after every window, so the popups cannot cover it
+        fg->PushClipRect(p, ImVec2(p.x + size, p.y + size), true);
         const float left = (float)(popupFullUntil() - ImGui::GetTime());
         const int al = (int)(255 * std::min(1.0f, left / 0.3f));
         const char* t = "MAX AMOUNT OF POPUPS";
-        const ImVec2 ts = f.bold->CalcTextSizeA(ImGui::GetFontSize() * 1.15f, FLT_MAX, 0.0f, t);
-        const ImVec2 b0(p.x + (size - ts.x) * 0.5f - 14, p.y + size * 0.5f - ts.y * 0.5f - 9), b1(b0.x + ts.x + 28, b0.y + ts.y + 18);
-        dl->AddRectFilled(b0, b1, IM_COL32(28, 30, 34, (int)(240 * al / 255)), 6.0f);
-        dl->AddRect(b0, b1, IM_COL32(245, 190, 80, al), 6.0f, 0, 1.5f);
-        dl->AddText(f.bold, ImGui::GetFontSize() * 1.15f, ImVec2(b0.x + 14, b0.y + 9), IM_COL32(245, 190, 80, al), t);
+        const float fsz = ImGui::GetFontSize() * 1.9f;
+        const ImVec2 ts = f.title->CalcTextSizeA(fsz, FLT_MAX, 0.0f, t);
+        const ImVec2 b0(p.x + (size - ts.x) * 0.5f - 22, p.y + size * 0.5f - ts.y * 0.5f - 14), b1(b0.x + ts.x + 44, b0.y + ts.y + 28);
+        fg->AddRectFilled(b0, b1, IM_COL32(28, 30, 34, (int)(245 * al / 255)), 8.0f);
+        fg->AddRect(b0, b1, IM_COL32(245, 190, 80, al), 8.0f, 0, 2.0f);
+        fg->AddText(f.title, fsz, ImVec2(b0.x + 22, b0.y + 14), IM_COL32(245, 190, 80, al), t);
+        fg->PopClipRect();
     }
     dl->PopClipRect();
     ImGui::InvisibleButton("radarclick", ImVec2(size, size));
@@ -1612,7 +1616,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
                     ImGui::TextUnformatted(windTextRef(r, var, mag).c_str());
                     if (r.hasWind && r.windKt >= 1 && !r.windVariable) {   // the other reference: a click swaps them
                         ImGui::SameLine(0, 8);
-                        if (magBox(fmt(mag ? "%03d°T" : "%03d°M", windDirIn(r, var, !mag)).c_str(), IM_COL32(196, 200, 207, 255), true)) cardWindMagnetic() = !mag;
+                        magBox(fmt(mag ? "%03d°T" : "%03d°M", windDirIn(r, var, !mag)).c_str(), IM_COL32(196, 200, 207, 255));   // set by the map's unit switch
                     }
                 }
                 infoRow("Visibility", visText(st->report, us));
@@ -1657,7 +1661,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
                     const int dm = toMagnetic(dir, magVar(d, wp->lat, wp->lon)), dt = (int)std::lround(dir) == 0 ? 360 : (int)std::lround(dir);
                     ImGui::Text(mag ? "%03d°M / %.0f kt%s" : "%03d°T / %.0f kt%s", mag ? dm : dt, kt, wp->gustKt > kt + 1 ? fmt(" G%.0f", wp->gustKt).c_str() : "");
                     ImGui::SameLine(0, 8);
-                    if (magBox(fmt(mag ? "%03d°T" : "%03d°M", mag ? dt : dm).c_str(), IM_COL32(196, 200, 207, 255), true)) cardWindMagnetic() = !mag;
+                    magBox(fmt(mag ? "%03d°T" : "%03d°M", mag ? dt : dm).c_str(), IM_COL32(196, 200, 207, 255));   // set by the map's unit switch
                 }
                 int pn = 0, fu = 0, ha = 0;
                 barbCounts(kt, pn, fu, ha);
@@ -1820,17 +1824,28 @@ void layerButtons(bool lockButton) {
 }
 
 // The range: the mouse wheel over the map, or these buttons (VR, no wheel)
-void rangeButtons() {
-    if (ImGui::SmallButton("-")) radarRange() = std::max(0, radarRange() - 1);
-    ImGui::SameLine(0, 4);
-    const std::string t = fmt("%g nm", rangeNmOf(radarRange()));
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(t.c_str());
-    ImGui::SameLine(0, 4);
-    if (ImGui::SmallButton("+")) radarRange() = std::min(kRangeCount - 1, radarRange() + 1);
-}
+// The zoom: - and + with the range between them, in one bubble like the unit switches (all on one text-high row)
 float rangeButtonsWidth() {
-    return ImGui::CalcTextSize("-").x + ImGui::CalcTextSize("+").x + ImGui::CalcTextSize("320 nm").x + 4 * ImGui::GetStyle().FramePadding.x + 8;
+    const ImGuiStyle& st = ImGui::GetStyle();
+    return 6 + (ImGui::CalcTextSize("-").x + 2 * st.FramePadding.x) + 6 + ImGui::CalcTextSize("320 nm").x + 6 + (ImGui::CalcTextSize("+").x + 2 * st.FramePadding.x) + 6;
+}
+void rangeButtons() {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float boxW = rangeButtonsWidth(), boxH = ImGui::GetTextLineHeight() + 4;
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(30, 32, 37, 255), boxH * 0.5f);
+    dl->AddRect(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(58, 62, 70, 255), boxH * 0.5f);
+    const float bm = ImGui::CalcTextSize("-").x + 2 * st.FramePadding.x, bp = ImGui::CalcTextSize("+").x + 2 * st.FramePadding.x;
+    ImGui::SetCursorScreenPos(ImVec2(p0.x + 6, p0.y + 2));
+    if (ImGui::SmallButton("-##zoom")) radarRange() = std::max(0, radarRange() - 1);
+    const std::string t = fmt("%g nm", rangeNmOf(radarRange()));
+    const float tw = ImGui::CalcTextSize("320 nm").x, tx = p0.x + 6 + bm + 6 + (tw - ImGui::CalcTextSize(t.c_str()).x) * 0.5f;
+    dl->AddText(ImVec2(tx, p0.y + 2), cText, t.c_str());
+    ImGui::SetCursorScreenPos(ImVec2(p0.x + boxW - 6 - bp, p0.y + 2));
+    if (ImGui::SmallButton("+##zoom")) radarRange() = std::min(kRangeCount - 1, radarRange() + 1);
+    ImGui::SetCursorScreenPos(p0);
+    ImGui::Dummy(ImVec2(boxW, boxH));
 }
 
 // The map's altitude slider (beside the Map tab's map): for the turbulence, cloud and wind layers; greyed out without them
@@ -1876,6 +1891,7 @@ void altitudeSlider(const UiData& d, float w, float h) {
 void radarPanel(const UiData& d, const UiFonts& f, bool big) {
     const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
     sectionTitle(f, radarHeader(d).c_str());
+    if (big) { UnitScope us(g_unitsAir); windRefSwitch("wrMap", rangeButtonsWidth() + 10); }   // the map's units: the Airports tab's
     ImGui::SameLine(right - rangeButtonsWidth());
     rangeButtons();
     if (big) layerButtons(true);   // the home page's map shows the Map tab's layers, without buttons of its own
@@ -2300,14 +2316,14 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     if (!d.res) return;
     std::vector<const Station*> v;
     for (const auto& s : d.res->stations) if (&s != skip && s.icao.compare(0, 3, "GFS") != 0) v.push_back(&s);
-    const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | (scroll ? ImGuiTableFlags_ScrollY : 0);
+    const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | (scroll ? ImGuiTableFlags_ScrollY : 0);
     if (!ImGui::BeginTable("near", 6, fl)) return;
     ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
-    ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
+    ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000") - 4, kSortDist);
     ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
     // the wind gets the room for a gusting wind and its reference (true or magnetic in the header)
-    ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind °T###wind", ImGuiTableColumnFlags_WidthFixed, textColW("000/00 G00 "), kSortWind);
-    ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
+    ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind °T###wind", ImGuiTableColumnFlags_WidthFixed, textColW("000/00G00"), kSortWind);
+    ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10+ SM") - 6, kSortVis);
     ImGui::TableSetupColumn("Ceil.", ImGuiTableColumnFlags_WidthStretch, textColW("00,000"), kSortCeil);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
@@ -2508,7 +2524,7 @@ void tabRadar(const UiData& d, const UiFonts& f) {
     const float mapW = std::min(W * 0.62f, H + 40);
     if (panelBegin("rbig", ImVec2(mapW, H), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) radarPanel(d, f, true);
     panelEnd();
-    infoWindow(d, f);
+    { UnitScope us(g_unitsAir); infoWindow(d, f); }   // the popups use the map's units (the Airports tab's)
     ImGui::SameLine(0, 12);
     if (panelBegin("rcells", ImVec2(0, H)) && d.res) {
         const RadarResult& r = d.res->radar;
