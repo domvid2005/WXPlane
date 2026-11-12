@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "XPLMDataAccess.h"
 #include "XPLMDisplay.h"
@@ -111,7 +112,8 @@ XPLMWindowID g_win = nullptr;
 ImGuiContext* g_ctx = nullptr;
 BuildFn g_build = nullptr;
 UiFonts g_fonts;
-int g_fontTex = 0;
+int g_fontTex = 0, g_logoTex = 0;
+float g_logoAspect = 1;
 float g_fontScale = 0;          // pixels per window unit the atlas was built for
 bool g_fontsDirty = true;
 std::chrono::steady_clock::time_point g_last{};
@@ -163,6 +165,23 @@ void buildFonts(float scale) {
     gl.TexImage2D(GL_TEXTURE_2D, 0, (GLint)GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
     io.Fonts->SetTexID((ImTextureID)(intptr_t)g_fontTex);
     io.Fonts->ClearTexData();   // the pixels are on the GPU now
+    // the logo, once
+    if (!g_logoTex) {
+        std::vector<unsigned char> rgba;
+        int lw = 0, lh = 0;
+        if (uiLogoRgba(rgba, lw, lh)) {
+            XPLMGenerateTextureNumbers(&g_logoTex, 1);
+            XPLMBindTexture2d(g_logoTex, 0);
+            gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (GLint)GL_LINEAR);
+            gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (GLint)GL_LINEAR);
+            gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (GLint)GL_CLAMP_TO_EDGE);
+            gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (GLint)GL_CLAMP_TO_EDGE);
+            gl.TexImage2D(GL_TEXTURE_2D, 0, (GLint)GL_RGBA, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            g_logoAspect = (float)lw / (float)lh;
+        }
+    }
+    g_fonts.logo = g_logoTex ? (void*)(intptr_t)g_logoTex : nullptr;
+    g_fonts.logoAspect = g_logoAspect;
     g_fontScale = scale;
     g_fontsDirty = false;
 }
@@ -355,7 +374,8 @@ void destroy() {
         g_ctx = nullptr;
     }
     if (g_fontTex && gl.DeleteTextures) { const unsigned int t = (unsigned int)g_fontTex; gl.DeleteTextures(1, &t); }
-    g_fontTex = 0;
+    if (g_logoTex && gl.DeleteTextures) { const unsigned int t = (unsigned int)g_logoTex; gl.DeleteTextures(1, &t); }
+    g_fontTex = 0; g_logoTex = 0;
     g_fontsDirty = true;
 }
 

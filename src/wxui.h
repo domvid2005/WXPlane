@@ -40,6 +40,7 @@ struct UiData {
     std::string turbSource, turbData;   // "GTGN", "ECMWF estimate"...; what data is loaded
     std::vector<UiTurbLayer> turbProfile;
     std::vector<UiTurbCell> turbGrid;    // turbulence around the aircraft at its altitude (radar map layer)
+    double turbGridDLat = 0.2, turbGridDLon = 0.27;   // the grid's spacing (degrees), so neighbouring squares share their corners exactly
     std::shared_ptr<const hz::Snapshot> reports;
     // windshear
     bool wsOn = false;
@@ -47,7 +48,8 @@ struct UiData {
     std::string wsStrongest;
     int forceTab = -1;
     int forceDial = -1;
-    int forceLayers = -1;               // radar map layers: 1 map, 2 turbulence, 4 pilot reports; -1 leave them (tests)                 // the wind dial: 0 north up, 1 heading up, -1 leave it (tests)                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
+    int forceLayers = -1;
+    int forcePirep = -1;                // open this pilot report's info window on the radar page (tests)               // radar map layers: 1 map, 2 turbulence, 4 pilot reports; -1 leave them (tests)                 // the wind dial: 0 north up, 1 heading up, -1 leave it (tests)                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
 };
 
 struct UiActions {
@@ -65,11 +67,15 @@ struct UiFonts {
     ImFont* bold = nullptr;
     ImFont* title = nullptr;
     ImFont* mono = nullptr;
+    void* logo = nullptr;               // the logo's texture (ImTextureID), set by the backend; nullptr: the name in text
+    float logoAspect = 1;               // width / height
 };
 
 // Flight category from a report: "VFR", "MVFR", "IFR", "LIFR", or "" when the report says too little.
 std::string flightCategory(const Report& r);
 
+// The logo's pixels (RGBA, from the embedded assets/wxplane_logo.png), for the backend to upload as a texture.
+bool uiLogoRgba(std::vector<unsigned char>& rgba, int& w, int& h);
 // Applies the WXPlane look to the current ImGui context.
 void uiStyle();
 // Loads the embedded fonts into the current context's atlas at `pixelScale` (pixels per window unit). Call before building the atlas.

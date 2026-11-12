@@ -97,7 +97,7 @@ target_compile_definitions(wx_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS IMGU
 set(WX_FONT_FILES
   ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-Regular.ttf ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-SemiBold.ttf
   ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-Bold.ttf ${CMAKE_SOURCE_DIR}/third_party/fonts/JetBrainsMono-Regular.ttf
-  ${CMAKE_SOURCE_DIR}/third_party/basemap/basemap.bin)
+  ${CMAKE_SOURCE_DIR}/third_party/basemap/basemap.bin ${CMAKE_SOURCE_DIR}/assets/wxplane_logo.png)
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/wx_fonts.c
   COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR}/third_party/fonts -DOUT=${CMAKE_BINARY_DIR}/wx_fonts.c -P ${CMAKE_SOURCE_DIR}/cmake/embed_fonts.cmake

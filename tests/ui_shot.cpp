@@ -31,6 +31,7 @@ struct Canvas {
     Canvas(int W, int H) : w(W), h(H), rgb((size_t)W * H * 3, 0.0f) {}
 };
 
+std::vector<unsigned char> g_logo; int g_lw = 0, g_lh = 0;
 void raster(Canvas& cv, const ImDrawData* dd, const unsigned char* tex, int tw, int th, float scale) {
     for (int n = 0; n < dd->CmdListsCount; ++n) {
         const ImDrawList* cl = dd->CmdLists[n];
@@ -66,9 +67,16 @@ void raster(Canvas& cv, const ImDrawData* dd, const unsigned char* tex, int tw, 
                         const float ax = fx - ix, ay = fy - iy;
                         auto T = [&](int a, int b) { a = std::max(0, std::min(tw - 1, a)); b = std::max(0, std::min(th - 1, b)); return tex[(size_t)b * tw + a] / 255.0f; };
                         const float ta = (T(ix, iy) * (1 - ax) + T(ix + 1, iy) * ax) * (1 - ay) + (T(ix, iy + 1) * (1 - ax) + T(ix + 1, iy + 1) * ax) * ay;
-                        const float a = col[3] * ta;
+                        float a = col[3] * ta;
+                        float tc[3] = {1, 1, 1};
+                        if ((intptr_t)cmd.GetTexID() == 2 && g_lw > 0) {   // the logo (RGBA)
+                            const int lx = std::max(0, std::min(g_lw - 1, (int)(u * g_lw))), ly = std::max(0, std::min(g_lh - 1, (int)(w * g_lh)));
+                            const unsigned char* q = &g_logo[((size_t)ly * g_lw + lx) * 4];
+                            for (int k = 0; k < 3; ++k) tc[k] = q[k] / 255.0f;
+                            a = col[3] * q[3] / 255.0f;
+                        }
                         float* o = &cv.rgb[((size_t)y * cv.w + x) * 3];
-                        for (int k = 0; k < 3; ++k) o[k] = o[k] * (1 - a) + col[k] * a;
+                        for (int k = 0; k < 3; ++k) o[k] = o[k] * (1 - a) + col[k] * tc[k] * a;
                     }
             }
         }
@@ -187,7 +195,7 @@ int main(int argc, char** argv) {
     auto snap = std::make_shared<hz::Snapshot>();
     snap->fetched = now - 600;
     const char* ints[] = {"LGT", "", "MOD", "LGT-MOD", "NEG"};
-    for (int k = 0; k < 5; ++k) { hz::Pirep p; p.lat = 42 + 0.4 * k; p.lon = -72 + 0.5 * k; p.altFt = 9000 + 6000 * k; p.intensity = ints[k]; p.acType = k % 2 ? "B738" : "A321"; p.obsTime = now - 900 * (k + 1); p.raw = "UA /OV ... /TB " + std::string(ints[k]); snap->pireps.push_back(p); }
+    for (int k = 0; k < 5; ++k) { hz::Pirep p; p.lat = 42 + 0.4 * k; p.lon = -72 + 0.5 * k; p.altFt = 9000 + 6000 * k; p.intensity = ints[k]; p.urgent = k == 2; p.kind = "PIREP"; p.tbType = k == 2 ? "CAT" : ""; p.baseFt = k == 2 ? 19000 : -1; p.topFt = k == 2 ? 23000 : -1; p.acType = k % 2 ? "B738" : "A321"; p.obsTime = now - 900 * (k + 1); p.raw = std::string(k == 2 ? "UUA" : "UA") + " /OV ORW270020/TM 0215/FL" + std::to_string((int)(p.altFt / 100)) + "/TP " + p.acType + "/TB " + std::string(ints[k]); snap->pireps.push_back(p); }
     d.reports = snap;
     for (int gy = 0; gy < 25; ++gy)
         for (int gx = 0; gx < 25; ++gx) {
@@ -195,6 +203,7 @@ int main(int argc, char** argv) {
             const double e = 0.05 + 0.3 * std::exp(-((la - 43.2) * (la - 43.2) + (lo + 72.5) * (lo + 72.5) * 0.4) / 0.5);
             d.turbGrid.push_back({la, lo, e});
         }
+    d.turbGridDLat = 0.2; d.turbGridDLon = 0.27;
     d.wsOn = true;
 
     ImGui::CreateContext();
@@ -207,6 +216,7 @@ int main(int argc, char** argv) {
     int tw = 0, th = 0;
     io.Fonts->GetTexDataAsAlpha8(&tex, &tw, &th);
     io.Fonts->SetTexID((ImTextureID)1);
+    if (uiLogoRgba(g_logo, g_lw, g_lh)) { f.logo = (void*)(intptr_t)2; f.logoAspect = (float)g_lw / (float)g_lh; }
 
     const char* names[] = {"overview", "airports", "radar", "winds", "turbulence", "services", "settings"};
     int frames = 0;
@@ -248,7 +258,7 @@ int main(int argc, char** argv) {
         std::printf("wrote %s\n", p.c_str());
     }
     // the radar tab heading up with every layer on (the rotation eases in: run frames until it has arrived)
-    d.headingDeg = 220; d.forceDial = 1; d.forceLayers = 7;
+    d.headingDeg = 220; d.forceDial = 1; d.forceLayers = 7; d.forcePirep = 2;
     for (int fr = 0; fr < 40; ++fr) {
         io.DeltaTime = 1.0f / 30.0f;
         ImGui::NewFrame();
@@ -264,7 +274,29 @@ int main(int argc, char** argv) {
         if (!writePng(cv, out + "/ui_radar_layers.png")) return 1;
         std::printf("wrote %s\n", (out + "/ui_radar_layers.png").c_str());
     }
-    d.forceDial = 0; d.forceLayers = 1;
+    d.forceDial = 0; d.forceLayers = 1; d.forcePirep = -1;
+    // X-Plane's real weather on: the warning over a locked window; then the weather off: the settings greyed out
+    for (int pass = 0; pass < 2; ++pass) {
+        d.xpRealWeather = pass == 0;
+        Config off = cfg; off.enabled = false;
+        if (pass == 1) d.cfg = &off;
+        for (int fr = 0; fr < 3; ++fr) {
+            io.DeltaTime = 1.0f / 30.0f;
+            ImGui::NewFrame();
+            d.forceTab = fr == 0 ? (pass == 0 ? 0 : 6) : -1;
+            UiActions act;
+            uiDraw(d, f, W, H, false, act);
+            ImGui::Render();
+            ++frames;
+        }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        const std::string p = out + (pass == 0 ? "/ui_realweather.png" : "/ui_settings_off.png");
+        if (!writePng(cv, p)) return 1;
+        std::printf("wrote %s\n", p.c_str());
+        d.cfg = &cfg;
+    }
+    d.xpRealWeather = false;
     // no data yet, and data with nothing in it
     UiData empty; empty.cfg = &cfg; empty.now = now; empty.status1 = "Starting...";
     FetchResult bare; bare.fetchedAt = now;

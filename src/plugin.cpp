@@ -492,6 +492,7 @@ struct UiTurbState {
     std::vector<bool> filled;   // the layer had no data of its own (filled from the layers around it)
     std::vector<wx::UiTurbCell> grid;   // turbulence around the aircraft at its altitude, for the radar map (every 10 s)
     std::time_t gridAt = 0;
+    double gridDLat = 0.2, gridDLon = 0.27;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
     std::string wsStrongest;
 } g_uiTs;
@@ -650,6 +651,7 @@ void turbulenceTick() {
                     if (std::strcmp(g.source, "none") == 0) continue;
                     g_uiTs.grid.push_back({la, lo, g.edr});
                 }
+            g_uiTs.gridDLat = 12.0 / 60.0; g_uiTs.gridDLon = 12.0 / (60.0 * kx);
         }
     }
     if (now >= t.nextLog || hereSource != t.lastSource) {
@@ -2809,7 +2811,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.status1 = g_status1; d.status2 = g_status2;
     d.xpRealWeather = g_xpRealWx;
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence;
-    d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid;
+    d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
     d.reports = g_mapReports;
     d.wsOn = g_cfg.enabled && g_cfg.windshear;
     d.wsSources = g_uiTs.wsSources; d.wsHigh = g_uiTs.wsHigh; d.wsMed = g_uiTs.wsMed; d.wsLow = g_uiTs.wsLow; d.wsStrongest = g_uiTs.wsStrongest;

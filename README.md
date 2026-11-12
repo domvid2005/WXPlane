@@ -119,12 +119,17 @@ Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, 
 * **Radar** - the radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
   The map has three layers (buttons above it): **Map** (coastlines, borders, state/province lines and lakes from Natural Earth,
   public domain, embedded - no map downloads), **Turb** (the turbulence at the aircraft's altitude on a 12 nm grid, 300 x 300 nm,
-  from the realistic-turbulence data) and **PIREPs** (pilot reports as triangles coloured by turbulence, labelled with their level).
-  Click the map or the wind dial to turn both from north up to heading up and back (an eased turn; the aircraft symbol uses its
-  heading, not its ground track, so it no longer swings around on the ground).
+  from the realistic-turbulence data) and **PIREPs** (pilot reports as triangles: urgent UUA red, routine UA orange, labelled with
+  their level). On the Radar tab, click a report for a small window with its time, level, aircraft, turbulence, distance and text.
+  The mouse wheel over the map zooms through 1, 2, 5, 10, 20, 40, 80 and 160 nm (or the - / + buttons). Click the wind dial to turn
+  the dial and the map between **North Lock** and **Airplane Heading Lock** (an eased turn; the aircraft symbol uses its heading,
+  not its ground track, so it no longer swings around on the ground).
 * **Winds & Temps** - the profile at the aircraft every 1,000-2,000 ft up to FL600, with ISA deviation and the tropopause.
 * **Turbulence** - EDR by altitude at the aircraft, the nearby pilot reports, windshear.
-* **Settings** - every on/off setting and the Max turbulence slider (the 3.0 menu).
+* **Settings** - every on/off setting and the Max turbulence slider (the 3.0 menu). With the weather off, the other settings are
+  greyed out and cannot be changed.
+
+When X-Plane's own real weather is on, a red warning covers the window and nothing in it can be clicked until it is turned off.
 * **Services** - every data service with its state.
 
 Refresh and Pop out are at the top right. The window follows X-Plane's UI scale (its text is rebuilt at the screen's pixel density),
