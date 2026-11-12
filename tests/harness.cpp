@@ -990,7 +990,7 @@ int main() {
         CHECK(g_drawn.find("METAR  KICT " + g_stampA + " 00000KT 1/4SM FG VV001") != std::string::npos);
         CHECK(g_drawn.find("ATIS INFO D") != std::string::npos);
         CHECK(g_drawn.find("FOG") != std::string::npos);                 // "Applied" line mentions the fog layer
-        CHECK(g_drawn.find("winds/temps aloft") != std::string::npos);
+        CHECK(g_drawn.find("winds/temps aloft points nearby") == std::string::npos);   // the GFS points line was removed
         g_wheelCb((void*)99, 0, 0, 0, -5, nullptr);                       // scroll down, then back to the top
         g_drawn.clear(); g_drawCb((void*)99, nullptr);
         g_wheelCb((void*)99, 0, 0, 0, 50, nullptr);
@@ -1110,7 +1110,7 @@ int main() {
         g_menuHandler(nullptr, (void*)(intptr_t)5);
         g_drawn.clear();
         if (g_drawCb) g_drawCb((void*)99, nullptr);
-        CHECK(g_drawn.find("Radar: NOAA MRMS (CONUS)") != std::string::npos);
+        CHECK(g_drawn.find("Radar - US: NOAA MRMS (CONUS)") != std::string::npos);
         CHECK(g_drawn.find("dBZ") != std::string::npos);
         // turning radar off removes every storm record again
         int er1 = g_erases;

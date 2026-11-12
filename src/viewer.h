@@ -21,6 +21,11 @@ struct ViewLine {
 std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, const Config& cfg, std::time_t now,
                                      const std::vector<ServiceStatus>* extra = nullptr);
 
+// The radar region at a position: "US" (NOAA MRMS), "Europe" (EUMETNET OPERA), or "" where no radar composite covers.
+std::string radarRegion(double lat, double lon);
+// "NOAA MRMS" / "EUMETNET OPERA" for a region, "" for none.
+std::string radarProvider(const std::string& region);
+
 // Greedy word wrap on a character budget (the window uses real font metrics instead; this is the fallback/test form).
 std::vector<std::string> wrapText(const std::string& s, size_t maxChars);
 

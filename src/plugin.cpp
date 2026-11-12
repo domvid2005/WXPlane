@@ -1791,7 +1791,11 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     char l1[160], l2[160];
     std::string fogNote = fogCount ? ", fog at " + std::to_string(fogCount) : "";
     std::snprintf(l1, sizeof l1, "Updated %s: %d METAR, %d ATIS%s", t, res.metarCount, res.atisCount, fogNote.c_str());
-    std::string radarNote = !g_cfg.radar ? "Radar: off" : (res.radar.ok ? "Radar: " + std::to_string(stormCount) + " storm cells" : "Radar: " + (res.radar.note.empty() ? std::string("none") : res.radar.note));
+    const std::string rReg = wx::radarRegion(res.centerLat, res.centerLon), rLab = rReg.empty() ? std::string("Radar") : "Radar (" + rReg + ")";
+    std::string radarNote = !g_cfg.radar ? "Radar: off"
+                          : res.radar.ok ? rLab + ": " + std::to_string(stormCount) + " storm cells"
+                          : rReg.empty() ? std::string("Radar: none here")
+                          : rLab + ": " + (res.radar.note.find("feed down") != std::string::npos ? std::string("feed down") : std::string("unavailable"));
     std::string aloftNote = g_cfg.useAloft ? (aloftCount ? "Winds aloft: " + std::to_string(res.aloft.size()) + " model points"
                                                           : "Winds aloft: " + (res.aloftNote.empty() ? std::string("none") : res.aloftNote))
                                            : "Winds aloft: off";

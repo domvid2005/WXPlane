@@ -931,15 +931,30 @@ int main() {
         CHECK(formatFl(11900, true) == "FL390" && formatFl(12000, false) == "~FL390" && formatFl(4700, true) == "FL150" && formatFl(0, true) == "FL000");
 
         // viewer text
-        FetchResult fr; fr.fetchedAt = now; fr.radar = rr; fr.radar.source = "NOAA MRMS (CONUS)"; fr.radar.dataTime = now - 240;
+        FetchResult fr; fr.fetchedAt = now; fr.radar = rr; fr.radar.source = "NOAA MRMS (CONUS)"; fr.radar.dataTime = now - 240; fr.centerLat = 37.65; fr.centerLon = -97.43;
         Station vs; vs.icao = "KVVV"; vs.rawMetar = "KVVV 301553Z 00000KT 10SM CLR 20/10 A3010"; parseReport(vs.rawMetar, vs.report); fr.stations = {vs};
         auto lines = buildViewLines(fr, true, sc, now);
         std::string all; for (auto& l : lines) all += l.text + "\n";
-        CHECK(all.find("Radar: NOAA MRMS (CONUS)") != std::string::npos && all.find("4 min old") != std::string::npos && all.find("dBZ") != std::string::npos);
-        fr.radar = RadarResult(); fr.radar.note = "no NOAA radar coverage here";
+        CHECK(all.find("Radar - US: NOAA MRMS (CONUS)") != std::string::npos && all.find("4 min old") != std::string::npos && all.find("dBZ") != std::string::npos);
+        fr.radar = RadarResult(); fr.radar.note = "MRMS: HTTP 503";
         lines = buildViewLines(fr, true, sc, now);
         all.clear(); for (auto& l : lines) all += l.text + "\n";
-        CHECK(all.find("Radar: none") != std::string::npos && all.find("no NOAA radar coverage here") != std::string::npos);
+        CHECK(all.find("Radar - US: NOAA MRMS unavailable") != std::string::npos && all.find("MRMS: HTTP 503") != std::string::npos);
+        // Europe: the header follows the region
+        fr.centerLat = 58.45; fr.centerLon = -3.08; fr.radar.note = "European radar (OPERA): feed down: newest composite is 20:10Z (4 h 48 min old)";
+        lines = buildViewLines(fr, true, sc, now);
+        all.clear(); for (auto& l : lines) all += l.text + "\n";
+        CHECK(all.find("Radar - Europe: EUMETNET OPERA unavailable") != std::string::npos && all.find("\nfeed down: newest composite is 20:10Z") != std::string::npos);
+        fr.radar = rr; fr.radar.source = "EUMETNET OPERA (Europe)";
+        lines = buildViewLines(fr, true, sc, now);
+        all.clear(); for (auto& l : lines) all += l.text + "\n";
+        CHECK(all.find("Radar - Europe: EUMETNET OPERA (Europe) - ") != std::string::npos);
+        // elsewhere: no network
+        fr.radar = RadarResult(); fr.radar.note = "no radar composite covers this area"; fr.centerLat = 35.55; fr.centerLon = 139.78;
+        lines = buildViewLines(fr, true, sc, now);
+        all.clear(); for (auto& l : lines) all += l.text + "\n";
+        CHECK(all.find("Radar: no coverage here") != std::string::npos && all.find("MRMS unavailable") == std::string::npos);
+        CHECK(radarRegion(40.47, -3.56) == "Europe" && radarRegion(40.64, -73.78) == "US" && radarRegion(61.17, -150.0) == "US" && radarRegion(-33.9, 151.2).empty());
         sc.radar = false; lines = buildViewLines(fr, true, sc, now);
         all.clear(); for (auto& l : lines) all += l.text + "\n";
         CHECK(all.find("Radar: off") != std::string::npos);
@@ -964,7 +979,7 @@ int main() {
         CHECK(all.find("METAR  KAAA 301553Z") != std::string::npos);
         CHECK(all.find("ATIS   KBBB ATIS INFO C") != std::string::npos);
         CHECK(all.find("ATIS C") != std::string::npos);                 // letter in the header
-        CHECK(all.find("ABI") != std::string::npos);
+        CHECK(all.find("ABI") == std::string::npos && all.find("winds/temps aloft points nearby") == std::string::npos);   // the GFS points line was removed
         CHECK(all.find("ATIS   KAAA") == std::string::npos);            // no ATIS block for a station without one
         CHECK(buildViewLines(fr, false, cfg, now).size() == 2);         // nothing downloaded yet
         // data services at the bottom, coloured by state; a report that already starts with "METAR" is not labelled twice
@@ -976,7 +991,8 @@ int main() {
             ServiceStatus o{"EUMETNET OPERA", "radar storms (Europe)", SvcState::Down, "feed down: newest composite is 20:10Z (4 h 48 min old)", 0};
             ServiceStatus w{"Open-Meteo (NOAA GFS)", "winds and temperatures aloft", SvcState::Degraded, "unavailable, using the earlier download", now - 1800};
             sr.services = {m, o, w};
-            std::vector<ServiceStatus> extra = {ServiceStatus{"NOAA GTGN", "turbulence (US)", SvcState::NotHere, "outside the US", 0}};
+            std::vector<ServiceStatus> extra = {ServiceStatus{"D-ATIS (clowd.io)", "ATIS", SvcState::NotHere, "no digital ATIS for the airports nearby", 0},
+                                                ServiceStatus{"NOAA GTGN", "turbulence (US)", SvcState::NotHere, "outside the US", 0}};   // hidden: the other region
             auto sv = buildViewLines(sr, true, cfg, now, &extra);
             std::string t; int ok = 0, down = 0, warn = 0, idle = 0; size_t hdr = 0, last = 0;
             for (size_t i = 0; i < sv.size(); ++i) {
@@ -988,7 +1004,7 @@ int main() {
             CHECK(hdr > 0 && last == hdr + 4 && ok == 1 && down == 1 && warn == 1 && idle == 1);
             CHECK(t.find("DOWN   EUMETNET OPERA - radar storms (Europe): feed down: newest composite is 20:10Z") != std::string::npos);
             CHECK(t.find("(last good ") != std::string::npos && t.find("30 min ago)") != std::string::npos);
-            CHECK(t.find("not used here   NOAA GTGN") != std::string::npos);
+            CHECK(t.find("not used here   D-ATIS") != std::string::npos && t.find("NOAA GTGN") == std::string::npos);
             CHECK(t.find("METAR METAR") == std::string::npos && t.find("METAR EGPC 120050Z") != std::string::npos);
             CHECK(buildViewLines(sr, false, cfg, now, &extra).size() == 2 + 2 + 4);   // also before the first download
         }

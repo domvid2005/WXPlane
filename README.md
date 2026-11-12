@@ -108,7 +108,9 @@ X-Plane blends cloud layers between neighbouring reports slot by slot. When any 
 
 The bottom of the "Show Local METAR/ATIS Data..." window lists every service WXPlane downloads from, with its state: **OK** (green),
 **DEGRADED** (amber: the last download failed and an earlier one is in use), **DOWN** (red), or "not used here" / "off" / "waiting"
-(grey), with what it last delivered and, when it is failing, when it last worked:
+(grey), with what it last delivered and, when it is failing, when it last worked. Radar and turbulence services that belong to
+another region (MRMS and GTGN outside the US, OPERA outside Europe) are left out. The radar section above it is titled by region:
+"Radar - US: NOAA MRMS ...", "Radar - Europe: EUMETNET OPERA ...", or "Radar: no coverage here" elsewhere.
 
 * NOAA Aviation Weather Center - METARs; D-ATIS (clowd.io) - ATIS
 * Open-Meteo (NOAA GFS) - winds and temperatures aloft; clouds aloft and open-water weather

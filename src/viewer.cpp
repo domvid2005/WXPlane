@@ -37,6 +37,9 @@ static void addServices(std::vector<ViewLine>& v, const std::vector<ServiceStatu
     v.push_back({LineKind::Blank, ""});
     v.push_back({LineKind::Header, "Data services"});
     for (const auto& s : all) {
+        // the other region's radar and turbulence: only the services that apply where the aircraft is are listed
+        if (s.state == SvcState::NotHere && (s.use.find("(US)") != std::string::npos || s.use.find("(Europe)") != std::string::npos ||
+                                             s.use.find("(outside the US)") != std::string::npos)) continue;
         LineKind k = LineKind::SvcIdle;
         if (s.state == SvcState::Ok) k = LineKind::SvcOk;
         else if (s.state == SvcState::Degraded) k = LineKind::SvcWarn;
@@ -79,13 +82,20 @@ std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, cons
     }
     if (res.stations.empty()) { add(LineKind::Note, "No METAR stations were found near the aircraft."); add(LineKind::Blank, ""); }
 
-    // Radar
-    if (cfg.radar) {
+    // Radar: the header names the region and its network, so it changes as the aircraft moves between the US, Europe and elsewhere
+    const std::string region = radarRegion(res.centerLat, res.centerLon);
+    if (!cfg.radar) {
+        add(LineKind::Header, "Radar: off");
+    } else if (region.empty() && !res.radar.ok) {
+        add(LineKind::Header, "Radar: no coverage here");
+        add(LineKind::Note, "Radar storms cover the US (NOAA MRMS) and Europe (EUMETNET OPERA). Here, thunderstorms come from the METARs (TS, CB).");
+    } else {
         const RadarResult& r = res.radar;
+        const std::string reg = region.empty() ? std::string("") : " - " + region;
         if (r.ok) {
             std::string age;
             if (r.dataTime > 0) age = fmt(", valid %s (%ld min old)", hhmmZ(r.dataTime).c_str(), (long)((now - r.dataTime) / 60));
-            add(LineKind::Header, fmt("Radar: %s - %zu storm cells applied of %d echo blocks%s", r.source.c_str(), r.cells.size(), r.echoBlocks, age.c_str()));
+            add(LineKind::Header, fmt("Radar%s: %s - %zu storm cells applied of %d echo blocks%s", reg.c_str(), r.source.c_str(), r.cells.size(), r.echoBlocks, age.c_str()));
             add(LineKind::Note, r.topsFromRadar ? "Storm tops from radar echo tops." : "Storm tops estimated from reflectivity (no echo-top data).");
             if (!r.note.empty()) add(LineKind::Note, r.note);
             std::vector<const RadarCell*> strong;
@@ -97,25 +107,27 @@ std::vector<ViewLine> buildViewLines(const FetchResult& res, bool haveData, cons
                                            c.topM / 0.3048, c.topKnown ? "" : " (est.)", c.distNm, c.lat, c.lon));
             }
         } else {
-            add(LineKind::Header, "Radar: none");
-            add(LineKind::Note, r.note.empty() ? std::string("not fetched yet") : r.note);
+            add(LineKind::Header, "Radar" + reg + ": " + radarProvider(region) + " unavailable");
+            std::string note = r.note.empty() ? std::string("not fetched yet") : r.note;
+            const std::string pre = "European radar (OPERA): ";
+            if (note.compare(0, pre.size(), pre) == 0) note = note.substr(pre.size());
+            add(LineKind::Note, note);
         }
-    } else {
-        add(LineKind::Header, "Radar: off");
     }
     add(LineKind::Blank, "");
 
-    add(LineKind::Header, fmt("Global-model (GFS) winds/temps aloft points nearby: %zu", res.aloft.size()));
-    if (!res.aloftNote.empty()) add(LineKind::Note, res.aloftNote);
-    std::string row;
-    for (const auto& a : res.aloft) {
-        std::string one = a.id + (a.located ? "" : "?") + "  ";
-        if (row.size() + one.size() > 70) { add(LineKind::Note, row); row.clear(); }
-        row += one;
-    }
-    if (!row.empty()) add(LineKind::Note, row);
     addServices(v, res.services, extra, now);
     return v;
+}
+
+std::string radarRegion(double lat, double lon) {
+    if (!mrmsRegionsFor(lat, lon).empty()) return "US";
+    if (operaCovers(lat, lon)) return "Europe";
+    return "";
+}
+
+std::string radarProvider(const std::string& region) {
+    return region == "US" ? "NOAA MRMS" : region == "Europe" ? "EUMETNET OPERA" : "";
 }
 
 std::vector<std::string> wrapText(const std::string& s, size_t maxChars) {
