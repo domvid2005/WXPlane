@@ -620,7 +620,7 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
             const double off = localOffsetAt(d, st.lat, st.lon, est);
             const std::string zn = zoneText(st.lat, st.lon, off, d.now);
             if (full) {   // the airport page: local time and Zulu (the home page has them in the box below the card)
-                ImGui::TableNextColumn(); field(f, "Local time", (est ? "~" : "") + clockText(d.now + (std::time_t)off, false) + " " + zn);
+                ImGui::TableNextColumn(); field(f, "Local time", (est ? "~" : "") + clockText(d.now + (std::time_t)off, false) + " " + zn + (zn.rfind("UTC", 0) == 0 ? std::string() : "  (" + utcOffsetText(off) + ")"));
                 ImGui::TableNextColumn(); field(f, "Zulu", clockText(d.now, false) + "Z  UTC");
             }
             {   // sunrise and sunset today (local; with Zulu on the airport page)
@@ -2319,7 +2319,10 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | (scroll ? ImGuiTableFlags_ScrollY : 0);
     // no category column: the ICAO itself is coloured by its flight category (VFR green, MVFR blue, IFR red, LIFR magenta)
     if (!ImGui::BeginTable("near", 5, fl)) return;
-    ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
+    // the ICAO header is one button for two orders: A-Z, Z-A, then flight category (VFR first), worst first, then off. While it
+    // sorts by category its label reads "Cat", in blue. (It sorts on its own: the other columns' sorting is ignored meanwhile.)
+    static int icaoMode = 0;   // 0 off, 1 A-Z, 2 Z-A, 3 category VFR first, 4 category worst first
+    ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, textColW("WWWW") + 6, kSortIcao);
     ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
     // the wind gets the room for a gusting wind and its reference (true or magnetic in the header)
     ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind °T###wind", ImGuiTableColumnFlags_WidthFixed, textColW("000/00G00"), kSortWind);
@@ -2327,9 +2330,30 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     ImGui::TableSetupColumn("Ceiling", ImGuiTableColumnFlags_WidthStretch, textColW("00,000"), kSortCeil);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
-    ImGui::TableHeadersRow();
+    ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+    for (int c = 0; c < 5; ++c) {
+        if (!ImGui::TableSetColumnIndex(c)) continue;
+        if (c == 0) {
+            static const char* lbl[] = {"ICAO###icao", "ICAO \xe2\x96\xb2###icao", "ICAO \xe2\x96\xbc###icao", "Cat \xe2\x96\xb2###icao", "Cat \xe2\x96\xbc###icao"};
+            if (icaoMode >= 3) ImGui::PushStyleColor(ImGuiCol_Text, v4(cAccent));
+            ImGui::TableHeader(lbl[icaoMode]);
+            if (icaoMode >= 3) ImGui::PopStyleColor();
+            if (ImGui::IsItemClicked()) icaoMode = (icaoMode + 1) % 5;
+        } else ImGui::TableHeader(ImGui::TableGetColumnName(c));
+    }
     ImGui::PopStyleColor();
     sortStations(v, d);
+    if (ImGuiTableSortSpecs* sp = ImGui::TableGetSortSpecs())   // another column clicked: the ICAO order makes way
+        if (sp->SpecsDirty) { if (sp->SpecsCount > 0) icaoMode = 0; sp->SpecsDirty = false; }
+    if (icaoMode > 0)
+        std::stable_sort(v.begin(), v.end(), [&](const Station* x, const Station* y) {
+            int c = 0;
+            if (icaoMode <= 2) c = x->icao.compare(y->icao);
+            else c = catRank(flightCategory(x->report)) - catRank(flightCategory(y->report));
+            if (c != 0) return (icaoMode == 2 || icaoMode == 4) ? c > 0 : c < 0;
+            const double da = distTo(d, *x), db = distTo(d, *y);   // equal: nearest first
+            return da < db - 1e-6;
+        });
     if (maxRows > 0 && (int)v.size() > maxRows) v.resize((size_t)maxRows);
     for (const Station* s : v) {
         const Report& r = s->report;
@@ -2342,6 +2366,17 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
         ImGui::TableSetColumnIndex(4); { const int c = ceilingFt(r); if (c < 0) muted("none"); else ImGui::TextUnformatted(ftText(c).c_str()); }
     }
     ImGui::EndTable();
+}
+
+// The tabs along the top: a little larger (padding, the bold font) and clearer than ImGui's defaults
+ImFont*& tabFont() { static ImFont* f = nullptr; return f; }
+bool bigTab(const char* label, bool* open, ImGuiTabItemFlags flags) {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 7));
+    if (tabFont()) ImGui::PushFont(tabFont());
+    const bool r = ImGui::BeginTabItem(label, open, flags);
+    if (tabFont()) ImGui::PopFont();
+    ImGui::PopStyleVar();
+    return r;
 }
 
 bool panelBegin(const char* id, ImVec2 size, ImGuiWindowFlags extra = 0) {
@@ -2792,9 +2827,9 @@ void uiStyle() {
     c[ImGuiCol_Header] = v4(IM_COL32(43, 69, 102, 160));
     c[ImGuiCol_HeaderHovered] = v4(IM_COL32(52, 82, 120, 180));
     c[ImGuiCol_HeaderActive] = v4(IM_COL32(60, 96, 140, 200));
-    c[ImGuiCol_Tab] = v4(IM_COL32(19, 20, 23, 255));
-    c[ImGuiCol_TabHovered] = v4(IM_COL32(38, 40, 45, 255));
-    c[ImGuiCol_TabSelected] = v4(cBg);
+    c[ImGuiCol_Tab] = v4(IM_COL32(32, 34, 40, 255));
+    c[ImGuiCol_TabHovered] = v4(IM_COL32(52, 58, 70, 255));
+    c[ImGuiCol_TabSelected] = v4(IM_COL32(40, 52, 72, 255));
     c[ImGuiCol_TabSelectedOverline] = v4(cAccent);
     c[ImGuiCol_TabDimmed] = v4(IM_COL32(19, 20, 23, 255));
     c[ImGuiCol_TabDimmedSelected] = v4(cBg);
@@ -2935,11 +2970,12 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     }
     int bad = 0;
     for (const auto& s : allServices(d)) if (s.state == SvcState::Down || s.state == SvcState::Degraded) ++bad;
+    tabFont() = f.bold;
     if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_None)) {
-        if (ImGui::BeginTabItem("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem(fmt("Airports (%zu)###air", d.res->stations.size()).c_str(), nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Winds & Temps", nullptr, d.forceTab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAloft(d, f); ImGui::EndTabItem(); }
+        if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
+        if (bigTab("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
+        if (bigTab(fmt("Airports (%zu)###air", d.res->stations.size()).c_str(), nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
+        if (bigTab("Winds & Temps", nullptr, d.forceTab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAloft(d, f); ImGui::EndTabItem(); }
         {   // the Turbulence tab only while turbulence & windshear are on; it fades out (and back in) instead of vanishing
             static float vis = -1;
             const bool want = !d.cfg || d.cfg->realisticTurbulence || d.cfg->windshear;
@@ -2951,13 +2987,13 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
                 const float e = vis * vis * (3 - 2 * vis);
                 if (vis < 1.0f) ImGui::SetNextItemWidth(std::max(1.0f, full * e));
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * e);
-                const bool open = ImGui::BeginTabItem("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
+                const bool open = bigTab("Turbulence", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
                 ImGui::PopStyleVar();
                 if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
             }
         }
-        if (ImGui::BeginTabItem(bad ? fmt("Services (%d)###svc", bad).c_str() : "Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Settings", nullptr, d.forceTab == 6 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabSettings(d, f, act); ImGui::EndTabItem(); }
+        if (bigTab(bad ? fmt("Services (%d)###svc", bad).c_str() : "Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }
+        if (bigTab("Settings", nullptr, d.forceTab == 6 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabSettings(d, f, act); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     finish();
