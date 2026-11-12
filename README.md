@@ -120,8 +120,8 @@ Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, 
   category, the aircraft in the middle), winds and temperatures aloft with the tropopause, turbulence and windshear at the aircraft
   with the Max turbulence slider, and the data services.
 * **Airports** - a search box for any airport in the world (its METAR and, where D-ATIS has one, its ATIS; shown only, X-Plane's
-  weather is not changed), then every station in use. Click a column header to sort by it (again for the other way); equal values
-  are sorted A-Z by ICAO code. The Overview's nearby list sorts the same way. Every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
+  weather is not changed), then every station in use. Click a column header to sort by it (again for the other way, a third time
+  back to unsorted: nearest first); equal values are sorted nearest first. The arrow only shows while a column is sorted. The Overview's nearby list sorts the same way. Every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
   its report, its ATIS and exactly what WXPlane sent to X-Plane for it.
 * **Map** (was Radar) - the map larger: drag it to move it, "Center on aircraft" brings it back; the zoom eases between steps; the
   **Radar** button turns the echoes on and off. The radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
