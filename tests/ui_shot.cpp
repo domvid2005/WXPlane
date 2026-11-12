@@ -1,0 +1,242 @@
+// Off-line picture of the WXPlane weather window: draws the real UI (src/wxui.cpp) with Dear ImGui and rasterizes ImGui's draw lists
+// in software into PNG files, one per tab, so the layout can be checked without X-Plane or a GPU. Also a smoke test: every tab is
+// drawn for a few frames with full data, with no data and with mostly empty data.
+//   ui_shot <out-dir> [scale]
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#ifdef WX_UI_PNG
+#include <zlib.h>
+#endif
+
+#include "imgui.h"
+#include "metar.h"
+#include "wxmodel.h"
+#include "wxui.h"
+
+using namespace wx;
+
+namespace {
+
+struct Canvas {
+    int w, h;
+    std::vector<float> rgb;
+    Canvas(int W, int H) : w(W), h(H), rgb((size_t)W * H * 3, 0.0f) {}
+};
+
+void raster(Canvas& cv, const ImDrawData* dd, const unsigned char* tex, int tw, int th, float scale) {
+    for (int n = 0; n < dd->CmdListsCount; ++n) {
+        const ImDrawList* cl = dd->CmdLists[n];
+        for (const ImDrawCmd& cmd : cl->CmdBuffer) {
+            if (cmd.UserCallback) continue;
+            const int cx0 = std::max(0, (int)std::floor(cmd.ClipRect.x * scale)), cy0 = std::max(0, (int)std::floor(cmd.ClipRect.y * scale));
+            const int cx1 = std::min(cv.w, (int)std::ceil(cmd.ClipRect.z * scale)), cy1 = std::min(cv.h, (int)std::ceil(cmd.ClipRect.w * scale));
+            for (unsigned e = 0; e + 2 < cmd.ElemCount; e += 3) {
+                const ImDrawVert* v[3];
+                for (int k = 0; k < 3; ++k) v[k] = &cl->VtxBuffer[cmd.VtxOffset + cl->IdxBuffer[cmd.IdxOffset + e + k]];
+                float X[3], Y[3];
+                for (int k = 0; k < 3; ++k) { X[k] = v[k]->pos.x * scale; Y[k] = v[k]->pos.y * scale; }
+                const float area = (X[1] - X[0]) * (Y[2] - Y[0]) - (X[2] - X[0]) * (Y[1] - Y[0]);
+                if (std::fabs(area) < 1e-6f) continue;
+                const int x0 = std::max(cx0, (int)std::floor(std::min({X[0], X[1], X[2]}))), x1 = std::min(cx1 - 1, (int)std::ceil(std::max({X[0], X[1], X[2]})));
+                const int y0 = std::max(cy0, (int)std::floor(std::min({Y[0], Y[1], Y[2]}))), y1 = std::min(cy1 - 1, (int)std::ceil(std::max({Y[0], Y[1], Y[2]})));
+                for (int y = y0; y <= y1; ++y)
+                    for (int x = x0; x <= x1; ++x) {
+                        const float px = x + 0.5f, py = y + 0.5f;
+                        float b0 = ((X[1] - px) * (Y[2] - py) - (X[2] - px) * (Y[1] - py)) / area;
+                        float b1 = ((X[2] - px) * (Y[0] - py) - (X[0] - px) * (Y[2] - py)) / area;
+                        float b2 = 1.0f - b0 - b1;
+                        if (b0 < -1e-4f || b1 < -1e-4f || b2 < -1e-4f) continue;
+                        float col[4] = {0, 0, 0, 0};
+                        for (int k = 0; k < 4; ++k) {
+                            const float c0 = ((v[0]->col >> (8 * k)) & 255) / 255.0f, c1 = ((v[1]->col >> (8 * k)) & 255) / 255.0f, c2 = ((v[2]->col >> (8 * k)) & 255) / 255.0f;
+                            col[k] = b0 * c0 + b1 * c1 + b2 * c2;
+                        }
+                        const float u = b0 * v[0]->uv.x + b1 * v[1]->uv.x + b2 * v[2]->uv.x, w = b0 * v[0]->uv.y + b1 * v[1]->uv.y + b2 * v[2]->uv.y;
+                        // bilinear sample of the alpha atlas
+                        const float fx = u * tw - 0.5f, fy = w * th - 0.5f;
+                        const int ix = (int)std::floor(fx), iy = (int)std::floor(fy);
+                        const float ax = fx - ix, ay = fy - iy;
+                        auto T = [&](int a, int b) { a = std::max(0, std::min(tw - 1, a)); b = std::max(0, std::min(th - 1, b)); return tex[(size_t)b * tw + a] / 255.0f; };
+                        const float ta = (T(ix, iy) * (1 - ax) + T(ix + 1, iy) * ax) * (1 - ay) + (T(ix, iy + 1) * (1 - ax) + T(ix + 1, iy + 1) * ax) * ay;
+                        const float a = col[3] * ta;
+                        float* o = &cv.rgb[((size_t)y * cv.w + x) * 3];
+                        for (int k = 0; k < 3; ++k) o[k] = o[k] * (1 - a) + col[k] * a;
+                    }
+            }
+        }
+    }
+}
+
+#ifdef WX_UI_PNG
+void be32(std::string& s, uint32_t v) { for (int i = 3; i >= 0; --i) s.push_back((char)((v >> (8 * i)) & 255)); }
+void chunk(std::string& png, const char* type, const std::string& data) {
+    be32(png, (uint32_t)data.size());
+    std::string td = std::string(type, 4) + data;
+    png += td;
+    be32(png, (uint32_t)crc32(0, (const Bytef*)td.data(), (uInt)td.size()));
+}
+
+bool writePng(const Canvas& cv, const std::string& path) {
+    std::string raw;
+    raw.reserve((size_t)cv.h * (cv.w * 3 + 1));
+    for (int y = 0; y < cv.h; ++y) {
+        raw.push_back(0);
+        for (int x = 0; x < cv.w; ++x)
+            for (int k = 0; k < 3; ++k) raw.push_back((char)(unsigned char)std::lround(std::min(1.0f, std::max(0.0f, cv.rgb[((size_t)y * cv.w + x) * 3 + k])) * 255));
+    }
+    uLongf zn = compressBound(raw.size());
+    std::string z(zn, '\0');
+    if (compress2((Bytef*)&z[0], &zn, (const Bytef*)raw.data(), raw.size(), 6) != Z_OK) return false;
+    z.resize(zn);
+    std::string png = "\x89PNG\r\n\x1a\n", ihdr;
+    be32(ihdr, (uint32_t)cv.w); be32(ihdr, (uint32_t)cv.h);
+    ihdr += std::string("\x08\x02\x00\x00\x00", 5);
+    chunk(png, "IHDR", ihdr);
+    chunk(png, "IDAT", z);
+    chunk(png, "IEND", "");
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    std::fwrite(png.data(), 1, png.size(), f);
+    std::fclose(f);
+    return true;
+}
+#else
+bool writePng(const Canvas&, const std::string&) { return true; }   // no zlib here: the frames are still drawn and rasterized
+#endif
+
+Station mk(const char* id, double lat, double lon, double elevM, const char* raw) {
+    Station s;
+    s.icao = id; s.lat = lat; s.lon = lon; s.elevM = elevM; s.rawMetar = raw;
+    parseReport(raw, s.report);
+    return s;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    const std::string out = argc > 1 ? argv[1] : ".";
+    const float scale = argc > 2 ? (float)std::atof(argv[2]) : 1.0f;
+    const float W = 1240, H = 820;
+    const std::time_t now = 1794451800;   // 2026-11-12 02:50Z
+
+    // Boston, 2026-11-12 (from the user's log), with a made-up line of showers to the west so the radar has something to draw
+    FetchResult res;
+    res.ok = true; res.fetchedAt = now - 70; res.centerLat = 42.36; res.centerLon = -71.01;
+    res.stations = {
+        mk("KBOS", 42.3606, -71.0106, 6, "KBOS 120154Z 03006KT 10SM OVC200 10/03 A2988 RMK AO2 SLP118"),
+        mk("KBED", 42.4700, -71.2890, 40, "KBED 120156Z AUTO 00000KT 10SM CLR 08/02 A2989 RMK AO2"),
+        mk("KOWD", 42.1905, -71.1729, 15, "KOWD 120153Z AUTO 36004KT 10SM CLR 08/03 A2989 RMK AO2"),
+        mk("KBVY", 42.5842, -70.9165, 33, "KBVY 120153Z AUTO 00000KT 10SM CLR 07/03 A2988 RMK AO2"),
+        mk("KLWM", 42.7172, -71.1234, 45, "KLWM 120154Z AUTO 32003KT 10SM CLR 06/01 A2989"),
+        mk("KORH", 42.2673, -71.8757, 306, "KORH 120154Z AUTO 31005KT 10SM SCT055 BKN070 06/M01 A2990"),
+        mk("KPVD", 41.7240, -71.4282, 17, "KPVD 120151Z AUTO 32004KT 10SM FEW050 09/02 A2989"),
+        mk("KEWB", 41.6761, -70.9569, 24, "KEWB 120153Z AUTO 00000KT 4SM -RA BR OVC014 08/06 A2988"),
+        mk("KHYA", 41.6693, -70.2804, 16, "KHYA 120156Z AUTO 02008KT 2SM RA BR OVC008 09/08 A2987"),
+        mk("KCON", 43.2027, -71.5023, 104, "KCON 120151Z AUTO 00000KT 10SM CLR 03/M01 A2990")};
+    res.stations[0].hasAtis = true; res.stations[0].atisLetter = "Y";
+    res.stations[0].atisText = "BOS ATIS INFO Y 0154Z. 03006KT 10SM OVC200 10/03 A2988. ILS 22L, DEP 22R. RWY 27 IS AP";
+    spreadHighCloud(res.stations, 80.0);
+    for (auto& s : res.stations) s.distNm = 0;
+    // winds aloft from the log (3x3 GFS points, here all the same profile)
+    const double prof[][4] = {{2441, 236, 2, 4}, {4705, 285, 13, -1}, {9793, 267, 24, -7}, {18291, 259, 47, -19}, {23614, 258, 55, -31},
+                              {30120, 250, 65, -45}, {34027, 255, 66, -52}, {38638, 255, 80, -57}, {44521, 262, 70, -59}, {52767, 260, 44, -60}, {60059, 274, 30, -62}};
+    for (int k = 0; k < 9; ++k) {
+        AloftStation a;
+        a.id = "GFS" + std::to_string(k); a.model = true; a.located = true;
+        a.lat = 41 + k / 3; a.lon = -72 + k % 3;
+        for (const auto& p : prof) { AloftLevel L; L.altFt = p[0]; L.hasWind = true; L.dirDeg = p[1]; L.speedKt = p[2]; L.hasTemp = true; L.tempC = p[3]; a.levels.push_back(L); }
+        res.aloft.push_back(a);
+    }
+    res.radar.ok = true; res.radar.attempted = true; res.radar.source = "NOAA MRMS (CONUS)"; res.radar.dataTime = now - 240; res.radar.topsFromRadar = true;
+    for (int i = 0; i < 26; ++i) {
+        RadarCell c;
+        c.lat = 41.75 + 0.05 * i + 0.04 * std::sin(i * 1.7); c.lon = -72.30 + 0.035 * i + 0.05 * std::cos(i * 2.3);
+        c.dbz = (float)(20 + 5 * ((i * 7) % 6)); c.dbzFine = c.dbz; c.rateMmH = (float)std::pow(10.0, (c.dbz - 23) / 16.0);
+        c.topM = 3000 + 250 * (i % 9); c.topKnown = true; c.key = "c" + std::to_string(i);
+        res.radar.cells.push_back(c);
+    }
+    res.radar.echoBlocks = (int)res.radar.cells.size();
+    res.services = {
+        {"NOAA Aviation Weather Center", "METARs", SvcState::Ok, "40 report(s)", now - 70},
+        {"D-ATIS (clowd.io)", "ATIS", SvcState::Ok, "1 airport(s)", now - 70},
+        {"Open-Meteo (NOAA GFS)", "winds and temperatures aloft", SvcState::Ok, "9 model point(s), downloaded 02:05Z", now - 2700},
+        {"Open-Meteo (NOAA GFS)", "clouds aloft, open-water weather", SvcState::Ok, "9 model point(s), downloaded 02:20Z", now - 1800},
+        {"NOAA MRMS", "radar storms (US)", SvcState::Ok, "CONUS, valid 02:46Z", now - 70},
+        {"EUMETNET OPERA", "radar storms (Europe)", SvcState::NotHere, "outside Europe", 0}};
+    Config cfg;
+
+    UiData d;
+    d.res = &res; d.haveData = true; d.cfg = &cfg; d.now = now;
+    d.havePos = true; d.lat = 42.3606; d.lon = -71.0106; d.altFt = 22; d.trackDeg = 220;
+    d.nextUpdateS = 192;
+    d.extraServices = {{"NOAA Aviation Weather Center", "pilot reports", SvcState::Degraded, "5 report(s), downloaded 02:40Z; failed: PIREPs: HTTP 502;", now - 600},
+                       {"NOAA GTGN", "turbulence (US)", SvcState::Ok, "analysis 02:30Z", now - 1200},
+                       {"ECMWF Open Data", "turbulence (outside the US)", SvcState::NotHere, "GTGN covers this area", 0}};
+    d.turbOn = true; d.turbEdr = 0.055; d.turbSource = "GTGN"; d.turbData = "GTGN 02:30Z";
+    const double alts[] = {1000, 2000, 3000, 4500, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000};
+    const double edrs[] = {0.06, 0.07, 0.05, 0.04, 0.03, 0.05, 0.08, 0.10, 0.14, 0.19, 0.12, 0.07, 0.04};
+    for (int k = 0; k < 13; ++k) d.turbProfile.push_back({alts[k], edrs[k], true});
+    auto snap = std::make_shared<hz::Snapshot>();
+    snap->fetched = now - 600;
+    const char* ints[] = {"LGT", "", "MOD", "LGT-MOD", "NEG"};
+    for (int k = 0; k < 5; ++k) { hz::Pirep p; p.lat = 42 + 0.4 * k; p.lon = -72 + 0.5 * k; p.altFt = 9000 + 6000 * k; p.intensity = ints[k]; p.acType = k % 2 ? "B738" : "A321"; p.obsTime = now - 900 * (k + 1); p.raw = "UA /OV ... /TB " + std::string(ints[k]); snap->pireps.push_back(p); }
+    d.reports = snap;
+    d.wsOn = true;
+
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(W, H);
+    uiStyle();
+    UiFonts f = uiLoadFonts(scale);
+    unsigned char* tex = nullptr;
+    int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsAlpha8(&tex, &tw, &th);
+    io.Fonts->SetTexID((ImTextureID)1);
+
+    const char* names[] = {"overview", "airports", "radar", "winds", "turbulence", "services"};
+    int frames = 0;
+    for (int tab = 0; tab < 6; ++tab) {
+        for (int fr = 0; fr < 3; ++fr) {
+            io.DeltaTime = 1.0f / 30.0f;
+            io.AddMousePosEvent(-1000, -1000);
+            ImGui::NewFrame();
+            d.forceTab = fr == 0 ? tab : -1;
+            UiActions act;
+            uiDraw(d, f, W, H, false, act);
+            ImGui::Render();
+            ++frames;
+        }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        const std::string p = out + "/ui_" + names[tab] + ".png";
+        if (!writePng(cv, p)) { std::printf("cannot write %s\n", p.c_str()); return 1; }
+        std::printf("wrote %s\n", p.c_str());
+    }
+    // no data yet, and data with nothing in it
+    UiData empty; empty.cfg = &cfg; empty.now = now; empty.status1 = "Starting...";
+    FetchResult bare; bare.fetchedAt = now;
+    UiData thin; thin.res = &bare; thin.haveData = true; thin.cfg = &cfg; thin.now = now;
+    for (UiData* x : {&empty, &thin})
+        for (int tab = 0; tab < 6; ++tab)
+            for (int fr = 0; fr < 2; ++fr) {
+                io.DeltaTime = 1.0f / 30.0f;
+                ImGui::NewFrame();
+                x->forceTab = fr == 0 ? tab : -1;
+                UiActions act;
+                uiDraw(*x, f, W, H, false, act);
+                ImGui::Render();
+                ++frames;
+            }
+    ImGui::DestroyContext();
+    std::printf("UI OK (%d frames)\n", frames);
+    return 0;
+}

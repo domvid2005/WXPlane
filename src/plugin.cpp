@@ -43,6 +43,11 @@
 #include "turbfetch.h"
 #include "wxgl.h"
 #include "viewer.h"
+#ifndef WX_HARNESS
+#include "xpimgui.h"
+#endif
+#include "wxui.h"
+#include "version.h"
 #include "wxmodel.h"
 
 namespace {
@@ -477,6 +482,15 @@ struct TurbState {
     std::string lastSource;
 } g_ts;
 
+// What the weather window shows about turbulence and windshear (main thread only)
+struct UiTurbState {
+    double edr = -1;
+    std::string source, data;
+    std::vector<wx::UiTurbLayer> profile;
+    int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
+    std::string wsStrongest;
+} g_uiTs;
+
 void turbLog(const char* fmt, ...) {
     char buf[900]; va_list ap; va_start(ap, fmt); std::vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
     XPLMDebugString((std::string("[WXPlane Turbulence] ") + buf + "\n").c_str());
@@ -585,6 +599,15 @@ void turbulenceTick() {
     std::string hereWhy;
     const double hereEdr = withReports(here, altFt, &hereWhy);
     const std::string hereSource = hereWhy.empty() ? std::string(here.source) : "pilot report floor";
+    {   // for the weather window
+        g_uiTs.edr = (here.gtgnEdr >= 0 || here.ecTi >= 0 || !hereWhy.empty()) ? hereEdr : -1;
+        g_uiTs.source = hereSource;
+        g_uiTs.data.clear();
+        if (in.gtgn) g_uiTs.data = "GTGN " + utcHM(in.gtgn->valid);
+        if (in.ecA) g_uiTs.data += (g_uiTs.data.empty() ? "" : " · ") + std::string("ECMWF ") + in.ecA->run;
+        g_uiTs.profile.clear();
+        for (int k = 0; k < t.n; ++k) g_uiTs.profile.push_back({altM[k] / 0.3048, t.edrS.size() > (size_t)k ? t.edrS[k] : 0.0, t.has.size() > (size_t)k && t.has[k]});
+    }
     if (now >= t.nextLog || hereSource != t.lastSource) {
         t.nextLog = now + std::chrono::seconds(60);
         if (hereSource != t.lastSource && !t.lastSource.empty()) turbLog("source changed: %s -> %s", t.lastSource.c_str(), hereSource.c_str());
@@ -973,6 +996,7 @@ void windshearTick() {
                       src.size(), hi, md, lo, src.empty() ? "" : "; strongest: ", top.c_str(), env.steerDirDeg, env.steerKt);
         const std::time_t now = std::time(nullptr);
         if (rl != lastRiskLine || now - lastRisk > 600) { wsLog("%s", rl); lastRiskLine = rl; lastRisk = now; }
+        g_uiTs.wsSources = (int)src.size(); g_uiTs.wsHigh = hi; g_uiTs.wsMed = md; g_uiTs.wsLow = lo; g_uiTs.wsStrongest = top;
         for (const auto& l : g_ws.step(simT, src, env)) wsLog("%s", l.c_str());
         sendNow = true;
     }
@@ -2509,7 +2533,7 @@ float flightLoop(float, float, int, void*) {
     return 0.25f;
 }
 
-// ---------------- "Show Local METAR/ATIS Data" window ----------------
+// ---------------- The text window (3.0; the test harness still uses it - the plugin opens the weather window, xpimgui.cpp) ----------------
 XPLMWindowID g_win = nullptr;
 int g_scroll = 0;                 // first visible wrapped line
 struct DrawLine { wx::LineKind kind; std::string text; };
@@ -2713,6 +2737,42 @@ void showWindow() {
     }
 }
 
+#ifndef WX_HARNESS
+// The weather window (4.0): fills the window's data from what the plugin already has, and acts on its buttons.
+void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
+    wx::UiData d;
+    d.res = &g_lastRes; d.haveData = g_haveLast; d.cfg = &g_cfg; d.now = std::time(nullptr);
+    d.extraServices = g_turbFetch.services(d.now);
+    if (g_drLat && g_drLon) { d.lat = XPLMGetDatad(g_drLat); d.lon = XPLMGetDatad(g_drLon); d.havePos = !(d.lat == 0 && d.lon == 0); }
+    if (g_drElev) d.altFt = XPLMGetDatad(g_drElev) / 0.3048;
+    if (g_drTrkFetch) d.trackDeg = XPLMGetDataf(g_drTrkFetch);
+    if (g_drGsFetch) d.gsKt = XPLMGetDataf(g_drGsFetch) * 1.943844;
+    d.busy = g_fetcher.busy();
+    if (g_everRequested && g_cfg.enabled) d.nextUpdateS = std::max(0.0, g_cfg.updateMinutes * 60.0 - std::chrono::duration<double>(Clock::now() - g_lastRequest).count());
+    d.status1 = g_status1; d.status2 = g_status2;
+    d.xpRealWeather = g_xpRealWx;
+    d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence;
+    d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile;
+    d.reports = g_mapReports;
+    d.wsOn = g_cfg.enabled && g_cfg.windshear;
+    d.wsSources = g_uiTs.wsSources; d.wsHigh = g_uiTs.wsHigh; d.wsMed = g_uiTs.wsMed; d.wsLow = g_uiTs.wsLow; d.wsStrongest = g_uiTs.wsStrongest;
+    wx::UiActions act;
+    wx::uiDraw(d, fonts, w, h, poppedOut, act);
+    if (act.refresh) {
+        if (!g_cfg.enabled) g_cfg.enabled = true;
+        g_manualRefresh = true;
+        setStatus("Refresh requested...", "");
+        syncMenu();
+    }
+    if (act.maxTurbChanged || act.maxTurbReleased) g_cfg.maxTurbulence = std::max(0.0, std::min(1.0, act.maxTurb));
+    if (act.maxTurbReleased) {
+        wx::saveConfig(g_cfgPath, g_cfg);
+        if (g_cfg.enabled && g_haveLast) g_reapplyRequested = true;
+    }
+    if (act.popOut) wx::xpui::togglePopOut();
+}
+#endif
+
 void menuHandler(void*, void* item) {
     switch ((int)(intptr_t)item) {
         case kEnabled:
@@ -2730,7 +2790,11 @@ void menuHandler(void*, void* item) {
             if (g_cfg.enabled) g_manualRefresh = true;
             break;
         case kShow:
-            showWindow();
+#ifdef WX_HARNESS
+            showWindow();   // the test harness has no OpenGL: it checks the text version of the same data
+#else
+            wx::xpui::open(uiBuild);
+#endif
             break;
         case kSettings:
             showSettings();
@@ -2762,7 +2826,7 @@ void menuHandler(void*, void* item) {
 PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     std::strcpy(outName, "WXPlane");
     std::strcpy(outSig, "com.wxplane.xp12.noaa");
-    std::strcpy(outDesc, "Replaces flawed X-Plane 12 weather with NOAA METAR and ATIS data, refreshed every few minutes.");
+    std::strcpy(outDesc, "WXPlane " WX_VERSION ": live METAR/ATIS weather, GFS winds and clouds aloft, NOAA MRMS and EUMETNET OPERA radar, turbulence and windshear.");
 
     g_cfgPath = configPath();
     wx::loadConfig(g_cfgPath, g_cfg);
@@ -2782,7 +2846,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_menu = XPLMCreateMenu("WXPlane", XPLMFindPluginsMenu(), sub, menuHandler, nullptr);
     g_idxEnabled = XPLMAppendMenuItem(g_menu, "Enabled", (void*)(intptr_t)kEnabled, 0);
     g_idxRefresh = XPLMAppendMenuItem(g_menu, "Refresh Weather Data Now", (void*)(intptr_t)kRefresh, 0);
-    g_idxShow = XPLMAppendMenuItem(g_menu, "Show Local METAR/ATIS Data...", (void*)(intptr_t)kShow, 0);
+    g_idxShow = XPLMAppendMenuItem(g_menu, "Weather Window...", (void*)(intptr_t)kShow, 0);
     XPLMAppendMenuSeparator(g_menu);
     g_idxAtis = XPLMAppendMenuItem(g_menu, "Use ATIS", (void*)(intptr_t)kAtis, 0);
     g_idxAloft = XPLMAppendMenuItem(g_menu, "Global Winds/Temps & Clouds Aloft (GFS)", (void*)(intptr_t)kAloft, 0);
@@ -2805,6 +2869,9 @@ PLUGIN_API void XPluginStop(void) {
         g_loop = nullptr;
     }
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
+#ifndef WX_HARNESS
+    wx::xpui::destroy();
+#endif
     if (g_setWin) { XPLMDestroyWindow(g_setWin); g_setWin = nullptr; }
     if (g_menu) { XPLMDestroyMenu(g_menu); g_menu = nullptr; }
 }
@@ -2841,7 +2908,7 @@ PLUGIN_API int XPluginEnable(void) {
     g_regenDone = false;
     g_regenAt = Clock::time_point{};
     setStatus(g_cfg.enabled ? "Waiting for sim..." : "Disabled", "");
-    logf("enabled (update every %d min, search %.0f nm)", g_cfg.updateMinutes, g_cfg.searchNm);
+    logf("WXPlane %s enabled (update every %d min, search %.0f nm)", WX_VERSION, g_cfg.updateMinutes, g_cfg.searchNm);
     return 1;
 }
 

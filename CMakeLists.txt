@@ -89,13 +89,29 @@ set(WX_CORE_SOURCES
   src/json_mini.cpp src/metar.cpp src/sources.cpp src/wxmodel.cpp src/windsaloft.cpp src/config.cpp src/viewer.cpp
   src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp src/windshear.cpp src/gribx.cpp src/turbulence.cpp src/hazards.cpp src/opera.cpp)
 
+# --- The weather window (4.0): Dear ImGui (third_party/imgui, MIT) and the fonts it uses, embedded at build time ------------------
+add_library(wx_imgui STATIC
+  third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp)
+target_include_directories(wx_imgui PUBLIC third_party/imgui)
+target_compile_definitions(wx_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS IMGUI_DISABLE_WIN32_FUNCTIONS)
+set(WX_FONT_FILES
+  ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-Regular.ttf ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-SemiBold.ttf
+  ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-Bold.ttf ${CMAKE_SOURCE_DIR}/third_party/fonts/JetBrainsMono-Regular.ttf)
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/wx_fonts.c
+  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR}/third_party/fonts -DOUT=${CMAKE_BINARY_DIR}/wx_fonts.c -P ${CMAKE_SOURCE_DIR}/cmake/embed_fonts.cmake
+  DEPENDS ${WX_FONT_FILES} ${CMAKE_SOURCE_DIR}/cmake/embed_fonts.cmake
+  COMMENT "Embedding the weather window fonts")
+add_library(wx_ui STATIC src/wxui.cpp ${CMAKE_BINARY_DIR}/wx_fonts.c)
+target_link_libraries(wx_ui PUBLIC wx_imgui wx_codecs)
+
 add_library(WXPlane MODULE
-  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/wxgl.cpp src/plugin.cpp)
+  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/wxgl.cpp src/xpimgui.cpp src/plugin.cpp)
 
 target_include_directories(WXPlane PRIVATE "${XPLANE_SDK}/CHeaders/XPLM")
 target_compile_definitions(WXPlane PRIVATE
   XPLM200=1 XPLM210=1 XPLM300=1 XPLM301=1 XPLM303=1 XPLM400=1 XPLM410=1 XPLM420=1)
-target_link_libraries(WXPlane PRIVATE ${WX_CURL} Threads::Threads wx_codecs ${CMAKE_DL_LIBS})
+target_link_libraries(WXPlane PRIVATE ${WX_CURL} Threads::Threads wx_codecs wx_ui ${CMAKE_DL_LIBS})
 
 # --- Output: <build>/package/WXPlane/<lin_x64|mac_x64|win_x64>/WXPlane.xpl ----------------------
 if(WIN32)
@@ -135,4 +151,14 @@ if(WX_BUILD_TESTS)
   target_link_libraries(test_wx PRIVATE wx_codecs)
   target_compile_definitions(test_wx PRIVATE WX_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
   add_test(NAME parser_and_model COMMAND test_wx)
+  # the weather window, drawn off-line for every tab (and as PNG pictures where zlib is available)
+  add_executable(ui_shot tests/ui_shot.cpp ${WX_CORE_SOURCES})
+  target_link_libraries(ui_shot PRIVATE wx_ui)
+  target_include_directories(ui_shot PRIVATE src)
+  find_package(ZLIB QUIET)
+  if(ZLIB_FOUND)
+    target_compile_definitions(ui_shot PRIVATE WX_UI_PNG=1)
+    target_link_libraries(ui_shot PRIVATE ZLIB::ZLIB)
+  endif()
+  add_test(NAME weather_window COMMAND ui_shot ${CMAKE_BINARY_DIR})
 endif()

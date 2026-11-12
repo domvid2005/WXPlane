@@ -38,3 +38,8 @@ int XPLMGetWindowIsVisible(XPLMWindowID);
 void XPLMSetWindowTitle(XPLMWindowID, const char*);
 void XPLMSetWindowResizingLimits(XPLMWindowID, int, int, int, int);
 void XPLMBringWindowToFront(XPLMWindowID);
+enum { xplm_WindowPositionFree = 0, xplm_WindowCenterOnMonitor = 1, xplm_WindowFullScreenOnMonitor = 2, xplm_WindowFullScreenOnAllMonitors = 3, xplm_WindowPopOut = 4, xplm_WindowVR = 5 };
+typedef int XPLMWindowPositioningMode;
+void XPLMSetWindowPositioningMode(XPLMWindowID, XPLMWindowPositioningMode, int);
+int XPLMWindowIsPoppedOut(XPLMWindowID);
+void XPLMSetWindowGeometry(XPLMWindowID, int, int, int, int);

@@ -16,7 +16,7 @@ Requires **X-Plane 12.3 or newer** (it uses the `XPLMWeather` plugin API, SDK 4.
 |---|---|
 | **Enabled** | On/off. Off removes all of the plugin's weather and gives control back to X-Plane. |
 | **Refresh Weather Data Now** | Downloads fresh data and applies it without freezing the sim; X-Plane fades it in over 1–2 minutes (`manual_refresh_immediate = 1` makes it appear at once, at the cost of a freeze of several seconds). Also turns the plugin on if it was off. |
-| **Show Local METAR/ATIS Data...** | Opens a scrollable, resizable window listing every nearby station: raw METAR, ATIS text and letter, what WXPlane applied to the sim (visibility, fog, clouds, wind), and the global-model (GFS) points in use. Mouse wheel scrolls. |
+| **Weather Window...** | Opens the WXPlane weather window (4.0, see below): the nearest airport decoded, nearby airports, a radar picture, winds and temperatures aloft, turbulence, windshear and the state of every data service. Resizable; can pop out into its own window, and opens in VR when VR is on. |
 | **Use ATIS** | Merge D-ATIS data for airports near you. |
 | **Global Winds/Temps & Clouds Aloft (GFS)** | On (default): winds and temperatures at every level, clouds above what airports report, and the weather over open water come from the GFS model (Open-Meteo). Off: only the lowest 10,000 ft is touched, X-Plane's own winds/temps are used above, and nothing is set where no airport reports. |
 
@@ -104,9 +104,28 @@ Advanced settings (start-up gating, `transition_s`, `update_transition_s`, `appl
 
 X-Plane blends cloud layers between neighbouring reports slot by slot. When any nearby station has fog, WXPlane keeps cloud slot 0 reserved for fog at every station (empty where there is none), so fog is only ever blended with fog. This avoids the layer flickering as you fly over it. The fog layer is at least 100-120 m thick for the same reason. The visibility self-check is skipped while you are more than 1000 m above the ground, so it never re-applies weather (and rebuilds clouds) during cruise.
 
+## The weather window (4.0)
+
+Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, with six tabs:
+
+* **Overview** - the nearest airport (raw report, wind dial, decoded wind, visibility, weather, pressure, temperature, ceiling and
+  flight category), the nearby airports, a 50/100/150 nm radar picture (storm cells by reflectivity, airports coloured by flight
+  category, the aircraft in the middle), winds and temperatures aloft with the tropopause, turbulence and windshear at the aircraft
+  with the Max turbulence slider, and the data services.
+* **Airports** - every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
+  its report, its ATIS and exactly what WXPlane sent to X-Plane for it.
+* **Radar** - the radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
+* **Winds & Temps** - the profile at the aircraft every 1,000-2,000 ft up to FL600, with ISA deviation and the tropopause.
+* **Turbulence** - EDR by altitude at the aircraft, the nearby pilot reports, windshear.
+* **Services** - every data service with its state.
+
+Refresh and Pop out are at the top right. The window follows X-Plane's UI scale (its text is rebuilt at the screen's pixel density),
+and the fonts (IBM Plex Sans, JetBrains Mono) are embedded. `tests/ui_shot.cpp` draws every tab off-line (ctest "weather_window").
+Version 3.0 (commit b71f294) was the last version with the text window.
+
 ## Data services
 
-The bottom of the "Show Local METAR/ATIS Data..." window lists every service WXPlane downloads from, with its state: **OK** (green),
+The bottom of the weather window's Overview (and its Services tab) lists every service WXPlane downloads from, with its state: **OK** (green),
 **DEGRADED** (amber: the last download failed and an earlier one is in use), **DOWN** (red), or "not used here" / "off" / "waiting"
 (grey), with what it last delivered and, when it is failing, when it last worked. Radar and turbulence services that belong to
 another region (MRMS and GTGN outside the US, OPERA outside Europe) are left out. The radar section above it is titled by region:
@@ -144,7 +163,7 @@ The echoes are grouped into blocks of about `radar_cell_nm`; the strongest and n
 * lower visibility under heavy rain (800 m at 50 dBZ, 8 km at 25 dBZ);
 * turbulence and gusts from about 30 dBZ upwards, below the storm top.
 
-Only cells that changed are re-sent, and cells with no echo left are erased, so storms move and fade between updates. The window under "Show Local METAR/ATIS Data..." lists the radar source, its age and the strongest cells.
+Only cells that changed are re-sent, and cells with no echo left are erased, so storms move and fade between updates. The weather window's Radar tab shows the picture, the radar source, its age and the strongest cells.
 
 **Limits:** radar mosaics are 2D, so the base height and the shape of a storm are estimated; reflectivity above 70 dBZ is capped (hail and clutter); the API is limited to a few hundred records; the data is a few minutes old when you get it; and cells are only applied where at least one METAR station is within the search radius. The MRMS file layout (grid, PNG/simple packing) was built from the GRIB2 specification and tested with generated files; it has since decoded live NOAA CONUS data in real X-Plane sessions (the log showed e.g. 122 echo blocks, 120 cells, echo tops up to 12 000 m from radar). Not yet seen live: the Alaska/Hawaii/Caribbean/Guam products.
 
@@ -198,7 +217,7 @@ Removed: the map no longer shows storm-top (FL) labels. The storm clouds themsel
 
 ## Weather settings screen
 
-X-Plane's weather settings screen is fed by its own base weather. WXPlane sets weather through X-Plane's weather API (station and location records), which does not update that screen, so the screen will not show the NOAA values. The "Show Local METAR/ATIS Data..." window shows what is applied.
+X-Plane's weather settings screen is fed by its own base weather. WXPlane sets weather through X-Plane's weather API (station and location records), which does not update that screen, so the screen will not show the NOAA values. The weather window shows what is applied (Airports tab, "Sent to X-Plane").
 
 ## Keeping it smooth
 
