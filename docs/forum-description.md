@@ -1,6 +1,6 @@
-# WXPlane 4.0 – live real-world weather for X-Plane 12
+# WXPlane 5.0 – live real-world weather for X-Plane 12
 
-**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 4.0 adds a full weather window inside the sim.
+**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.0 puts the winds, clouds and turbulence aloft on the map, at any altitude you choose.
 
 Free. No accounts and no API keys. Windows, macOS and Linux.
 
@@ -14,16 +14,30 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Realistic windshear:** gust fronts and microburst outflow around real convective storms.
 - **Smooth:** downloads run in the background and every update fades in over 1–2 minutes. No freezes, no sudden jumps.
 
-## New in 4.0: the weather window
+## New in 5.0
+
+- **Winds aloft on the map:** wind barbs (blue, deeper the stronger) at any level; click one to decode it, with the headwind and crosswind on your heading.
+- **Clouds on the map:** the cloud layers WXPlane gives X-Plane, darker grey the deeper the layer.
+- **Altitude slider** beside the map for winds, clouds and turbulence: ACFT follows your aircraft, SFC shows the surface, COMP overlays all altitudes. It snaps to the nearest 1,000 ft, more firmly at 5,000 and 10,000 ft (which light up amber).
+- **Time zones:** a Time Zone layer draws the zone boundaries. The map's LOCAL time follows the + at the map centre when you pan away from the aircraft. Zulu, local time, sunrise and sunset are shown for every airport.
+- **Units per section:** °T / °M and °C / °F switches for the airports, the map and the winds aloft. METAR and ATIS can be toggled on the home page, with magnetic winds for performance calculations.
+- **Pilot reports:** every PIREP type on the home page and the Turbulence tab, sortable, with details on click.
+- **Map popups:** as many as fit, never overlapping and never leaving the map; they can be dragged.
+- **Turbulence add-on detection:** with ActiveSky XP, xProTurb or similar running, WXPlane leaves the turbulence to it and says so.
+- **Search by FAA code:** small US fields such as 35D or 1B9 work without the K.
+- Zoom out to 320 nm, European radar backup feed, and many smaller fixes.
+
+## The weather window
 
 Open it from **Plugins → WXPlane**, or bind it to a key or joystick button. It can pop out to a second monitor and works in VR.
 
 - **Overview:** the nearest airport decoded, with a wind dial. Click the dial to switch between North Lock and Airplane Heading Lock, which shows the headwind/tailwind and crosswind components. Also shows nearby airports, a mini map, winds and temperatures aloft, and turbulence and windshear at your aircraft.
-- **Map:** zoom smoothly from 1 to 160 nm with the mouse wheel, drag to pan, and re-centre on the aircraft. Layers:
+- **Map:** zoom smoothly from 1 to 320 nm with the mouse wheel, drag to pan, and re-centre on the aircraft. Layers:
   - live radar
   - built-in coastlines and borders
   - airports by flight category (click one for its METAR and ATIS)
-  - a turbulence grid
+  - a turbulence grid, wind barbs and clouds at the slider's altitude
+  - time zone boundaries
   - PIREPs (UUA red, UA orange, click one for details)
   - colour-coded AIRMETs, SIGMETs and convective SIGMETs (click one for details)
 - **Airports:** worldwide METAR/ATIS search, plus every station in use, sortable by any column.
