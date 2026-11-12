@@ -22,6 +22,7 @@
 #include "stubs/XPLMWeather.h"
 #include "stubs/curl/curl.h"
 #include "opera.h"
+#include "geo.h"
 #include <zlib.h>
 #include "../src/turbulence.h"
 
@@ -1054,6 +1055,20 @@ int main() {
             }
             std::printf("  records with a thin filler layer: %d, with a gap below a layer: %d\n", bad, gaps);
             CHECK(bad == 0);
+            // a clear record next to a deck keeps the deck's height in that slot (a 0-0 m slot made the deck hang down in cones, KBOS 2026-11-12)
+            int clearNear = 0, groundSlot = 0;
+            for (size_t i = before; i < g_calls.size(); ++i) {
+                const auto& L = g_calls[i].info.cloud_layers;
+                if (L[0].coverage > 0 || L[1].coverage > 0 || L[2].coverage > 0) continue;
+                for (size_t j = before; j < g_calls.size(); ++j) {
+                    const auto& M = g_calls[j].info.cloud_layers;
+                    if (!(M[0].coverage > 0.05f && M[0].alt_top - M[0].alt_base >= 400.0f)) continue;
+                    if (wx::distNm(g_calls[i].lat, g_calls[i].lon, g_calls[j].lat, g_calls[j].lon) < 30.0) { ++clearNear; break; }
+                }
+            }
+            for (size_t i = before; i < g_calls.size(); ++i) { const auto& L = g_calls[i].info.cloud_layers; if (L[0].coverage <= 0 && L[0].alt_base == 0 && (L[1].coverage > 0 || L[2].coverage > 0)) ++groundSlot; }
+            std::printf("  clear records within 30 nm of a deck: %d, records with a 0-0 m slot under their layers: %d\n", clearNear, groundSlot);
+            CHECK(clearNear == 0);
         }
         if (const char* dp = std::getenv("WX_DUMP")) {   // for the cloud-edge picture (tools)
             FILE* f = std::fopen(dp, "w");

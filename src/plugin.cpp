@@ -387,21 +387,26 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         for (size_t i = 0; i < n; ++i) for (int k = 0; k < K; ++k) { auto& c = todo[i].rec.info.cloud_layers[k]; if (c.coverage <= 0) { c.cloud_type = 0; c.alt_base = 0; c.alt_top = 0; } }
         return;
     }
-    // 3) a nearly empty layer only in a slot BELOW a record's own layers (that is where X-Plane's compaction would shift its layers down
-    // a slot): at the height of the nearest record with a real layer in that slot, and only where it fits whole (at least 400 m deep,
-    // clear of the record's own layers). Slots above a record's layers stay empty, and nothing is ever squeezed into a thin sliver:
-    // the build that filled every slot (thin 50-120 m layers stacked on top of each other) made X-Plane throw the whole start-up update
+    // 3) a nearly empty layer in every empty slot: at the height of the nearest record with a real layer in that slot (within 60 nm), and
+    // only where it fits whole (at least 400 m deep, clear of the record's own layers). Nothing is ever squeezed into a thin sliver: the
+    // build that filled every slot with thin 50-120 m layers stacked on top of each other made X-Plane throw the whole start-up update
     // away (log 2026-11-03 22:23, "XPLMBeginWeatherUpdate() called without matching XPLMEndWeatherUpdate()", no clouds at all).
-    for (int k = 0; k < K - 1; ++k) {
+    // Until 2026-11-12 only slots BELOW a record's own layers were filled. A clear record (or one whose layers were all lower) then sent
+    // the slot at 0-0 m, and X-Plane blended the neighbouring deck's base down towards the ground: scattered cloud at 6,600 ft around
+    // KBOS hung down in cones and funnels ("odd overcast formation", screenshots 2026-11-12). Now the slot keeps the deck's height there
+    // too, so the deck only thins out towards the clear side.
+    for (int k = 0; k < K; ++k) {
         std::vector<size_t> has;
         for (size_t i = 0; i < n; ++i) if (isReal[i][k]) has.push_back(i);
         if (has.empty()) continue;
         for (size_t i = 0; i < n; ++i) {
             if (isReal[i][k]) continue;
+            XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
+            // above a record's own layers, a filler only directly on top of a filled slot: a gap under it would make X-Plane move it
+            // down a slot and blend it with the neighbours' lower deck (a sloping sheet)
             bool above = false;
             for (int m = k + 1; m < K; ++m) if (isReal[i][m]) above = true;
-            if (!above) continue;
-            XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
+            if (!above && k > 0 && L[k - 1].coverage <= 0.0f) continue;
             double bd = 60.0; size_t bj = n;
             for (size_t j : has) {
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
