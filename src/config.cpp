@@ -127,6 +127,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "empty_layer_coverage") c.emptyLayerCoverage = d < 0 ? 0 : (d > 0.1 ? 0.1 : d);
         else if (k == "radar_natural_max") c.radarNaturalMax = (int)(d < 30 ? 30 : (d > 400 ? 400 : d));
         else if (k == "radar_natural_fine_nm") c.radarNaturalFineNm = d < 1.5 ? 1.5 : (d > 12 ? 12 : d);
+        else if (k == "load_fade_s") c.loadFadeS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "storm_level_delay_s") c.stormLevelDelayS = (int)(d < 0 ? 0 : (d > 600 ? 600 : d));
         else if (k == "fill_stagger") c.fillStagger = toBool(v);
         else if (k == "storm_top_max_drop_m") c.stormTopMaxDropM = d < 0 ? 0 : (d > 20000 ? 20000 : d);

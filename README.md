@@ -121,16 +121,22 @@ Overview, Map, Airports, Winds & Temps, Turbulence, Services, Settings. The user
   components in the middle), nearby airports, a map with the Map tab's layers, winds and temperatures aloft, turbulence and windshear
   (risk coloured white to red). It never scrolls.
 * **Map** - eased zoom 1-160 nm (mouse wheel, - / +), drag to pan, "Center on aircraft", North Lock / Heading Lock button. Layers:
-  Radar, Map (Natural Earth, embedded), Airports (click for METAR/ATIS), Turb (12 nm grid at your altitude), PIREPs (UUA red, UA
+  Radar, Map (Natural Earth, embedded), Airports (click for METAR/ATIS), Turb (12 nm grid), Winds (barbs from FD stations and GFS
+  points, click to decode), Clouds (the records sent to X-Plane, outlined, darker grey for deeper layers), PIREPs (UUA red, UA
   orange, click for details), AIRMET (G-AIRMETs) and SIGMET (SIGMETs, international and convective), coloured by hazard and clickable;
-  info windows stay inside the map. Titled "Map · US" (MRMS) or "Map · Europe" (OPERA). The strongest cells are listed beside it.
+  info windows stay inside the map and off the point clicked. Turb, Winds and Clouds are drawn at the altitude slider beside the
+  map (follows the aircraft until moved; greyed out without those layers); barbs, clouds and turbulence change smoothly with it. Titled "Map · US" (MRMS) or "Map · Europe" (OPERA). The strongest cells are listed beside it.
 * **Airports** - worldwide METAR/ATIS search (display only), then every station in use. Column headers sort (one way, the other,
   off); ties nearest first. Select a station for its report, ATIS and what was sent to X-Plane.
 * **Winds & Temps** - the profile up to FL600 with ISA deviation and the tropopause.
-* **Turbulence** - EDR by altitude, every nearby pilot report (click to expand), windshear.
+* **Turbulence** - EDR by altitude, the Max turbulence slider, every nearby pilot report (click to expand), windshear.
 * **Services** - every data service with its state.
-* **Settings** - every on/off setting and the Max turbulence slider (greyed out while the weather is off), keyboard binding, data
+* **Settings** - every on/off setting (greyed out while the weather is off), status, keyboard binding, data
   and credits.
+
+While the weather is built from scratch (start-up, switched back on, a jump of 20+ nm faster than any aircraft) the header shows a
+"Loading weather" countdown (src/loadclock.h; `load_fade_s`, default 60, is the time allowed for X-Plane's fade-in). A jump also
+downloads at once instead of after the usual minute.
 
 When X-Plane's own real weather is on, a red warning covers the window and nothing in it can be clicked until it is turned off.
 Refresh and Pop out are at the top right. The window follows X-Plane's UI scale, works in VR and pops out to its own OS window;

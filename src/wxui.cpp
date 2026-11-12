@@ -468,7 +468,7 @@ double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k
 // the pilot report open in the radar page's info window (identified by its text and time, the list is rebuilt every update)
 // What is open in the radar page's info window: a pilot report, an airport or an advisory, identified by a key that survives the
 // lists being rebuilt at every update (text + time, the ICAO code, name + start time)
-struct MapSel { int kind = 0; std::string key; ImVec2 at; ImVec2 mapMin, mapMax; ImVec2 lastSize = ImVec2(300, 200); };   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET
+struct MapSel { int kind = 0; std::string key; ImVec2 at; ImVec2 mapMin, mapMax; ImVec2 lastSize = ImVec2(300, 200); };   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
 MapSel& mapSel() { static MapSel s; return s; }
 std::string pirepKey(const hz::Pirep& p) { return p.raw + "|" + std::to_string((long long)p.obsTime); }
 std::string advKey(const hz::Advisory& a) { return a.name + "|" + std::to_string((long long)a.from) + "|" + std::to_string(a.pts.size()); }
@@ -532,6 +532,190 @@ float distToSeg(ImVec2 p, ImVec2 a, ImVec2 b) {
     return std::hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
+
+// ---- winds aloft, clouds and the map's altitude ----------------------------------------------------------------------------------
+bool& showWinds() { static bool v = false; return v; }    // wind barbs at the map's altitude
+bool& showClouds() { static bool v = false; return v; }   // the clouds at the map's altitude
+bool altLayersOn() { return showTurb() || showWinds() || showClouds(); }
+
+// The map's altitude (feet MSL), for the turbulence, cloud and wind layers. It follows the aircraft until the slider is moved, and
+// what the layers use (shown) glides to the chosen value (target), so they change smoothly while the slider moves.
+const float kMapAltMax = 50000.0f;
+struct MapAlt { float shown = -1, target = -1; bool follow = true; };
+MapAlt& mapAlt() { static MapAlt a; return a; }
+void updateMapAlt(const UiData& d) {
+    MapAlt& a = mapAlt();
+    if (d.forceMapAltFt >= 0) { a.follow = false; a.target = a.shown = (float)d.forceMapAltFt; }
+    if (a.follow) a.target = d.havePos ? (float)std::max(0.0, std::min((double)kMapAltMax, d.altFt)) : std::max(0.0f, a.target);
+    if (a.shown < 0) a.shown = std::max(0.0f, a.target);
+    const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
+    const float k = 1.0f - std::exp(-dt * 9.0f);
+    a.shown = std::fabs(a.target - a.shown) < 1.0f ? a.target : a.shown + (a.target - a.shown) * k;
+}
+std::string altLabel(float ft) { return ft >= 18000 ? fmt("FL%03.0f", std::round(ft / 100.0f)) : fmt("%.0f ft", std::round(ft / 100.0f) * 100.0f); }
+
+// A slider whose knob glides (instead of jumping) to where it is clicked or dragged: `target` is what the user chose, `shown` what is
+// drawn and used, eased towards it every frame. Returns true while the user holds it; `released` is set when they let go.
+bool smoothSlider(const char* id, float& shown, float& target, float vmin, float vmax, ImVec2 size, bool vertical, const std::string& label, bool& released, bool disabled = false) {
+    released = false;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(id, size);
+    const bool active = ImGui::IsItemActive(), hov = ImGui::IsItemHovered();
+    const float knobR = 7.0f;
+    auto toFrac = [&](float v) { return std::max(0.0f, std::min(1.0f, (v - vmin) / (vmax - vmin))); };
+    if (active) {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        const float fr = vertical ? 1.0f - (m.y - p.y - knobR) / std::max(1.0f, size.y - 2 * knobR) : (m.x - p.x - knobR) / std::max(1.0f, size.x - 2 * knobR);
+        target = vmin + std::max(0.0f, std::min(1.0f, fr)) * (vmax - vmin);
+    }
+    if (ImGui::IsItemDeactivated()) released = true;
+    if (hov && !active && ImGui::GetIO().MouseWheel != 0.0f) {   // the wheel nudges it by 2 % of the range per notch
+        target = std::max(vmin, std::min(vmax, target + ImGui::GetIO().MouseWheel * 0.02f * (vmax - vmin)));
+        released = true;
+    }
+    const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
+    const float k = 1.0f - std::exp(-dt * 14.0f);
+    if (shown < vmin - 1e-6f || shown > vmax + 1e-6f) shown = target;
+    shown = std::fabs(target - shown) < (vmax - vmin) * 1e-4f ? target : shown + (target - shown) * k;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 trackC = cInset, fillC = disabled ? IM_COL32(70, 74, 82, 255) : cAccentDim, knobC = disabled ? IM_COL32(88, 92, 100, 255) : (active || hov ? IM_COL32(120, 180, 255, 255) : cAccent);
+    const float fr = toFrac(shown);
+    ImVec2 kc;
+    if (vertical) {
+        const float x = p.x + size.x * 0.5f, y0 = p.y + knobR, y1 = p.y + size.y - knobR;
+        dl->AddRectFilled(ImVec2(x - 3, y0), ImVec2(x + 3, y1), trackC, 3);
+        kc = ImVec2(x, y1 - (y1 - y0) * fr);
+        dl->AddRectFilled(ImVec2(x - 3, kc.y), ImVec2(x + 3, y1), fillC, 3);
+    } else {
+        const float y = p.y + size.y * 0.5f, x0 = p.x + knobR, x1 = p.x + size.x - knobR;
+        dl->AddRectFilled(ImVec2(x0, y - 3), ImVec2(x1, y + 3), trackC, 3);
+        kc = ImVec2(x0 + (x1 - x0) * fr, y);
+        dl->AddRectFilled(ImVec2(x0, y - 3), ImVec2(kc.x, y + 3), fillC, 3);
+    }
+    dl->AddCircleFilled(kc, knobR, knobC, 20);
+    dl->AddCircle(kc, knobR, IM_COL32(15, 17, 20, 255), 20, 1.5f);
+    if (!label.empty()) {   // the value next to the knob (vertical: in a small box to its left; horizontal: centred in the track)
+        const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        if (vertical) {
+            const ImVec2 b0(kc.x - knobR - 6 - ts.x - 8, kc.y - ts.y * 0.5f - 3), b1(kc.x - knobR - 6, kc.y + ts.y * 0.5f + 3);
+            dl->AddRectFilled(b0, b1, IM_COL32(28, 30, 34, 235), 4);
+            dl->AddText(ImVec2(b0.x + 4, b0.y + 3), disabled ? cIdle : cText, label.c_str());
+        } else {
+            dl->AddText(ImVec2(p.x + (size.x - ts.x) * 0.5f, p.y + (size.y - ts.y) * 0.5f - ts.y * 0.9f), disabled ? cIdle : cSoft, label.c_str());
+        }
+    }
+    return active;
+}
+
+// Winds and temperatures aloft at the map's altitude, one per FD station / GFS model point, eased towards the latest values so
+// the barbs turn and grow smoothly when an update comes in (or the altitude changes). Keyed so a point keeps its identity across
+// updates: the FD id, or the model point's position.
+// rangeA: how much the point has data at the map's altitude (fading over the last 1,500 ft beyond its top or bottom level);
+// show: what is drawn, eased towards rangeA (and towards 0 where the map is too crowded), so barbs come and go smoothly.
+struct WindPt { std::string key, id; bool model = false; double lat = 0, lon = 0; float u = 0, v = 0, tempC = 0; bool hasT = false; float rangeA = 0, show = 0; bool seen = false; };
+std::vector<WindPt>& windPts() { static std::vector<WindPt> v; return v; }
+bool windAtLevel(const AloftStation& s, float ft, float& dir, float& kt, float& tempC, bool& hasT, float* edge = nullptr) {
+    const AloftLevel *lo = nullptr, *hi = nullptr;
+    for (const auto& L : s.levels) {
+        if (!L.hasWind) continue;
+        if (L.altFt <= ft) lo = &L;
+        if (L.altFt >= ft && !hi) hi = &L;
+    }
+    if (!lo && !hi) return false;
+    float over = 0;
+    if (!lo) { over = (float)(hi->altFt - ft); if (over > 1500) return false; lo = hi; }
+    if (!hi) { over = (float)(ft - lo->altFt); if (over > 1500) return false; hi = lo; }
+    if (edge) *edge = 1.0f - over / 1500.0f;
+    const double t = hi->altFt > lo->altFt ? (ft - lo->altFt) / (hi->altFt - lo->altFt) : 0.0;
+    const double r = kPi / 180.0;
+    const double ux = (1 - t) * lo->speedKt * std::sin(lo->dirDeg * r) + t * hi->speedKt * std::sin(hi->dirDeg * r);
+    const double uy = (1 - t) * lo->speedKt * std::cos(lo->dirDeg * r) + t * hi->speedKt * std::cos(hi->dirDeg * r);
+    kt = (float)std::sqrt(ux * ux + uy * uy);
+    dir = kt > 0.05f ? (float)std::fmod(std::atan2(ux, uy) / r + 360.0, 360.0) : 0.0f;
+    hasT = lo->hasTemp && hi->hasTemp;
+    tempC = hasT ? (float)((1 - t) * lo->tempC + t * hi->tempC) : 0.0f;
+    return true;
+}
+void updateWinds(const UiData& d) {
+    std::vector<WindPt>& pts = windPts();
+    for (auto& w : pts) { w.seen = false; w.rangeA = 0; }
+    const float ft = mapAlt().shown;
+    const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
+    if (d.res && showWinds())
+        for (const auto& s : d.res->aloft) {
+            if (!s.located) continue;
+            float dir = 0, kt = 0, tc = 0, edge = 0; bool hasT = false;
+            const bool have = windAtLevel(s, ft, dir, kt, tc, hasT, &edge);
+            const std::string key = s.model ? fmt("m%.2f,%.2f", s.lat, s.lon) : s.id;
+            WindPt* w = nullptr;
+            for (auto& q : pts) if (q.key == key) { w = &q; break; }
+            if (!have && !w) continue;
+            const float r = (float)(kPi / 180.0);
+            // u, v: where the wind comes from, as a vector (the barb's staff), so the easing turns it the short way round
+            const float tu = kt * std::sin(dir * r), tv = kt * std::cos(dir * r);
+            if (!w) { pts.push_back(WindPt{}); w = &pts.back(); w->key = key; w->u = tu; w->v = tv; w->tempC = tc; }
+            w->id = s.id; w->model = s.model; w->lat = s.lat; w->lon = s.lon; w->seen = true;
+            if (!have) continue;   // out of its levels' reach: it keeps its last wind while it fades out
+            w->hasT = hasT;
+            w->rangeA = std::max(0.0f, std::min(1.0f, edge));
+            const float k = 1.0f - std::exp(-dt * 3.0f);   // about a second to settle on new data
+            w->u += (tu - w->u) * k; w->v += (tv - w->v) * k; w->tempC += (tc - w->tempC) * k;
+        }
+    // gone from the data (or the layer is off): kept until faded out
+    pts.erase(std::remove_if(pts.begin(), pts.end(), [](const WindPt& w) { return w.rangeA <= 0 && w.show < 0.01f; }), pts.end());
+}
+void windOf(const WindPt& w, float& dir, float& kt) {
+    kt = std::sqrt(w.u * w.u + w.v * w.v);
+    dir = kt > 0.05f ? (float)std::fmod(std::atan2(w.u, w.v) * 180.0 / kPi + 360.0, 360.0) : 0.0f;
+}
+// barbs, rounded to 5 kt: pennants (50), full barbs (10), a half barb (5)
+void barbCounts(float kt, int& pennants, int& full, int& half) {
+    int k5 = (int)std::lround(kt / 5.0f);
+    pennants = k5 / 10; k5 -= pennants * 10;
+    full = k5 / 2; half = k5 - full * 2;
+}
+// A wind barb at q: the staff points to where the wind comes from (true `dirDeg`, turned with the map), the feathers on its end.
+void drawBarb(ImDrawList* dl, ImVec2 q, float dirDeg, float kt, float viewDeg, ImU32 col, float scale) {
+    const double a = (dirDeg - viewDeg) * kPi / 180.0;
+    const ImVec2 s((float)std::sin(a), -(float)std::cos(a)), n(-s.y, s.x);
+    const float L = 26 * scale, fl = 11 * scale;
+    dl->AddCircleFilled(q, 2.6f * scale, col, 10);
+    if (kt < 2.5f) { dl->AddCircle(q, 5.5f * scale, col, 16, 1.4f); return; }   // calm
+    const ImVec2 tail(q.x + s.x * L, q.y + s.y * L);
+    dl->AddLine(q, tail, col, 1.5f);
+    int pn = 0, fu = 0, ha = 0;
+    barbCounts(kt, pn, fu, ha);
+    auto at = [&](float t) { return ImVec2(tail.x - s.x * t, tail.y - s.y * t); };
+    float t = 0;
+    for (int i = 0; i < pn; ++i) { const ImVec2 b = at(t), e = at(t + 6 * scale); dl->AddTriangleFilled(b, ImVec2(b.x + n.x * fl, b.y + n.y * fl), e, col); t += 8 * scale; }
+    for (int i = 0; i < fu; ++i) { const ImVec2 b = at(t); dl->AddLine(b, ImVec2(b.x + n.x * fl + s.x * 3.5f * scale, b.y + n.y * fl + s.y * 3.5f * scale), col, 1.5f); t += 4.5f * scale; }
+    if (ha) { if (pn == 0 && fu == 0) t = 5 * scale; const ImVec2 b = at(t); dl->AddLine(b, ImVec2(b.x + n.x * fl * 0.5f + s.x * 1.8f * scale, b.y + n.y * fl * 0.5f + s.y * 1.8f * scale), col, 1.5f); }
+}
+
+// The cloud layer at an altitude in one grid cell: coverage (faded over the last 250 ft inside the layer's base and top, so the
+// picture changes smoothly with the altitude) and the layer's thickness. 0 coverage: no cloud there at that altitude.
+void cloudAtAlt(const UiCloudGrid& g, int ix, int iy, float ft, float& cov, float& thickFt) {
+    cov = 0; thickFt = 0;
+    if (ix < 0 || iy < 0 || ix >= g.nx || iy >= g.ny) return;
+    const size_t c = (size_t)iy * (size_t)g.nx + (size_t)ix;
+    for (int k = 0; k < g.n[c] && k < 3; ++k) {
+        const UiCloudLayer& L = g.layers[c * 3 + (size_t)k];
+        if (ft < L.baseFt || ft > L.topFt || L.cover <= 0.01f) continue;
+        const float edge = std::max(1.0f, std::min(250.0f, (L.topFt - L.baseFt) * 0.5f));
+        const float fe = std::max(0.0f, std::min(1.0f, std::min(ft - L.baseFt, L.topFt - ft) / edge));
+        const float cv = L.cover * fe;
+        if (cv > cov) { cov = cv; thickFt = L.topFt - L.baseFt; }
+    }
+}
+ImU32 cloudColor(float cov, float thickFt, float fade) {
+    // thin layers a light, see-through grey; the deeper the layer, the darker and more solid (15,000 ft and more: dark grey)
+    const float th = std::max(0.0f, std::min(1.0f, thickFt / 15000.0f));
+    const float c = std::max(0.0f, std::min(1.0f, cov));
+    const int g = (int)(200 - 105 * th);
+    const int al = (int)((55 + 120 * th) * (0.55f + 0.45f * c) * fade);
+    return IM_COL32(g, g + 3, g + 8, std::max(0, std::min(255, al)));
+}
+
 void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, bool interactive) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -572,18 +756,85 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                 dl->AddPolyline(pts.data(), (int)pts.size(), kCol[L.kind & 3], ImDrawFlags_None, kW[L.kind & 3]);
             }
     }
-    // turbulence at the aircraft's altitude
+    // clouds at the map's altitude: filled where a layer is (darker grey the deeper the layer), with its outline; drawn from the
+    // grid's corners by marching squares, so the edges are smooth lines rather than steps
+    if (showClouds() && d.clouds && d.clouds->nx > 1 && d.clouds->ny > 1) {
+        const UiCloudGrid& g = *d.clouds;
+        const float alt = mapAlt().shown, th = 0.08f;
+        const size_t N = (size_t)g.nx * (size_t)g.ny;
+        static std::vector<float> cv, tk; static std::vector<ImVec2> sp;
+        cv.resize(N); tk.resize(N); sp.resize(N);
+        for (int iy = 0; iy < g.ny; ++iy)
+            for (int ix = 0; ix < g.nx; ++ix) {
+                const size_t c = (size_t)iy * (size_t)g.nx + (size_t)ix;
+                cloudAtAlt(g, ix, iy, alt, cv[c], tk[c]);
+                sp[c] = at(g.lat0 + iy * g.dLat, g.lon0 + ix * g.dLon);
+            }
+        const ImDrawListFlags fl = dl->Flags;
+        dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;   // neighbouring pieces meet edge to edge, with no seams
+        const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+        struct V { ImVec2 p; ImU32 c; bool cross; };
+        std::vector<V> poly;
+        std::vector<std::pair<ImVec2, ImVec2>> outline;
+        const float margin = (float)(std::max(g.dLat * 60.0, g.dLon * 60.0 * kx) * px) + 4;
+        for (int iy = 0; iy + 1 < g.ny; ++iy)
+            for (int ix = 0; ix + 1 < g.nx; ++ix) {
+                const size_t k[4] = {(size_t)iy * g.nx + ix, (size_t)iy * g.nx + ix + 1, (size_t)(iy + 1) * g.nx + ix + 1, (size_t)(iy + 1) * g.nx + ix};   // SW SE NE NW
+                bool any = false, all = true;
+                for (size_t q : k) { const bool in = cv[q] >= th; any |= in; all &= in; }
+                if (!any) continue;
+                const ImVec2 mid((sp[k[0]].x + sp[k[2]].x) * 0.5f, (sp[k[0]].y + sp[k[2]].y) * 0.5f);
+                if (!inside(mid, margin)) continue;
+                poly.clear();
+                for (int i = 0; i < 4; ++i) {
+                    const size_t a = k[i], b = k[(i + 1) & 3];
+                    const bool ia = cv[a] >= th, ib = cv[b] >= th;
+                    if (ia) poly.push_back({sp[a], cloudColor(cv[a], tk[a], 1.0f), false});
+                    if (ia != ib) {
+                        const float t = (th - cv[a]) / (cv[b] - cv[a]);
+                        const ImVec2 q(sp[a].x + (sp[b].x - sp[a].x) * t, sp[a].y + (sp[b].y - sp[a].y) * t);
+                        poly.push_back({q, cloudColor(th, ia ? tk[a] : tk[b], 1.0f), true});
+                    }
+                }
+                const int m = (int)poly.size();
+                if (m < 3) continue;
+                dl->PrimReserve((m - 2) * 3, m);
+                const ImDrawIdx base = (ImDrawIdx)dl->_VtxCurrentIdx;
+                for (const V& v : poly) dl->PrimWriteVtx(v.p, uv, v.c);
+                for (int i = 1; i + 1 < m; ++i) { dl->PrimWriteIdx(base); dl->PrimWriteIdx((ImDrawIdx)(base + i)); dl->PrimWriteIdx((ImDrawIdx)(base + i + 1)); }
+                if (!all)   // the outline: between consecutive crossing points (the polygon's edges that run through the square)
+                    for (int i = 0; i < m; ++i) if (poly[(size_t)i].cross && poly[(size_t)((i + 1) % m)].cross) outline.push_back({poly[(size_t)i].p, poly[(size_t)((i + 1) % m)].p});
+            }
+        dl->Flags = fl;
+        for (const auto& e : outline) dl->AddLine(e.first, e.second, IM_COL32(205, 210, 220, 200), 1.3f);
+    }
+    // turbulence at the map's altitude; a new grid (an update, or the altitude slider moved) fades in over the one before
     if (showTurb()) {
+        static std::vector<UiTurbCell> prev, cur;
+        static long seq = -1;
+        static float fade = 1.0f;
+        static double pdLat = 0.2, pdLon = 0.27, cdLat = 0.2, cdLon = 0.27;
+        if (d.turbGridSeq != seq) {
+            if (seq >= 0) { prev.swap(cur); pdLat = cdLat; pdLon = cdLon; fade = 0.0f; }
+            cur = d.turbGrid; cdLat = d.turbGridDLat; cdLon = d.turbGridDLon;
+            seq = d.turbGridSeq;
+        }
+        fade = std::min(1.0f, fade + std::max(0.0f, ImGui::GetIO().DeltaTime) * 3.0f);
         const ImDrawListFlags fl = dl->Flags;
         dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;   // the squares meet edge to edge, with no seams
-        const double hy = d.turbGridDLat * 0.5, hx = d.turbGridDLon * 0.5;
-        for (const UiTurbCell& g : d.turbGrid) {
-            if (g.edr < 0.08) continue;
-            const ImVec2 q = at(g.lat, g.lon);
-            if (!inside(q, 12.0f * px)) continue;
-            // corners from the grid's own spacing: neighbouring squares share them exactly (no seams, no overlaps)
-            dl->AddQuadFilled(at(g.lat + hy, g.lon - hx), at(g.lat + hy, g.lon + hx), at(g.lat - hy, g.lon + hx), at(g.lat - hy, g.lon - hx), edrColor(g.edr, 64));
-        }
+        auto drawGrid = [&](const std::vector<UiTurbCell>& grid, double dLat, double dLon, float a) {
+            if (a <= 0.01f) return;
+            const double hy = dLat * 0.5, hx = dLon * 0.5;
+            for (const UiTurbCell& g : grid) {
+                if (g.edr < 0.08) continue;
+                const ImVec2 q = at(g.lat, g.lon);
+                if (!inside(q, 12.0f * px)) continue;
+                // corners from the grid's own spacing: neighbouring squares share them exactly (no seams, no overlaps)
+                dl->AddQuadFilled(at(g.lat + hy, g.lon - hx), at(g.lat + hy, g.lon + hx), at(g.lat - hy, g.lon + hx), at(g.lat - hy, g.lon - hx), edrColor(g.edr, (int)(64 * a)));
+            }
+        };
+        if (fade < 1.0f) drawGrid(prev, pdLat, pdLon, 1.0f - fade);
+        drawGrid(cur, cdLat, cdLon, fade);
         dl->Flags = fl;
     }
     // echoes
@@ -643,8 +894,40 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                 }
             }
     }
-    // points (pilot reports, airports) come before the areas: they stay clickable inside an AIRMET or SIGMET
+    // points (pilot reports, airports, wind barbs) come before the areas: they stay clickable inside an AIRMET or SIGMET
     float bestPt = 10.0f;
+    // wind barbs at the map's altitude (fewer when zoomed out, so they do not pile up). Every barb fades in and out instead of
+    // popping: with the altitude (a point's data ends), and when the map gets too crowded for it; barbs already shown keep their
+    // place first, so the set does not flicker while the slider or the zoom moves.
+    if (showWinds() || !windPts().empty()) {
+        std::vector<ImVec2> placed;
+        const float minSep = 34.0f;
+        const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
+        const float k = 1.0f - std::exp(-dt * 5.0f);
+        std::vector<size_t> order(windPts().size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::stable_sort(order.begin(), order.end(), [](size_t a, size_t b) { return windPts()[a].show > windPts()[b].show + 0.25f; });
+        for (size_t i : order) {
+            WindPt& w = windPts()[i];
+            const ImVec2 q = at(w.lat, w.lon);
+            if (interactive && d.forceWindSel >= 0 && (int)i == d.forceWindSel) { mapSel().kind = 4; mapSel().key = w.key; }
+            const bool sel = mapSel().kind == 4 && mapSel().key == w.key;
+            bool crowded = false;
+            if (!sel && w.rangeA > 0) for (const ImVec2& o : placed) if (std::fabs(o.x - q.x) < minSep && std::fabs(o.y - q.y) < minSep) { crowded = true; break; }
+            const float target = showWinds() ? (crowded ? 0.0f : w.rangeA) : 0.0f;
+            if (d.forceWindSel >= 0 || d.forceMapAltFt >= 0) w.show = target;   // test pictures: settled
+            w.show = std::fabs(target - w.show) < 0.01f ? target : w.show + (target - w.show) * k;
+            if (!crowded && w.rangeA > 0) placed.push_back(q);
+            if (w.show < 0.02f || !inside(q, 30)) continue;
+            float dir = 0, kt = 0;
+            windOf(w, dir, kt);
+            if (sel) { mapSel().at = q; dl->AddCircle(q, 9.0f, IM_COL32(255, 255, 255, (int)(220 * w.show)), 18, 1.5f); }
+            const int al = (int)(235 * w.show);
+            drawBarb(dl, q, dir, kt, viewRot(), w.model ? IM_COL32(150, 200, 255, al) : IM_COL32(225, 235, 250, al), 1.0f);
+            const float dm = std::hypot(mouse.x - q.x, mouse.y - q.y);
+            if (interactive && w.show > 0.5f && dm < bestPt) { bestPt = dm; hitKind = 4; hitKey = w.key; hitAt = q; }
+        }
+    }
     if (showPireps() && d.reports) {
         for (const auto& pr : d.reports->pireps) {
             const ImVec2 q = at(pr.lat, pr.lon);
@@ -729,13 +1012,23 @@ void infoWindow(const UiData& d, const UiFonts& f) {
     if (sel.kind == 1 && d.reports && showPireps()) for (const auto& q : d.reports->pireps) if (pirepKey(q) == sel.key) p = &q;
     if (sel.kind == 2 && d.res && showAirports()) for (const auto& q : d.res->stations) if (q.icao == sel.key) st = &q;
     if (sel.kind == 3 && d.reports) for (const auto& q : d.reports->advisories) if (advKey(q) == sel.key && (q.cls == hz::Advisory::Airmet ? showAirmets() : showSigmets())) av = &q;
-    if (!p && !st && !av) { sel.kind = 0; return; }
+    const WindPt* wp = nullptr;
+    if (sel.kind == 4 && showWinds()) for (const auto& q : windPts()) if (q.key == sel.key) wp = &q;
+    if (!p && !st && !av && !wp) { sel.kind = 0; return; }
     {   // inside the map: to the right of the point if it fits, else to its left; moved up or down to stay within the map
-        const ImVec2 mn = sel.mapMin, mx = sel.mapMax, sz = sel.lastSize;
-        float x = sel.at.x + 14, y = sel.at.y - 10;
-        if (x + sz.x > mx.x - 4) x = sel.at.x - 14 - sz.x;
-        x = std::max(mn.x + 4, std::min(x, mx.x - 4 - sz.x));
-        y = std::max(mn.y + 4, std::min(y, mx.y - 4 - sz.y));
+        // tries right of the point, left, below, above: the first that fits inside the map without covering the point; if none
+        // does, the one that leaves the most of it uncovered (always clamped inside the map)
+        const ImVec2 mn = sel.mapMin, mx = sel.mapMax, sz = sel.lastSize, a = sel.at;
+        const ImVec2 cand[4] = {ImVec2(a.x + 14, a.y - 10), ImVec2(a.x - 14 - sz.x, a.y - 10), ImVec2(a.x - sz.x * 0.5f, a.y + 14), ImVec2(a.x - sz.x * 0.5f, a.y - 14 - sz.y)};
+        float x = 0, y = 0, bestPen = 1e30f;
+        for (const ImVec2& c : cand) {
+            const float cx = std::max(mn.x + 4, std::min(c.x, mx.x - 4 - sz.x)), cy = std::max(mn.y + 4, std::min(c.y, mx.y - 4 - sz.y));
+            // how far the clamped box reaches over the point (0: clear of it, with a 10 px margin)
+            const float ox = std::min(cx + sz.x, a.x + 10) - std::max(cx, a.x - 10), oy = std::min(cy + sz.y, a.y + 10) - std::max(cy, a.y - 10);
+            const float pen = (ox > 0 && oy > 0) ? ox * oy : 0.0f;
+            if (pen < bestPen - 0.5f) { bestPen = pen; x = cx; y = cy; }
+            if (pen <= 0) break;
+        }
         ImGui::SetNextWindowPos(ImVec2(x, y));
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, mx.x - mn.x - 8), std::max(120.0f, mx.y - mn.y - 8)));
     }
@@ -802,6 +1095,34 @@ void infoWindow(const UiData& d, const UiFonts& f) {
                 ImGui::EndTable();
             }
             infoText(f, av->raw, cMetar);
+        } else if (wp) {
+            float dir = 0, kt = 0;
+            windOf(*wp, dir, kt);
+            const float ft = mapAlt().shown;
+            title("Winds aloft  " + altLabel(ft), IM_COL32(150, 200, 255, 255));
+            if (ImGui::BeginTable("wa", 2, ImGuiTableFlags_SizingFixedFit)) {
+                infoRow("Source", wp->model ? std::string("GFS model (Open-Meteo)") : "NOAA winds aloft (FD), station " + wp->id);
+                infoRow("Wind", kt < 2.5f ? std::string("calm") : fmt("%03.0f° true / %.0f kt", dir, kt));
+                int pn = 0, fu = 0, ha = 0;
+                barbCounts(kt, pn, fu, ha);
+                std::string dec;
+                auto add = [&](int n, const char* one, const char* many, int each) { if (!n) return; if (!dec.empty()) dec += " + "; dec += fmt("%d %s (%d kt)", n, n == 1 ? one : many, n * each); };
+                add(pn, "pennant", "pennants", 50); add(fu, "full barb", "full barbs", 10); add(ha, "half barb", "half barbs", 5);
+                infoRow("Barb", kt < 2.5f ? std::string("circle = calm") : dec + fmt(" = %d kt", pn * 50 + fu * 10 + ha * 5));
+                infoRow("Staff", kt < 2.5f ? std::string("—") : fmt("points into the wind: from %03.0f°", dir));
+                if (wp->hasT) {
+                    infoRow("Temperature", fmt("%.0f °C", wp->tempC));
+                    const float dev = wp->tempC - isaTempC(ft * 0.3048f);
+                    infoRow("vs standard", std::fabs(dev) < 0.5f ? std::string("ISA 0") : fmt("ISA %+.0f °C", dev));
+                }
+                if (d.havePos) {
+                    double head = 0, cross = 0;
+                    windComponents(dir, kt, d.headingDeg, head, cross);
+                    infoRow("On your heading", fmt("%s %.0f kt, crosswind %.0f kt", head >= 0 ? "headwind" : "tailwind", std::fabs(head), std::fabs(cross)));
+                    infoRow("From you", fmt("%.0f nm", distNm(d.lat, d.lon, wp->lat, wp->lon)));
+                }
+                ImGui::EndTable();
+            }
         }
         sel.lastSize = ImGui::GetWindowSize();
     }
@@ -889,7 +1210,13 @@ void layerButtons(bool lockButton) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Airports by flight category (radar page: click one for its METAR and ATIS)");
     wrapBefore("Turb", 4);
     toggleButton("Turb", showTurb());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turbulence at the aircraft's altitude (realistic turbulence data)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turbulence at the map's altitude (the slider beside the map)");
+    wrapBefore("Winds", 4);
+    toggleButton("Winds", showWinds());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Wind barbs at the map's altitude (NOAA winds aloft, GFS above and between them); click one to decode it");
+    wrapBefore("Clouds", 4);
+    toggleButton("Clouds", showClouds());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The clouds WXPlane gave X-Plane at the map's altitude: outlined, darker grey the deeper the layer");
     wrapBefore("PIREPs", 4);
     toggleButton("PIREPs", showPireps());
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pilot reports: urgent (UUA) red, routine (UA) orange, label = flight level");
@@ -925,6 +1252,37 @@ float rangeButtonsWidth() {
     return ImGui::CalcTextSize("-").x + ImGui::CalcTextSize("+").x + ImGui::CalcTextSize("160 nm").x + 4 * ImGui::GetStyle().FramePadding.x + 8;
 }
 
+// The map's altitude slider (beside the Map tab's map): for the turbulence, cloud and wind layers; greyed out without them
+void altitudeSlider(const UiData& d, float w, float h) {
+    MapAlt& a = mapAlt();
+    const bool off = !altLayersOn();
+    if (off) ImGui::BeginDisabled();
+    ImGui::BeginGroup();
+    const float bh = ImGui::GetFrameHeight();
+    ImGui::PushStyleColor(ImGuiCol_Button, v4(a.follow && !off ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
+    if (ImGui::Button("ACFT##alt", ImVec2(w, bh))) a.follow = true;
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip(off ? "Turn on Turb, Winds or Clouds to choose their altitude" : "Follow the aircraft's altitude");
+    bool released = false;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float sh = std::max(60.0f, h - bh - 6);
+    // scale marks every 10,000 ft on the left of the track
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (int k = 0; k <= 5; ++k) {
+        const float y = p.y + 7 + (sh - 14) * (1.0f - k / 5.0f);
+        dl->AddLine(ImVec2(p.x + w * 0.5f + 5, y), ImVec2(p.x + w * 0.5f + 10, y), cRing, 1.0f);
+        const std::string t = k == 0 ? std::string("0") : fmt("%d", k * 10);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.72f, ImVec2(p.x + w * 0.5f + 12, y - ImGui::GetFontSize() * 0.36f), cIdle, t.c_str());
+    }
+    float tgt = a.target < 0 ? 0.0f : a.target;
+    if (smoothSlider("##mapalt", a.shown, tgt, 0.0f, kMapAltMax, ImVec2(w, sh), true, altLabel(a.shown), released, off)) a.follow = false;
+    if (released) a.follow = false;
+    if (!a.follow) a.target = tgt;
+    (void)d;
+    ImGui::EndGroup();
+    if (off) ImGui::EndDisabled();
+}
+
 void radarPanel(const UiData& d, const UiFonts& f, bool big) {
     const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
     sectionTitle(f, radarHeader(d).c_str());
@@ -932,11 +1290,16 @@ void radarPanel(const UiData& d, const UiFonts& f, bool big) {
     rangeButtons();
     if (big) layerButtons(true);   // the home page's map shows the Map tab's layers, without buttons of its own
     mutedWrapped(radarSubtitle(d));
-    const float avail = ImGui::GetContentRegionAvail().x;
+    const float sliderW = big ? 50.0f : 0.0f, gap = big ? 10.0f : 0.0f;
+    const float avail = ImGui::GetContentRegionAvail().x - sliderW - gap;
     const float hLeft = ImGui::GetContentRegionAvail().y - (big ? 40 : 110);
     const float size = std::max(120.0f, std::min(avail, hLeft));
     if (size < avail) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - size) * 0.5f);
     radarCanvas(d, f, size, rangeNmOf(radarRange()), big);
+    if (big) {   // the altitude slider beside the map, as tall as the map
+        ImGui::SameLine(0, gap);
+        altitudeSlider(d, sliderW, size);
+    }
     radarLegend();
     ImGui::SameLine(0, 14);
     muted(big ? "Scroll: zoom · drag: move · click an airport, report or area for its details" : "Scroll: zoom");
@@ -1106,13 +1469,23 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
     statBox(f, "Windshear risk", risk, d.wsOn ? fmt("%d source(s)", d.wsSources) : std::string(" "), bw, riskCol);
     if (!slider) return;
     ImGui::Spacing();
-    float v = d.cfg ? (float)d.cfg->maxTurbulence : 1.0f;
+    // Max turbulence: the knob glides to where it is clicked or dragged; the plugin follows the value as it moves and saves it when let go
+    static float shown = -1, target = -1;
+    static bool held = false;
+    const float cfgV = d.cfg ? (float)d.cfg->maxTurbulence : 1.0f;
+    if (shown < 0 || (!held && std::fabs(target - shown) < 1e-4f && std::fabs(cfgV - target) > 0.005f)) shown = target = cfgV;   // first time, or changed elsewhere
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Max turbulence");
     ImGui::SameLine(130);
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    if (ImGui::SliderFloat("##maxturb", &v, 0.0f, 1.0f, "%.2f")) { act.maxTurbChanged = true; act.maxTurb = std::round(v * 20.0f) / 20.0f; }
-    if (ImGui::IsItemDeactivatedAfterEdit()) { act.maxTurbReleased = true; act.maxTurb = std::round(v * 20.0f) / 20.0f; }
+    const float before = shown;
+    bool released = false;
+    const float w = ImGui::GetContentRegionAvail().x - 50;
+    held = smoothSlider("##maxturb", shown, target, 0.0f, 1.0f, ImVec2(w, ImGui::GetFrameHeight()), false, "", released);
+    ImGui::SameLine(0, 8);
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%.2f", shown);
+    if (std::fabs(shown - before) > 1e-5f) { act.maxTurbChanged = true; act.maxTurb = shown; }
+    if (released) { act.maxTurbReleased = true; act.maxTurb = target; }
 }
 
 void servicesStrip(const UiData& d, const UiFonts& f) {
@@ -1513,8 +1886,11 @@ void settingRow(const char* label, bool on, const char* help, bool& flip) {
 }
 
 void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
+    // two columns, so the whole page fits without scrolling: the switches on the left, the reference text on the right
     const float H = ImGui::GetContentRegionAvail().y, W = ImGui::GetContentRegionAvail().x;
-    if (panelBegin("settings", ImVec2(std::min(W, 760.0f), H)) && d.cfg) {
+    const ImGuiWindowFlags nf = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    const float leftW = std::floor((W - 12) * 0.5f);
+    if (panelBegin("settings", ImVec2(leftW, H), nf) && d.cfg) {
         sectionTitle(f, "Weather");
         settingRow("WXPlane weather on", d.cfg->enabled, "Off hands the weather back to X-Plane (WXPlane's records are removed).", act.toggleEnabled);
         // with the weather off, every other setting is greyed out (dark grey instead of blue) and cannot be changed
@@ -1522,33 +1898,28 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         if (off) {
             ImGui::BeginDisabled();
             ImGui::PushStyleColor(ImGuiCol_CheckMark, v4(IM_COL32(88, 92, 100, 255)));
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, v4(IM_COL32(88, 92, 100, 255)));
             ImGui::PushStyleColor(ImGuiCol_FrameBg, v4(IM_COL32(32, 34, 38, 255)));
         }
         settingRow("Use ATIS", d.cfg->useAtis, "Merge the digital ATIS (D-ATIS, major US airports) over the METAR.", act.toggleAtis);
         settingRow("Global winds/temps & clouds aloft (GFS)", d.cfg->useAloft, "Winds and temperatures from the surface to FL600, clouds above what airports report, and the weather over open water.", act.toggleAloft);
         ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Turbulence & windshear");
-        settingRow("Realistic turbulence", d.cfg->realisticTurbulence, "WXPlane sets the turbulence at every altitude from NOAA GTGN (US) / ECMWF (elsewhere) and pilot reports.", act.toggleTurbulence);
+        settingRow("Realistic turbulence", d.cfg->realisticTurbulence, "WXPlane sets the turbulence at every altitude from NOAA GTGN (US) / ECMWF (elsewhere) and pilot reports. Max turbulence is on the Turbulence tab.", act.toggleTurbulence);
         settingRow("Realistic windshear", d.cfg->windshear, "Gust fronts and microbursts near convective storms.", act.toggleWindshear);
-        float v = (float)d.cfg->maxTurbulence;
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Max turbulence");
-        ImGui::SameLine(150);
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::SliderFloat("##maxturb2", &v, 0.0f, 1.0f, "%.2f")) { act.maxTurbChanged = true; act.maxTurb = std::round(v * 20.0f) / 20.0f; }
-        if (ImGui::IsItemDeactivatedAfterEdit()) { act.maxTurbReleased = true; act.maxTurb = std::round(v * 20.0f) / 20.0f; }
-        ImGui::Indent(30);
-        mutedWrapped("Scales all of WXPlane's turbulence: real data, storms, gusts. 0 = none, 1.0 = full realism.");
-        ImGui::Unindent(30);
-        if (off) { ImGui::PopStyleColor(3); ImGui::EndDisabled(); }
-        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-        sectionTitle(f, "Radar");
-        mutedWrapped("Always on: NOAA MRMS over the US, EUMETNET OPERA over Europe. The Map / Turb / PIREPs buttons choose the map's layers, the mouse wheel zooms (1 to 160 nm), and a click on the wind dial turns the dial and the map between North Lock and Airplane Heading Lock.");
-        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        if (off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
+        ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Status");
         mutedWrapped(d.status1 + (d.status2.empty() ? "" : "  ·  " + d.status2));
         mutedWrapped("Advanced settings are in WXPlane.cfg (X-Plane's Output/preferences folder).");
+    }
+    panelEnd();
+    ImGui::SameLine(0, 12);
+    if (panelBegin("settings2", ImVec2(0, H), nf)) {
+        sectionTitle(f, "Map & radar");
+        mutedWrapped("Radar is always on: NOAA MRMS over the US, EUMETNET OPERA over Europe. The buttons above the map choose its layers (radar, map, "
+                     "airports, turbulence, winds, clouds, pilot reports, AIRMETs, SIGMETs); the slider beside it sets the altitude of the turbulence, "
+                     "wind and cloud layers. The mouse wheel zooms (1 to 160 nm), and a click on the wind dial turns the dial and the map between North Lock "
+                     "and Airplane Heading Lock.");
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Keyboard");
         mutedWrapped("To open and close this window with a key or a joystick button: X-Plane's Settings > Keyboard (or Joystick), search for \"WXPlane\" and bind \"WXPlane: open/close the weather window (GUI)\" (command wxplane/weather_window). \"WXPlane: refresh the weather now\" (wxplane/refresh) is there too.");
@@ -1695,8 +2066,12 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     if (d.forceLayers >= 0) { showMap() = (d.forceLayers & 1) != 0; showTurb() = (d.forceLayers & 2) != 0; showPireps() = (d.forceLayers & 4) != 0; }
     if (d.forceDial >= 0) dialHeadingUp() = d.forceDial == 1;
     if (d.forceAdv >= 0) showAirmets() = showSigmets() = d.forceAdv == 1;
+    if (d.forceAloftLayers >= 0) { showWinds() = (d.forceAloftLayers & 1) != 0; showClouds() = (d.forceAloftLayers & 2) != 0; }
     updateViewRot(d);
     updateShownRange();
+    updateMapAlt(d);
+    updateWinds(d);
+    act.mapAltFt = showTurb() ? mapAlt().shown : -1.0;
     // X-Plane's own real weather on: nothing in the window can be clicked, and a red warning covers it (finish(), below)
     if (d.xpRealWeather) ImGui::BeginDisabled();
     auto finish = [&]() {
@@ -1733,11 +2108,35 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
         }
         (void)st;
         const float bw = 84 + 86 + 8;
-        std::string live = d.busy ? std::string("Downloading…") : (d.nextUpdateS >= 0 ? fmt("Next update %d:%02d", (int)d.nextUpdateS / 60, (int)d.nextUpdateS % 60) : std::string(""));
-        if (d.haveData && d.res) live += (live.empty() ? "" : " ") + std::string("(updated ") + hhmm(d.res->fetchedAt) + ")";
-        const float lw = ImGui::CalcTextSize(live.c_str()).x + 20;
+        const bool loading = d.loadingS >= 0;
+        std::string live;
+        if (loading) {   // the weather is being built from scratch: count down to when it should all be in
+            const int t = (int)std::ceil(d.loadingS);
+            live = (d.loadingWhat.empty() ? std::string("Loading weather") : d.loadingWhat) + fmt(" %d:%02d", t / 60, t % 60);
+        } else {
+            live = d.busy ? std::string("Downloading…") : (d.nextUpdateS >= 0 ? fmt("Next update %d:%02d", (int)d.nextUpdateS / 60, (int)d.nextUpdateS % 60) : std::string(""));
+            if (d.haveData && d.res) live += (live.empty() ? "" : " ") + std::string("(updated ") + hhmm(d.res->fetchedAt) + ")";
+        }
+        const float lw = ImGui::CalcTextSize(live.c_str()).x + 20 + (loading ? 18 : 0);
         ImGui::SameLine(right - bw - lw - 12);
-        if (!live.empty()) { statusDot(d.busy ? SvcState::Degraded : SvcState::Ok, 4); ImGui::SameLine(0, 2); muted(live.c_str()); }
+        if (loading) {
+            // a turning ring, then the countdown in amber
+            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+            const float h = ImGui::GetFrameHeight(), r = 6.0f;
+            const ImVec2 c(p0.x + r + 2, p0.y + h * 0.5f);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddCircle(c, r, IM_COL32(80, 66, 40, 255), 24, 2.0f);
+            const float a0 = (float)std::fmod(ImGui::GetTime() * 5.0, 2.0 * kPi);
+            dl->PathArcTo(c, r, a0, a0 + 1.9f, 12);
+            dl->PathStroke(cWarn, ImDrawFlags_None, 2.0f);
+            ImGui::Dummy(ImVec2(2 * r + 6, h));
+            ImGui::SameLine(0, 4);
+            ImGui::AlignTextToFramePadding();
+            ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn));
+            ImGui::TextUnformatted(live.c_str());
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("WXPlane is building the weather from scratch (start-up, switched back on, or a new location).\nUntil the countdown ends, the sky may not match the reports yet.");
+        } else if (!live.empty()) { statusDot(d.busy ? SvcState::Degraded : SvcState::Ok, 4); ImGui::SameLine(0, 2); muted(live.c_str()); }
         ImGui::SameLine(right - bw);
         if (ImGui::Button("Refresh", ImVec2(84, 0))) act.refresh = true;
         ImGui::SameLine(0, 8);

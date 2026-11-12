@@ -66,6 +66,7 @@ struct Config {
     bool stormFillPits = true;       // a block much lower than the ring of blocks around it is lifted toward them (no sheer rectangular craters inside a storm)
     double stormTopMaxDropM = 0;     // largest top difference allowed between neighbouring storm cells, per cell width (0 = off)
     bool stormBaseSmooth = true;     // storm cells next to each other share a smoothed cloud base, so the underside has no steps where nearest stations differ
+    int loadFadeS = 60;              // the weather window's start-up countdown: seconds X-Plane is given to blend a rebuilt weather in
     int stormLevelDelayS = 30;       // the intensity-outline records follow the rest of an update this many seconds later, in their own update
     bool stormLevelContours = true;  // the same smooth outline for every intensity level inside a storm (30/40/50 dBZ), so cores are curved, not grid squares
     bool stormContour = true;        // draw one smooth, randomised outline around the storm blocks (instead of random rim rings) and keep the records inside it

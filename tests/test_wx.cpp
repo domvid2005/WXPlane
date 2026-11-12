@@ -23,6 +23,7 @@ using namespace wx;
 #include "test_turb.h"
 #include "test_hazards.h"
 #include "test_opera.h"
+#include "test_loadclock.h"
 
 static void utc(std::time_t t, std::tm* out) {
 #ifdef _WIN32
@@ -1511,6 +1512,7 @@ int main() {
     tt::run();
     th::run();
     to::run();
+    tl::run();
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

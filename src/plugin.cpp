@@ -49,6 +49,7 @@
 #include "wxui.h"
 #include "version.h"
 #include "wxmodel.h"
+#include "loadclock.h"
 
 namespace {
 
@@ -102,6 +103,14 @@ bool g_radarKick = false;          // radar was switched on / changed: fetch onl
 bool g_eraseRequested = false;
 bool g_reenable = false;           // the weather was switched back on: the next download is not held, and fades in
 bool g_firstApplyDone = false;
+// The weather window's countdown while the weather is built from scratch (start-up, switched back on, a jump to a new place)
+wx::LoadClock g_load;
+bool g_loadFetchIssued = false;     // the download for it has been asked for
+bool g_fetchRunning = false;        // a full download is running
+std::chrono::steady_clock::time_point g_fetchStartAt{}, g_lastSendAt{};
+bool g_lastSendImmediate = false;
+double g_fetchEstS = 25;            // how long full downloads take (learned)
+double g_loadS = -1;                // seconds left on the countdown, -1: none
 std::time_t g_fogUntil = 0;
 bool g_haveCenter = false;
 double g_centerLat = 0, g_centerLon = 0;
@@ -491,9 +500,10 @@ struct UiTurbState {
     std::string source, data;
     std::vector<wx::UiTurbLayer> profile;
     std::vector<bool> filled;   // the layer had no data of its own (filled from the layers around it)
-    std::vector<wx::UiTurbCell> grid;   // turbulence around the aircraft at its altitude, for the radar map (every 10 s)
-    std::time_t gridAt = 0;
-    double gridDLat = 0.2, gridDLon = 0.27;
+    std::vector<wx::UiTurbCell> grid;   // turbulence around the aircraft at the map's altitude, for the map (uiTurbGridTick)
+    Clock::time_point gridAt{};
+    double gridDLat = 0.2, gridDLon = 0.27, gridAltFt = -1e9;
+    long gridSeq = 0;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
     std::string wsStrongest;
 } g_uiTs;
@@ -640,20 +650,6 @@ void turbulenceTick() {
         if (in.ecA) g_uiTs.data += (g_uiTs.data.empty() ? "" : " · ") + std::string("ECMWF ") + in.ecA->run;
         g_uiTs.profile.clear();
         for (int k = 0; k < t.n; ++k) g_uiTs.profile.push_back({altM[k] / 0.3048, t.edrS.size() > (size_t)k ? t.edrS[k] : 0.0, !(g_uiTs.filled.size() > (size_t)k && g_uiTs.filled[(size_t)k])});
-        // the radar map's turbulence layer: the data at the aircraft's altitude on a 25 x 25 grid over 300 x 300 nm, while the window is open
-        if (g_uiOpen && wall - g_uiTs.gridAt >= 10) {
-            g_uiTs.gridAt = wall;
-            g_uiTs.grid.clear();
-            const double kx = std::max(0.2, std::cos(lat * 3.14159265358979 / 180.0));
-            for (int gy = 0; gy < 25; ++gy)
-                for (int gx = 0; gx < 25; ++gx) {
-                    const double la = lat + (gy - 12) * 12.0 / 60.0, lo = lon + (gx - 12) * 12.0 / (60.0 * kx);
-                    const wx::turb::Sample g = wx::turb::sampleAt(in, la, lo, altFt, wall, simT);
-                    if (std::strcmp(g.source, "none") == 0) continue;
-                    g_uiTs.grid.push_back({la, lo, g.edr});
-                }
-            g_uiTs.gridDLat = 12.0 / 60.0; g_uiTs.gridDLon = 12.0 / (60.0 * kx);
-        }
     }
     if (now >= t.nextLog || hereSource != t.lastSource) {
         t.nextLog = now + std::chrono::seconds(60);
@@ -695,6 +691,93 @@ void turbulenceTick() {
     }
 }
 
+
+// The weather window's map: turbulence on a 25 x 25 grid over 300 x 300 nm at the map's altitude (its slider), rebuilt every 10 s and
+// whenever the slider has moved (at most 4 times a second, so dragging it stays smooth), while the turbulence layer is shown.
+void uiTurbGridTick(double mapAltFt) {
+    if (mapAltFt < 0 || !(g_cfg.enabled && g_cfg.realisticTurbulence)) return;
+    const auto now = Clock::now();
+    const double since = std::chrono::duration<double>(now - g_uiTs.gridAt).count();
+    if (!(since >= 10.0 || (std::fabs(mapAltFt - g_uiTs.gridAltFt) > 150.0 && since >= 0.25))) return;
+    const wx::turb::Inputs in = g_turbFetch.inputs();
+    if (!in.gtgn && !in.ecA) return;
+    const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
+    if (lat == 0 && lon == 0) return;
+    const std::time_t wall = std::time(nullptr);
+    const double simT = g_ts.simT ? XPLMGetDataf(g_ts.simT) : 0.0;
+    g_uiTs.gridAt = now;
+    g_uiTs.gridAltFt = mapAltFt;
+    g_uiTs.grid.clear();
+    const double kx = std::max(0.2, std::cos(lat * 3.14159265358979 / 180.0));
+    for (int gy = 0; gy < 25; ++gy)
+        for (int gx = 0; gx < 25; ++gx) {
+            const double la = lat + (gy - 12) * 12.0 / 60.0, lo = lon + (gx - 12) * 12.0 / (60.0 * kx);
+            const wx::turb::Sample g = wx::turb::sampleAt(in, la, lo, mapAltFt, wall, simT);
+            if (std::strcmp(g.source, "none") == 0) continue;
+            g_uiTs.grid.push_back({la, lo, g.edr});
+        }
+    g_uiTs.gridDLat = 12.0 / 60.0; g_uiTs.gridDLon = 12.0 / (60.0 * kx);
+    ++g_uiTs.gridSeq;
+}
+
+// The weather window's map: the clouds WXPlane gave X-Plane, on a 61 x 61 grid (6 nm) around the aircraft, from the records as sent:
+// at each grid point the record that covers it most closely (the smallest one it lies inside: storm cells over gap-fill over
+// airports). Rebuilt every 5 s while the window is open, and when the aircraft has moved 6 nm.
+std::shared_ptr<const wx::UiCloudGrid> g_uiClouds;
+Clock::time_point g_uiCloudsAt{};
+long g_uiCloudsSeq = 0;
+void uiCloudsTick() {
+    const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
+    if (lat == 0 && lon == 0) return;
+    const auto now = Clock::now();
+    static double atLat = 0, atLon = 0;
+    if (g_uiClouds && std::chrono::duration<double>(now - g_uiCloudsAt).count() < 5.0 && wx::distNm(lat, lon, atLat, atLon) < 6.0) return;
+    g_uiCloudsAt = now; atLat = lat; atLon = lon;
+    auto g = std::make_shared<wx::UiCloudGrid>();
+    const int N = 61, H = N / 2;
+    g->nx = g->ny = N;
+    g->dLat = 0.1;
+    const double kx = std::max(0.2, std::cos(std::round(lat) * 3.14159265358979 / 180.0));   // fixed per degree of latitude, so the grid does not shift
+    g->dLon = 0.1 / kx;
+    g->lat0 = std::round(lat / g->dLat) * g->dLat - H * g->dLat;
+    g->lon0 = std::round(lon / g->dLon) * g->dLon - H * g->dLon;
+    const size_t cells = (size_t)N * (size_t)N;
+    g->n.assign(cells, 0);
+    g->layers.assign(cells * 3, wx::UiCloudLayer{});
+    std::vector<float> bestR(cells, 1e9f), bestF(cells, 1e9f);
+    std::vector<const Rec*> best(cells, nullptr);
+    const double latMax = g->lat0 + (N - 1) * g->dLat, lonMax = g->lon0 + (N - 1) * g->dLon;
+    for (const auto& kv : g_recs) {
+        const Rec& r = kv.second;
+        const double rad = std::max(0.5, (double)r.info.radius_nm);
+        const double rLat = rad / 60.0, rLon = rad / (60.0 * kx);
+        if (r.lat + rLat < g->lat0 || r.lat - rLat > latMax || r.lon + rLon < g->lon0 || r.lon - rLon > lonMax) continue;
+        const int y0 = std::max(0, (int)std::floor((r.lat - rLat - g->lat0) / g->dLat)), y1 = std::min(N - 1, (int)std::ceil((r.lat + rLat - g->lat0) / g->dLat));
+        const int x0 = std::max(0, (int)std::floor((r.lon - rLon - g->lon0) / g->dLon)), x1 = std::min(N - 1, (int)std::ceil((r.lon + rLon - g->lon0) / g->dLon));
+        for (int iy = y0; iy <= y1; ++iy)
+            for (int ix = x0; ix <= x1; ++ix) {
+                const double dy = (g->lat0 + iy * g->dLat - r.lat) * 60.0, dx = (g->lon0 + ix * g->dLon - r.lon) * 60.0 * kx;
+                const double dd = std::sqrt(dx * dx + dy * dy);
+                if (dd > rad) continue;
+                const size_t c = (size_t)iy * N + ix;
+                const float fr = (float)(dd / rad);
+                if ((float)rad < bestR[c] - 0.01f || (std::fabs((float)rad - bestR[c]) <= 0.01f && fr < bestF[c])) { bestR[c] = (float)rad; bestF[c] = fr; best[c] = &r; }
+            }
+    }
+    for (size_t c = 0; c < cells; ++c) {
+        if (!best[c]) continue;
+        int n = 0;
+        for (int k = 0; k < XPLM_NUM_CLOUD_LAYERS && n < 3; ++k) {
+            const XPLMWeatherInfoClouds_t& L = best[c]->info.cloud_layers[k];
+            if (L.coverage <= 0.01f || L.alt_top <= L.alt_base) continue;
+            g->layers[c * 3 + (size_t)n++] = wx::UiCloudLayer{L.alt_base / 0.3048f, L.alt_top / 0.3048f, L.coverage, L.cloud_type};
+        }
+        g->n[c] = (unsigned char)std::max(1, n);   // 1 with an empty layer: a record is there, with no cloud
+        if (n == 0) g->layers[c * 3] = wx::UiCloudLayer{};
+    }
+    g->seq = ++g_uiCloudsSeq;
+    g_uiClouds = g;
+}
 
 // ---- Map layer: pilot reports (with its own toggle in X-Plane's map layer list) ----------------------
 XPLMMapLayerID g_mapPireps = nullptr;
@@ -1133,6 +1216,7 @@ void windshearTick() {
 void windshearResend();
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
+    const bool immediateNow = g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup));
     if (g_pendingStartup && g_cfg.regenWeatherOnStart && g_xpRealWx && !g_regenDone) {
         g_regenDone = true;   // with X-Plane's real weather on, a regen only makes it download and rebuild all of it again
         logf("not sending regen_weather: X-Plane's real-world weather is on (it would download and rebuild everything again)");
@@ -1177,6 +1261,7 @@ void flushPending() {
     if (g_pendingReplace) windshearResend();
     XPLMEndWeatherUpdate(g_pendingReplace ? 0 : 1 /*0: replaces all our previous records*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     if (g_pendingTodo.empty()) g_pendingReplace = false;
+    if (sent || erased) { g_lastSendAt = Clock::now(); g_lastSendImmediate = immediateNow; }
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     const double msSets = std::chrono::duration<double, std::milli>(tSets - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued): %.0f ms setting records, %.0f ms in X-Plane's end of update",
@@ -1755,7 +1840,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             if (seen.count(kv.first)) { kv.second.kept = false; continue; }   // in range again: an ordinary station
             if (kv.second.kept) ++keptGone; else newlyGone.push_back(kv.first);
         }
-        if (newlyGone.size() >= 15) { replaceAll = true; replaceWhy = "a big move (many airports left range at once)"; }
+        if (newlyGone.size() >= 15) {
+            replaceAll = true; replaceWhy = "a big move (many airports left range at once)";
+            if (!g_load.active()) { g_load.start("New location"); g_loadFetchIssued = true; }
+        }
         else if (keptGone + newlyGone.size() > (size_t)g_cfg.keptAirportsMax) { replaceAll = true; replaceWhy = "clean-up of the airports kept behind the aircraft"; }
         else {
             for (const auto& k : newlyGone) {
@@ -2379,6 +2467,47 @@ void altitudeWatch() {
     a.n = 0;
 }
 
+// The countdown: what is still to come for a weather built from scratch, and a jump to a new place (which starts one, and a download
+// at once instead of after the usual minute)
+void loadTick(bool staged) {
+    const auto now = Clock::now();
+    static auto last = now;
+    const double dt = std::chrono::duration<double>(now - last).count();
+    last = now;
+    if (g_drLat && g_drLon && g_cfg.enabled) {
+        static double pLat = 0, pLon = 0;
+        static auto pAt = now;
+        const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
+        const bool valid = std::fabs(lat) > 0.001 || std::fabs(lon) > 0.001;
+        // a jump: 20 nm or more, faster than any aircraft flies (the loop may stand still for seconds while the new scenery loads)
+        const double gapS = std::max(0.25, std::chrono::duration<double>(now - pAt).count()), jumpNm = valid ? wx::distNm(lat, lon, pLat, pLon) : 0.0;
+        if (valid && (pLat != 0 || pLon != 0) && g_firstApplyDone && jumpNm > 20.0 && jumpNm / (gapS / 3600.0) > 2500.0) {
+            logf("the aircraft jumped %.0f nm: new weather for the new place", jumpNm);
+            g_load.start("New location");
+            g_loadFetchIssued = false;
+            g_manualRefresh = true; g_reenable = true;   // download now (not held), and fade in
+        }
+        if (valid) { pLat = lat; pLon = lon; pAt = now; }
+    }
+    if (!g_cfg.enabled) g_load.stop();
+    if (!g_load.active()) { g_loadS = -1; return; }
+    wx::LoadPhase ph;
+    ph.waitingToStart = !g_loadFetchIssued;
+    ph.startInS = !g_everRequested ? 5.0 : 1.0;
+    ph.downloading = g_fetchRunning;
+    ph.downloadElapsedS = std::chrono::duration<double>(now - g_fetchStartAt).count();
+    ph.downloadEstS = g_fetchEstS;
+    ph.recordsQueued = staged || !g_pendingTodo.empty() || !g_pendingGone.empty();
+    ph.radarDeferred = g_radarDeferred;
+    ph.radarInS = g_firstApplyDone ? g_cfg.startupRadarDelayS - std::chrono::duration<double>(now - g_firstApplyAt).count() : (double)g_cfg.startupRadarDelayS;
+    ph.heldOutlines = !g_heldLevel.empty();
+    ph.heldInS = std::chrono::duration<double>(g_heldLevelAt - now).count();
+    ph.sinceLastSendS = g_lastSendAt == Clock::time_point{} ? 1e9 : std::chrono::duration<double>(now - g_lastSendAt).count();
+    ph.fadeS = g_lastSendImmediate && !ph.radarDeferred ? 3.0 : (double)g_cfg.loadFadeS;
+    g_loadS = g_load.update(ph, dt);
+    if (g_loadS < 0) logf("countdown: the weather is in");
+}
+
 float flightLoop(float, float, int, void*) {
     if (!g_pluginEnabled) {
         if (g_disableErase) { g_disableErase = false; g_checkPending = false; g_watchOn = false; eraseAll(); }
@@ -2473,6 +2602,11 @@ float flightLoop(float, float, int, void*) {
         if (left == 0) { res = staged; haveStaged = false; got = true; }
     } else if (g_fetcher.take(res)) {
         got = true;
+        if (!res.radarOnly && g_fetchRunning) {
+            g_fetchRunning = false;
+            const double dur = std::chrono::duration<double>(Clock::now() - g_fetchStartAt).count();
+            if (res.ok) g_fetchEstS = std::max(5.0, std::min(120.0, 0.6 * g_fetchEstS + 0.4 * dur));
+        }
         if (!g_startupPhase && res.ok && !res.radarOnly && g_cfg.enabled) {
             size_t unknown = 0;
             for (const auto& st : res.stations) if (!airportCached(st)) ++unknown;
@@ -2514,6 +2648,7 @@ float flightLoop(float, float, int, void*) {
         g_releaseStepS = 0.0;
     }
     flushPending();
+    loadTick(haveStaged);
 
     // 2) switched off from the menu -> hand weather back to X-Plane
     if (g_eraseRequested) {
@@ -2571,6 +2706,8 @@ float flightLoop(float, float, int, void*) {
                 rq.immediate = (manual && !g_reenable) || !g_firstApplyDone;
                 g_reenable = false;
                 g_fetcher.request(rq);
+                g_fetchRunning = true; g_fetchStartAt = now;
+                if (g_load.active()) g_loadFetchIssued = true;
                 g_lastRequest = now;
                 g_everRequested = true;
                 g_centerLat = lat; g_centerLon = lon; g_haveCenter = true;
@@ -2842,6 +2979,10 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.xpRealWeather = g_xpRealWx;
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence;
     d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
+    d.turbGridAltFt = g_uiTs.gridAltFt; d.turbGridSeq = g_uiTs.gridSeq;
+    uiCloudsTick();
+    d.clouds = g_uiClouds;
+    d.loadingS = g_loadS; d.loadingWhat = g_load.what();
     d.reports = g_mapReports;
     d.wsOn = g_cfg.enabled && g_cfg.windshear;
     d.wsSources = g_uiTs.wsSources; d.wsHigh = g_uiTs.wsHigh; d.wsMed = g_uiTs.wsMed; d.wsLow = g_uiTs.wsLow; d.wsStrongest = g_uiTs.wsStrongest;
@@ -2852,6 +2993,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     wx::UiActions act;
     wx::uiDraw(d, fonts, w, h, poppedOut, act);
     if (!act.search.empty()) startSearch(act.search);
+    uiTurbGridTick(act.mapAltFt);
     if (act.refresh) menuHandler(nullptr, (void*)(intptr_t)kRefresh);
     if (act.maxTurbChanged || act.maxTurbReleased) g_cfg.maxTurbulence = std::max(0.0, std::min(1.0, act.maxTurb));
     if (act.maxTurbReleased) {
@@ -2874,7 +3016,7 @@ void menuHandler(void*, void* item) {
             g_cfg.enabled = !g_cfg.enabled;
             // switched back on: download at once (not held by the manual-refresh gap) and fade in, instead of the immediate
             // rebuild that paused the sim for seconds
-            if (g_cfg.enabled) { g_manualRefresh = true; g_reenable = true; setStatus("Enabled - downloading...", ""); }
+            if (g_cfg.enabled) { g_manualRefresh = true; g_reenable = true; setStatus("Enabled - downloading...", ""); g_load.start("Loading weather"); g_loadFetchIssued = false; }
             else g_eraseRequested = true;
             break;
         case kRefresh:
@@ -3019,6 +3161,8 @@ PLUGIN_API int XPluginEnable(void) {
     g_regenDone = false;
     g_regenAt = Clock::time_point{};
     setStatus(g_cfg.enabled ? "Waiting for sim..." : "Disabled", "");
+    if (g_cfg.enabled) { g_load.start("Loading weather"); g_loadFetchIssued = false; }
+    g_fetchRunning = false;
     logf("WXPlane %s enabled (update every %d min, search %.0f nm)", WX_VERSION, g_cfg.updateMinutes, g_cfg.searchNm);
     return 1;
 }

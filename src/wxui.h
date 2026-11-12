@@ -1,4 +1,4 @@
-// The WXPlane weather window (4.0): tabs for the overview, airports, radar, winds and temperatures aloft, turbulence and the data
+// The WXPlane weather window (4.0): tabs for the overview, map, airports, winds and temperatures aloft, turbulence and the data
 // services, drawn with Dear ImGui. Pure ImGui: no X-Plane calls, so it can be drawn and checked off-line (tests/ui_shot.cpp). The
 // plugin fills UiData from what it already has every frame the window is open, and acts on UiActions.
 #pragma once
@@ -18,6 +18,16 @@ namespace wx {
 
 struct UiTurbLayer { double altFt = 0, edr = 0; bool has = false; };   // has: the layer's own data (false: filled from the layers around it)
 struct UiTurbCell { double lat = 0, lon = 0, edr = 0; };
+// The clouds WXPlane gave X-Plane, on a regular grid around the aircraft (from the records sent: at each point the record that
+// covers it most closely). Up to three layers, feet MSL; the map draws the layer at its chosen altitude.
+struct UiCloudLayer { float baseFt = 0, topFt = 0, cover = 0, type = 0; };
+struct UiCloudGrid {
+    int nx = 0, ny = 0;
+    double lat0 = 0, lon0 = 0, dLat = 0, dLon = 0;   // the centre of cell (0, 0) and the spacing (degrees); row-major from the south-west
+    std::vector<unsigned char> n;                    // layers per cell (0 = no record there)
+    std::vector<UiCloudLayer> layers;                // 3 per cell
+    long seq = 0;                                    // changes whenever the grid is rebuilt
+};
 
 struct UiData {
     const FetchResult* res = nullptr;   // the weather in use (nullptr or !haveData: nothing yet)
@@ -41,6 +51,12 @@ struct UiData {
     std::vector<UiTurbLayer> turbProfile;
     std::vector<UiTurbCell> turbGrid;    // turbulence around the aircraft at its altitude (radar map layer)
     double turbGridDLat = 0.2, turbGridDLon = 0.27;   // the grid's spacing (degrees), so neighbouring squares share their corners exactly
+    double turbGridAltFt = 0;           // the altitude the turbulence grid was sampled at (the map's altitude slider)
+    long turbGridSeq = 0;               // changes whenever the turbulence grid is rebuilt (the map cross-fades old and new)
+    std::shared_ptr<const UiCloudGrid> clouds;   // clouds around the aircraft (map layer), nullptr: none yet
+    // the weather is being (re)built from scratch: start-up, switched back on, a jump to a new place (header countdown)
+    double loadingS = -1;               // seconds until it should all be in, -1: not loading
+    std::string loadingWhat;            // e.g. "Loading weather", "New location"
     std::shared_ptr<const hz::Snapshot> reports;
     // windshear
     bool wsOn = false;
@@ -52,6 +68,9 @@ struct UiData {
     int forceLayers = -1;               // map layers: 1 map, 2 turbulence, 4 pilot reports
     int forcePirep = -1;                // open this pilot report's info window on the Map tab
     int forceAdv = -1;                  // 1: AIRMET and SIGMET layers on, 0: off
+    int forceAloftLayers = -1;          // bit 1 wind barbs, bit 2 clouds (map layers)
+    double forceMapAltFt = -1;          // the map's altitude slider
+    int forceWindSel = -1;              // open this winds-aloft point's decode window on the Map tab
     // the airport search (Airports tab)
     bool searchBusy = false;
     std::string searchError;
@@ -67,6 +86,7 @@ struct UiActions {
     // the settings (the plugin's former menu toggles): flip these
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
     std::string search;                 // look up this ICAO code anywhere in the world (METAR + ATIS)
+    double mapAltFt = -1;               // the map's altitude slider (turbulence layer), when the turbulence layer is shown
 };
 
 struct UiFonts {

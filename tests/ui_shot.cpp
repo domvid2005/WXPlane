@@ -164,6 +164,20 @@ int main(int argc, char** argv) {
         for (const auto& p : prof) { AloftLevel L; L.altFt = p[0]; L.hasWind = true; L.dirDeg = p[1]; L.speedKt = p[2]; L.hasTemp = true; L.tempC = p[3]; a.levels.push_back(L); }
         res.aloft.push_back(a);
     }
+    {   // NOAA FD stations around Boston, each its own winds (they turn and strengthen with height)
+        const struct { const char* id; double lat, lon, dirOff, ktMul; } fd[] = {{"BOS", 42.36, -71.0, 0, 1.0}, {"ALB", 42.75, -73.8, -15, 0.9}, {"ACK", 41.25, -70.06, 10, 1.15},
+                                                                              {"PWM", 43.65, -70.31, -25, 0.8}, {"EMI", 41.55, -71.6, 5, 1.05}, {"CON", 43.2, -71.5, -10, 0.85}, {"BDL", 41.94, -72.68, -5, 0.95}};
+        for (const auto& q : fd) {
+            AloftStation a;
+            a.id = q.id; a.located = true; a.lat = q.lat; a.lon = q.lon;
+            for (const auto& p : prof) {
+                if (p[0] > 39500) break;
+                AloftLevel L; L.altFt = p[0]; L.hasWind = true; L.dirDeg = std::fmod(p[1] + q.dirOff + 360, 360); L.speedKt = p[2] * q.ktMul; L.hasTemp = p[0] > 5000; L.tempC = p[3] + q.dirOff * 0.1;
+                a.levels.push_back(L);
+            }
+            res.aloft.push_back(a);
+        }
+    }
     res.radar.ok = true; res.radar.attempted = true; res.radar.source = "NOAA MRMS (CONUS)"; res.radar.dataTime = now - 240; res.radar.topsFromRadar = true;
     for (int i = 0; i < 26; ++i) {
         RadarCell c;
@@ -218,6 +232,25 @@ int main(int argc, char** argv) {
             d.turbGrid.push_back({la, lo, e});
         }
     d.turbGridDLat = 0.2; d.turbGridDLon = 0.27;
+    {   // the clouds sent to X-Plane: a mid-level deck with gaps, a deep band along the storm line, low stratus to the south-east
+        auto g = std::make_shared<UiCloudGrid>();
+        g->nx = g->ny = 61; g->dLat = 0.1; g->dLon = 0.134; g->lat0 = 42.36 - 30 * g->dLat; g->lon0 = -71.0 - 30 * g->dLon;
+        g->n.assign((size_t)g->nx * g->ny, 0); g->layers.assign((size_t)g->nx * g->ny * 3, UiCloudLayer{});
+        for (int iy = 0; iy < g->ny; ++iy)
+            for (int ix = 0; ix < g->nx; ++ix) {
+                const double la = g->lat0 + iy * g->dLat, lo = g->lon0 + ix * g->dLon;
+                const size_t c = (size_t)iy * g->nx + ix;
+                int n = 0;
+                auto add = [&](float b, float t, float cv, float ty) { if (n < 3 && cv > 0.02f) g->layers[c * 3 + n++] = UiCloudLayer{b, t, cv, ty}; };
+                const double nz = std::sin(la * 7.1) * std::cos(lo * 5.3) + 0.6 * std::sin(la * 13.0 + lo * 9.0);
+                const double dl = (la - 41.75) - (lo + 72.30) * (1.3 / 0.9);   // distance from the storm line (rough)
+                if (std::fabs(dl) < 0.45 && la > 41.5 && la < 43.3) add(2500, (float)(33000 - 30000 * std::fabs(dl)), 0.95f, 3);
+                if (nz > -0.4) add(15000, (float)(20500 + 2500 * nz), (float)std::min(1.0, 0.55 + 0.3 * nz), 1);
+                if (la < 42.0 && lo > -71.2) add(800, 3800, 0.9f, 1);
+                g->n[c] = (unsigned char)n;
+            }
+        d.clouds = g;
+    }
     d.wsOn = true;
 
     ImGui::CreateContext();
@@ -289,6 +322,36 @@ int main(int argc, char** argv) {
         std::printf("wrote %s\n", (out + "/ui_radar_layers.png").c_str());
     }
     d.forceDial = 0; d.forceLayers = 1; d.forcePirep = -1; d.forceAdv = 0;
+    // winds aloft and clouds at FL180 (the altitude slider), one wind barb decoded; then clouds alone low down
+    for (int pass = 0; pass < 2; ++pass) {
+        d.forceLayers = pass == 0 ? 1 : 3; d.forceAloftLayers = pass == 0 ? 3 : 2; d.forceMapAltFt = pass == 0 ? 18000 : 3000; d.forceWindSel = pass == 0 ? 9 : -1;
+        for (int fr = 0; fr < 40; ++fr) {
+            io.DeltaTime = 1.0f / 30.0f;
+            ImGui::NewFrame();
+            d.forceTab = fr == 0 ? 2 : -1;
+            UiActions act;
+            uiDraw(d, f, W, H, false, act);
+            ImGui::Render();
+            ++frames;
+            if (fr == 0) d.forceWindSel = -1;
+        }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        const std::string p = out + (pass == 0 ? "/ui_map_aloft.png" : "/ui_map_clouds_low.png");
+        if (!writePng(cv, p)) return 1;
+        std::printf("wrote %s\n", p.c_str());
+    }
+    d.forceAloftLayers = 0; d.forceMapAltFt = -1; d.forceLayers = 1;
+    // a full reset: the countdown in the header
+    d.loadingS = 83; d.loadingWhat = "Loading weather";
+    for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 0 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+    {
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        if (!writePng(cv, out + "/ui_loading.png")) return 1;
+        std::printf("wrote %s\n", (out + "/ui_loading.png").c_str());
+    }
+    d.loadingS = -1;
     // X-Plane's real weather on: the warning over a locked window; then the weather off: the settings greyed out
     for (int pass = 0; pass < 2; ++pass) {
         d.xpRealWeather = pass == 0;
@@ -313,7 +376,7 @@ int main(int argc, char** argv) {
     d.xpRealWeather = false;
     // duplicate ImGui IDs (ImGui outlines them in red when one is hovered): sweep the mouse over every tab with every map layer on
     {
-        d.forceLayers = 7; d.forceAdv = 1;
+        d.forceLayers = 7; d.forceAdv = 1; d.forceAloftLayers = 3;
         int conflicts = 0;
         for (int tab = 0; tab < 7; ++tab) {
             for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? tab : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); }
@@ -333,7 +396,7 @@ int main(int argc, char** argv) {
                 }
         }
         io.AddMousePosEvent(-1000, -1000);
-        d.forceLayers = 1; d.forceAdv = 0;
+        d.forceLayers = 1; d.forceAdv = 0; d.forceAloftLayers = 0;
         if (conflicts) { std::printf("UI: %d ID conflict(s)\n", conflicts); return 1; }
     }
     // no data yet, and data with nothing in it

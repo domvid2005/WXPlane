@@ -930,10 +930,11 @@ int main() {
     for (int i = 0; i < 20; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     CHECK(g_netRequests == reqBefore);
 
-    std::printf("[4] aircraft moves 84 nm: early refetch is rate-limited to once per 60 s, so still quiet right now\n");
+    std::printf("[4] aircraft jumps 84 nm (a teleport, faster than any aircraft): new weather is downloaded at once, not after the usual minute\n");
     g_lat += 1.4;
-    for (int i = 0; i < 20; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-    CHECK(g_netRequests == reqBefore);
+    for (int i = 0; i < 300 && g_netRequests == reqBefore; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    CHECK(g_netRequests > reqBefore);
+    for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); } // let it apply
 
     g_agl = 0.0f;  // autocal only runs near the ground
     std::printf("[2b] visibility self-correction: mock sim reports 2.5x what we send\n");
