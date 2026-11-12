@@ -331,6 +331,7 @@ void open(BuildFn build) {
 }
 
 bool isOpen() { return g_win && XPLMGetWindowIsVisible(g_win); }
+void hide() { if (g_win) XPLMSetWindowIsVisible(g_win, 0); }
 
 void togglePopOut() {
     if (!g_win) return;

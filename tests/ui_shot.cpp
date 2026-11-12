@@ -189,6 +189,12 @@ int main(int argc, char** argv) {
     const char* ints[] = {"LGT", "", "MOD", "LGT-MOD", "NEG"};
     for (int k = 0; k < 5; ++k) { hz::Pirep p; p.lat = 42 + 0.4 * k; p.lon = -72 + 0.5 * k; p.altFt = 9000 + 6000 * k; p.intensity = ints[k]; p.acType = k % 2 ? "B738" : "A321"; p.obsTime = now - 900 * (k + 1); p.raw = "UA /OV ... /TB " + std::string(ints[k]); snap->pireps.push_back(p); }
     d.reports = snap;
+    for (int gy = 0; gy < 25; ++gy)
+        for (int gx = 0; gx < 25; ++gx) {
+            const double la = d.lat + (gy - 12) * 0.2, lo = d.lon + (gx - 12) * 0.27;
+            const double e = 0.05 + 0.3 * std::exp(-((la - 43.2) * (la - 43.2) + (lo + 72.5) * (lo + 72.5) * 0.4) / 0.5);
+            d.turbGrid.push_back({la, lo, e});
+        }
     d.wsOn = true;
 
     ImGui::CreateContext();
@@ -202,9 +208,9 @@ int main(int argc, char** argv) {
     io.Fonts->GetTexDataAsAlpha8(&tex, &tw, &th);
     io.Fonts->SetTexID((ImTextureID)1);
 
-    const char* names[] = {"overview", "airports", "radar", "winds", "turbulence", "services"};
+    const char* names[] = {"overview", "airports", "radar", "winds", "turbulence", "services", "settings"};
     int frames = 0;
-    for (int tab = 0; tab < 6; ++tab) {
+    for (int tab = 0; tab < 7; ++tab) {
         for (int fr = 0; fr < 3; ++fr) {
             io.DeltaTime = 1.0f / 30.0f;
             io.AddMousePosEvent(-1000, -1000);
@@ -237,16 +243,34 @@ int main(int argc, char** argv) {
         Canvas cv((int)(W * scale), (int)(H * scale));
         raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
         const std::string p = out + "/ui_dial_hdg" + std::to_string((int)hdg) + ".png";
+        (void)0;
         if (!writePng(cv, p)) return 1;
         std::printf("wrote %s\n", p.c_str());
     }
-    d.forceDial = 0;
+    // the radar tab heading up with every layer on (the rotation eases in: run frames until it has arrived)
+    d.headingDeg = 220; d.forceDial = 1; d.forceLayers = 7;
+    for (int fr = 0; fr < 40; ++fr) {
+        io.DeltaTime = 1.0f / 30.0f;
+        ImGui::NewFrame();
+        d.forceTab = fr == 0 ? 2 : -1;
+        UiActions act;
+        uiDraw(d, f, W, H, false, act);
+        ImGui::Render();
+        ++frames;
+    }
+    {
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        if (!writePng(cv, out + "/ui_radar_layers.png")) return 1;
+        std::printf("wrote %s\n", (out + "/ui_radar_layers.png").c_str());
+    }
+    d.forceDial = 0; d.forceLayers = 1;
     // no data yet, and data with nothing in it
     UiData empty; empty.cfg = &cfg; empty.now = now; empty.status1 = "Starting...";
     FetchResult bare; bare.fetchedAt = now;
     UiData thin; thin.res = &bare; thin.haveData = true; thin.cfg = &cfg; thin.now = now;
     for (UiData* x : {&empty, &thin})
-        for (int tab = 0; tab < 6; ++tab)
+        for (int tab = 0; tab < 7; ++tab)
             for (int fr = 0; fr < 2; ++fr) {
                 io.DeltaTime = 1.0f / 30.0f;
                 ImGui::NewFrame();

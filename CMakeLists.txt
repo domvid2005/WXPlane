@@ -96,7 +96,8 @@ target_include_directories(wx_imgui PUBLIC third_party/imgui)
 target_compile_definitions(wx_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS IMGUI_DISABLE_WIN32_FUNCTIONS)
 set(WX_FONT_FILES
   ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-Regular.ttf ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-SemiBold.ttf
-  ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-Bold.ttf ${CMAKE_SOURCE_DIR}/third_party/fonts/JetBrainsMono-Regular.ttf)
+  ${CMAKE_SOURCE_DIR}/third_party/fonts/IBMPlexSans-Bold.ttf ${CMAKE_SOURCE_DIR}/third_party/fonts/JetBrainsMono-Regular.ttf
+  ${CMAKE_SOURCE_DIR}/third_party/basemap/basemap.bin)
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/wx_fonts.c
   COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR}/third_party/fonts -DOUT=${CMAKE_BINARY_DIR}/wx_fonts.c -P ${CMAKE_SOURCE_DIR}/cmake/embed_fonts.cmake

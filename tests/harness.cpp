@@ -793,7 +793,11 @@ static int runTurb() {
     std::printf("[turb]   region turbulence written %d times: layer 10 = %.2f (expected %.2f..%.2f), layer 0 = %.2f\n", g_turbWrites, g_turbArr[10], lo, hi, g_turbArr[0]);
     CHECK(g_turbWrites > 0 && g_turbArr[10] >= lo && g_turbArr[10] <= hi);
     CHECK(g_turbArr[11] > g_turbArr[9]);   // more EDR higher up in the synthetic data
-    CHECK(nr(g_turbArr[3], 0.7f) && nr(g_turbArr[12], 0.7f));   // layers far from the aircraft have no data: X-Plane's own value (0.7) is kept
+    // layers far from the aircraft have no data: never X-Plane's own value (0.7) any more, but the data's own levels carried on
+    // (above the top of the data: its value; below the bottom: tapering to calm at the ground)
+    std::printf("[turb]   layers without data: 3 = %.2f, 12 = %.2f (layer 11 = %.2f)\n", g_turbArr[3], g_turbArr[12], g_turbArr[11]);
+    CHECK(!nr(g_turbArr[3], 0.7f) && !nr(g_turbArr[12], 0.7f));
+    CHECK(g_turbArr[3] < g_turbArr[9] && g_turbArr[12] >= g_turbArr[11] - 0.05f);
     // only the needed levels were downloaded (+-9,500 ft around 33,000 and the ones just beyond), by byte range
     const size_t gtgnBytes = g_gtgnFile.size();
     std::printf("[turb]   range requests so far %d\n", g_rangeRequests);

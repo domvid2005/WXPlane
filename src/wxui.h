@@ -16,7 +16,8 @@ struct ImFont;
 
 namespace wx {
 
-struct UiTurbLayer { double altFt = 0, edr = 0; bool has = false; };
+struct UiTurbLayer { double altFt = 0, edr = 0; bool has = false; };   // has: the layer's own data (false: filled from the layers around it)
+struct UiTurbCell { double lat = 0, lon = 0, edr = 0; };
 
 struct UiData {
     const FetchResult* res = nullptr;   // the weather in use (nullptr or !haveData: nothing yet)
@@ -38,13 +39,15 @@ struct UiData {
     double turbEdr = -1;                // EDR at the aircraft (before Max turbulence), -1 = no data
     std::string turbSource, turbData;   // "GTGN", "ECMWF estimate"...; what data is loaded
     std::vector<UiTurbLayer> turbProfile;
+    std::vector<UiTurbCell> turbGrid;    // turbulence around the aircraft at its altitude (radar map layer)
     std::shared_ptr<const hz::Snapshot> reports;
     // windshear
     bool wsOn = false;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
     std::string wsStrongest;
     int forceTab = -1;
-    int forceDial = -1;                 // the wind dial: 0 north up, 1 heading up, -1 leave it (tests)                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
+    int forceDial = -1;
+    int forceLayers = -1;               // radar map layers: 1 map, 2 turbulence, 4 pilot reports; -1 leave them (tests)                 // the wind dial: 0 north up, 1 heading up, -1 leave it (tests)                  // select this tab (0 Overview .. 5 Services) this frame, -1 leave it
 };
 
 struct UiActions {
@@ -53,7 +56,8 @@ struct UiActions {
     bool maxTurbReleased = false;       // drag ended: save
     double maxTurb = 1.0;
     bool popOut = false;                // move the window to its own OS window (or back)
-    bool toggleTurbulence = false, toggleWindshear = false;
+    // the settings (the plugin's former menu toggles): flip these
+    bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
 };
 
 struct UiFonts {

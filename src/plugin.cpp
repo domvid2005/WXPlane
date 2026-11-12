@@ -125,6 +125,7 @@ std::string configPath() {
     return std::string(prefs) + XPLMGetDirectorySeparator() + "WXPlane.cfg";
 }
 
+bool g_uiOpen = false;     // the weather window is open (the radar map's turbulence layer is only built then)
 bool g_xpRealWx = false;   // X-Plane's own real-world weather is on (it should be off while WXPlane runs)
 std::string g_status1, g_status2;
 void setStatus(const std::string& l1, const std::string& l2) {
@@ -476,7 +477,8 @@ struct TurbState {
     bool init = false, writing = false, everData = false, loggedNoArr = false;
     std::vector<float> saved, sent;
     std::vector<double> edrS;
-    std::vector<bool> has;      // the layer has current data (otherwise X-Plane's own value is kept there)
+    std::vector<bool> has;      // the layer has a value (its own data, or filled from the layers around it)
+    std::vector<bool> real;     // the layer had data of its own at the last sample (smoothing only runs between real values)
     Clock::time_point nextSample, nextWrite, nextLog;
     double sg = 0, sg2 = 0; int cnt = 0;
     std::string lastSource;
@@ -487,6 +489,9 @@ struct UiTurbState {
     double edr = -1;
     std::string source, data;
     std::vector<wx::UiTurbLayer> profile;
+    std::vector<bool> filled;   // the layer had no data of its own (filled from the layers around it)
+    std::vector<wx::UiTurbCell> grid;   // turbulence around the aircraft at its altitude, for the radar map (every 10 s)
+    std::time_t gridAt = 0;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
     std::string wsStrongest;
 } g_uiTs;
@@ -516,6 +521,9 @@ void turbRestore(const char* why) {
 
 void turbulenceTick() {
     for (const auto& s : g_turbFetch.takeLog()) turbLog("%s", s.c_str());
+#ifndef WX_HARNESS
+    g_uiOpen = wx::xpui::isOpen();
+#endif
     TurbState& t = g_ts;
     if (!t.init) {
         t.init = true;
@@ -561,17 +569,40 @@ void turbulenceTick() {
         }
         return e;
     };
-    if ((int)t.edrS.size() != t.n) { t.edrS.assign((size_t)t.n, 0.0); t.sent.assign((size_t)t.n, 0.0f); t.has.assign((size_t)t.n, false); }
+    if ((int)t.edrS.size() != t.n) { t.edrS.assign((size_t)t.n, 0.0); t.sent.assign((size_t)t.n, 0.0f); t.has.assign((size_t)t.n, false); t.real.assign((size_t)t.n, false); }
     const double scale = std::max(0.0, std::min(1.0, g_cfg.maxTurbulence)), a = 1.0 - std::exp(-1.0 / 20.0);
     for (int k = 0; k < t.n; ++k) {
         const wx::turb::Sample s = wx::turb::sampleAt(in, lat, lon, altM[k] / 0.3048, wall, simT);
         std::string why;
         const double raw = withReports(s, altM[k] / 0.3048, &why);
         const double e = raw * scale;
-        const bool had = t.has[k];
+        const bool had = t.real[k];
         t.has[k] = std::strcmp(s.source, "none") != 0 || !why.empty();
+        t.real[k] = t.has[k];
         if (!t.has[k]) t.edrS[k] = 0;
         else t.edrS[k] = (t.everData && had) ? t.edrS[k] + (e - t.edrS[k]) * a : e;
+    }
+    // Every layer is WXPlane's (2026-11-12, "all turbulence controlled by this plugin, not by X-Plane's own"): a layer with no data
+    // (below FL100 outside the US, above the top of the data) takes its value from the layers that have data - between two of them
+    // linearly, below the lowest one that value tapering to calm at the ground, above the highest one that value. No data at all: calm.
+    {
+        std::vector<int> dat;
+        for (int k = 0; k < t.n; ++k) if (t.has[k]) dat.push_back(k);
+        g_uiTs.filled.assign((size_t)t.n, false);
+        for (int k = 0; k < t.n; ++k) {
+            if (t.has[k]) continue;
+            g_uiTs.filled[(size_t)k] = true;
+            double v = 0;
+            if (!dat.empty()) {
+                int lo = -1, hi = -1;
+                for (int j : dat) { if (j < k) lo = j; if (j > k && hi < 0) hi = j; }
+                if (lo >= 0 && hi >= 0) { const double f = altM[hi] > altM[lo] ? (altM[k] - altM[lo]) / (altM[hi] - altM[lo]) : 0.5; v = t.edrS[lo] + (t.edrS[hi] - t.edrS[lo]) * f; }
+                else if (hi >= 0) v = t.edrS[hi] * std::max(0.0, std::min(1.0, altM[hi] > 0 ? altM[k] / altM[hi] : 1.0));
+                else v = t.edrS[lo];
+            }
+            t.edrS[k] = v;
+            t.has[k] = true;
+        }
     }
     if (!t.everData) {
         t.everData = true;
@@ -588,7 +619,7 @@ void turbulenceTick() {
             turbLog("realistic turbulence on: writing sim/weather/region/turbulence (%d layers) every 5 s; max turbulence %.2f", t.n, scale);
         }
         for (int k = 0; k < t.n; ++k) {
-            // A layer without data (e.g. below FL100 outside the US) keeps X-Plane's own value from before WXPlane wrote.
+            // Every layer has a value (filled from the layers with data where it has none of its own), so X-Plane's own is never used.
             const double target = t.has[k] ? wx::turb::edrToXpLevel(t.edrS[k]) : t.saved[k];
             t.sent[k] += (float)std::max(-0.5, std::min(0.5, target - t.sent[k]));
         }
@@ -606,7 +637,20 @@ void turbulenceTick() {
         if (in.gtgn) g_uiTs.data = "GTGN " + utcHM(in.gtgn->valid);
         if (in.ecA) g_uiTs.data += (g_uiTs.data.empty() ? "" : " · ") + std::string("ECMWF ") + in.ecA->run;
         g_uiTs.profile.clear();
-        for (int k = 0; k < t.n; ++k) g_uiTs.profile.push_back({altM[k] / 0.3048, t.edrS.size() > (size_t)k ? t.edrS[k] : 0.0, t.has.size() > (size_t)k && t.has[k]});
+        for (int k = 0; k < t.n; ++k) g_uiTs.profile.push_back({altM[k] / 0.3048, t.edrS.size() > (size_t)k ? t.edrS[k] : 0.0, !(g_uiTs.filled.size() > (size_t)k && g_uiTs.filled[(size_t)k])});
+        // the radar map's turbulence layer: the data at the aircraft's altitude on a 25 x 25 grid over 300 x 300 nm, while the window is open
+        if (g_uiOpen && wall - g_uiTs.gridAt >= 10) {
+            g_uiTs.gridAt = wall;
+            g_uiTs.grid.clear();
+            const double kx = std::max(0.2, std::cos(lat * 3.14159265358979 / 180.0));
+            for (int gy = 0; gy < 25; ++gy)
+                for (int gx = 0; gx < 25; ++gx) {
+                    const double la = lat + (gy - 12) * 12.0 / 60.0, lo = lon + (gx - 12) * 12.0 / (60.0 * kx);
+                    const wx::turb::Sample g = wx::turb::sampleAt(in, la, lo, altFt, wall, simT);
+                    if (std::strcmp(g.source, "none") == 0) continue;
+                    g_uiTs.grid.push_back({la, lo, g.edr});
+                }
+        }
     }
     if (now >= t.nextLog || hereSource != t.lastSource) {
         t.nextLog = now + std::chrono::seconds(60);
@@ -2737,7 +2781,18 @@ void showWindow() {
     }
 }
 
+void menuHandler(void*, void* item);
 #ifndef WX_HARNESS
+XPLMCommandRef g_cmdWindow = nullptr, g_cmdRefresh = nullptr;
+int g_pluginsItem = -1;
+void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut);
+int cmdHandler(XPLMCommandRef, XPLMCommandPhase phase, void* ref) {
+    if (phase != xplm_CommandBegin) return 1;
+    if ((intptr_t)ref == 1) { if (wx::xpui::isOpen()) wx::xpui::hide(); else wx::xpui::open(uiBuild); }
+    else menuHandler(nullptr, (void*)(intptr_t)kRefresh);
+    return 1;
+}
+
 // The weather window (4.0): fills the window's data from what the plugin already has, and acts on its buttons.
 void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     wx::UiData d;
@@ -2754,24 +2809,25 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.status1 = g_status1; d.status2 = g_status2;
     d.xpRealWeather = g_xpRealWx;
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence;
-    d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile;
+    d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid;
     d.reports = g_mapReports;
     d.wsOn = g_cfg.enabled && g_cfg.windshear;
     d.wsSources = g_uiTs.wsSources; d.wsHigh = g_uiTs.wsHigh; d.wsMed = g_uiTs.wsMed; d.wsLow = g_uiTs.wsLow; d.wsStrongest = g_uiTs.wsStrongest;
     wx::UiActions act;
     wx::uiDraw(d, fonts, w, h, poppedOut, act);
-    if (act.refresh) {
-        if (!g_cfg.enabled) g_cfg.enabled = true;
-        g_manualRefresh = true;
-        setStatus("Refresh requested...", "");
-        syncMenu();
-    }
+    if (act.refresh) menuHandler(nullptr, (void*)(intptr_t)kRefresh);
     if (act.maxTurbChanged || act.maxTurbReleased) g_cfg.maxTurbulence = std::max(0.0, std::min(1.0, act.maxTurb));
     if (act.maxTurbReleased) {
         wx::saveConfig(g_cfgPath, g_cfg);
         if (g_cfg.enabled && g_haveLast) g_reapplyRequested = true;
     }
     if (act.popOut) wx::xpui::togglePopOut();
+    // the settings (the 3.0 menu's toggles), with the same effects
+    if (act.toggleEnabled) menuHandler(nullptr, (void*)(intptr_t)kEnabled);
+    if (act.toggleAtis) menuHandler(nullptr, (void*)(intptr_t)kAtis);
+    if (act.toggleAloft) menuHandler(nullptr, (void*)(intptr_t)kAloft);
+    if (act.toggleTurbulence) menuHandler(nullptr, (void*)(intptr_t)kTurbulence);
+    if (act.toggleWindshear) menuHandler(nullptr, (void*)(intptr_t)kWindshear);
 }
 #endif
 
@@ -2844,6 +2900,16 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_drFramePeriod = XPLMFindDataRef("sim/operation/misc/frame_rate_period");
     g_drLoading = XPLMFindDataRef("sim/graphics/scenery/async_scenery_load_in_progress"); // null if this build lacks it
 
+#ifndef WX_HARNESS
+    // 4.0: one item, Plugins > WXPlane, opens the weather window, where every setting now is. It is a command, so it can be bound to a
+    // key or a joystick button too (wxplane/weather_window); wxplane/refresh refreshes the weather.
+    g_cmdWindow = XPLMCreateCommand("wxplane/weather_window", "WXPlane: open or close the weather window");
+    g_cmdRefresh = XPLMCreateCommand("wxplane/refresh", "WXPlane: refresh the weather now");
+    if (g_cmdWindow) XPLMRegisterCommandHandler(g_cmdWindow, cmdHandler, 1, (void*)(intptr_t)1);
+    if (g_cmdRefresh) XPLMRegisterCommandHandler(g_cmdRefresh, cmdHandler, 1, (void*)(intptr_t)2);
+    g_pluginsItem = g_cmdWindow ? XPLMAppendMenuItemWithCommand(XPLMFindPluginsMenu(), "WXPlane", g_cmdWindow) : -1;
+    return 1;
+#endif
     int sub = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "WXPlane", nullptr, 0);
     g_menu = XPLMCreateMenu("WXPlane", XPLMFindPluginsMenu(), sub, menuHandler, nullptr);
     g_idxEnabled = XPLMAppendMenuItem(g_menu, "Enabled", (void*)(intptr_t)kEnabled, 0);
@@ -2873,6 +2939,9 @@ PLUGIN_API void XPluginStop(void) {
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
 #ifndef WX_HARNESS
     wx::xpui::destroy();
+    if (g_cmdWindow) XPLMUnregisterCommandHandler(g_cmdWindow, cmdHandler, 1, (void*)(intptr_t)1);
+    if (g_cmdRefresh) XPLMUnregisterCommandHandler(g_cmdRefresh, cmdHandler, 1, (void*)(intptr_t)2);
+    if (g_pluginsItem >= 0) { XPLMRemoveMenuItem(XPLMFindPluginsMenu(), g_pluginsItem); g_pluginsItem = -1; }
 #endif
     if (g_setWin) { XPLMDestroyWindow(g_setWin); g_setWin = nullptr; }
     if (g_menu) { XPLMDestroyMenu(g_menu); g_menu = nullptr; }

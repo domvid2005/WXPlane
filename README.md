@@ -12,21 +12,23 @@ Requires **X-Plane 12.3 or newer** (it uses the `XPLMWeather` plugin API, SDK 4.
 
 ## Menu (Plugins → WXPlane)
 
-| Item | What it does |
+Since 4.0, **Plugins → WXPlane** opens the weather window directly; every setting is in it (Settings tab):
+
+| Setting | What it does |
 |---|---|
-| **Enabled** | On/off. Off removes all of the plugin's weather and gives control back to X-Plane. |
-| **Refresh Weather Data Now** | Downloads fresh data and applies it without freezing the sim; X-Plane fades it in over 1–2 minutes (`manual_refresh_immediate = 1` makes it appear at once, at the cost of a freeze of several seconds). Also turns the plugin on if it was off. |
-| **Weather Window...** | Opens the WXPlane weather window (4.0, see below): the nearest airport decoded, nearby airports, a radar picture, winds and temperatures aloft, turbulence, windshear and the state of every data service. Resizable; can pop out into its own window, and opens in VR when VR is on. |
+| **WXPlane weather on** | On/off. Off removes all of the plugin's weather and gives control back to X-Plane. |
+| **Refresh** (top right) | Downloads fresh data and applies it without freezing the sim; X-Plane fades it in over 1–2 minutes (`manual_refresh_immediate` = 1 applies at once). |
 | **Use ATIS** | Merge D-ATIS data for airports near you. |
-| **Global Winds/Temps & Clouds Aloft (GFS)** | On (default): winds and temperatures at every level, clouds above what airports report, and the weather over open water come from the GFS model (Open-Meteo). Off: only the lowest 10,000 ft is touched, X-Plane's own winds/temps are used above, and nothing is set where no airport reports. |
+| **Global winds/temps & clouds aloft (GFS)** | On (default): winds and temperatures at every level, clouds above what airports report, and the weather over open water. |
+| **Realistic windshear** | Gust fronts and microburst outflow near real convection (see below). On by default. |
+| **Realistic turbulence** | Turbulence from real data at every altitude: NOAA GTGN in the US, an ECMWF-based estimate elsewhere, pilot reports (see below). On by default. |
+| **Max turbulence** | A slider from 0 (no turbulence from WXPlane at all) to 1.0 (full realism, as the data says). |
+
+Two X-Plane commands can be bound to keys or buttons: `wxplane/weather_window` (open/close the window) and `wxplane/refresh`.
 
 Which layers count: the rough-top records apply to every layer with at least `rough_min_coverage` (0.65) coverage, so broken (BKN, 0.70) decks get them as well as overcast ones. Set it to 0.85 for overcast only.
 
 Rough overcast tops (experimental, OFF by default): with `top_bumps = 1`, WXPlane scatters up to `bump_count` (10) small records over thick overcast decks (`bump_fill_count` (1) per gap-fill tile, at most `bump_max` (200) per update). Each record is the parent layer unchanged - same slot, type, coverage and base - with only the top raised, by at most 20% of the deck thickness and `bump_height_m` (550 m), and never into the layer above. Each circle lies inside its parent record. Earlier builds (on by default) also changed type, coverage and base, which X-Plane blended into cloud walls. Upgrading to config version 19 switches `top_bumps` off once and leaves your other settings alone.
-| **Enable Realistic Windshear** | Gust fronts and microburst outflow near real convection (see below). On by default. |
-| **Enable Realistic Turbulence** | Turbulence from real data: NOAA GTGN in the US, an ECMWF-based estimate elsewhere (see below). On by default. |
-| **Max Turbulence...** | Below all the toggles, above the status lines. A slider from 0 (no turbulence from WXPlane at all) to 1.0 (full realism, as the data says). It scales all of WXPlane's turbulence: the real-data turbulence, the storm turbulence and the gust turbulence at airports. Saved when you release it (`max_turbulence`). |
-| *status lines* | Last update time, METAR/ATIS/fog counts, number of NOAA winds-aloft stations, nearest station. |
 
 Settings are saved to `Output/preferences/WXPlane.cfg`.
 
@@ -115,8 +117,14 @@ Plugins → WXPlane → Weather Window... opens a window drawn with Dear ImGui, 
 * **Airports** - every station in use, nearest first (category, wind, visibility, weather, clouds, temperature); select one for
   its report, its ATIS and exactly what WXPlane sent to X-Plane for it.
 * **Radar** - the radar picture larger, with the strongest cells (reflectivity, rain rate, top, distance and bearing).
+  The map has three layers (buttons above it): **Map** (coastlines, borders, state/province lines and lakes from Natural Earth,
+  public domain, embedded - no map downloads), **Turb** (the turbulence at the aircraft's altitude on a 12 nm grid, 300 x 300 nm,
+  from the realistic-turbulence data) and **PIREPs** (pilot reports as triangles coloured by turbulence, labelled with their level).
+  Click the map or the wind dial to turn both from north up to heading up and back (an eased turn; the aircraft symbol uses its
+  heading, not its ground track, so it no longer swings around on the ground).
 * **Winds & Temps** - the profile at the aircraft every 1,000-2,000 ft up to FL600, with ISA deviation and the tropopause.
 * **Turbulence** - EDR by altitude at the aircraft, the nearby pilot reports, windshear.
+* **Settings** - every on/off setting and the Max turbulence slider (the 3.0 menu).
 * **Services** - every data service with its state.
 
 Refresh and Pop out are at the top right. The window follows X-Plane's UI scale (its text is rebuilt at the screen's pixel density),
@@ -562,7 +570,7 @@ Menu **Enable Realistic Turbulence** (on by default) and **Max Turbulence...** (
 - **Near the edge of GTGN's grid** the two are blended over about 60 km.
 - **To X-Plane:** the EDR at each of the 13 layers of `sim/weather/region/turbulence` (smoothed over 20 s, at most 0.5 per 5 s) goes
   through the response measured in the sim: X-Plane's scale is usable only from 0 to 3, and not linearly. Smooth air (EDR
-  ≤ 0.07) adds nothing; layers without data keep X-Plane's own value. Nothing else is written,
+  ≤ 0.07) adds nothing; every layer is WXPlane's: a layer without data takes the value of the layers with data around it (between two: interpolated; above the top: the top's value; below the bottom: tapering to calm at the ground; no data at all: calm). Nothing else is written,
   and X-Plane's own values are put back when the feature is turned off.
 - **Stale data is not used:** a GTGN analysis older than 45 minutes, or an ECMWF step more than 4 hours from now, is ignored.
   With no current data, nothing is added.

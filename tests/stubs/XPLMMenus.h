@@ -12,3 +12,6 @@ void XPLMAppendMenuSeparator(XPLMMenuID);
 void XPLMSetMenuItemName(XPLMMenuID, int, const char*, int);
 void XPLMCheckMenuItem(XPLMMenuID, int, XPLMMenuCheck);
 void XPLMEnableMenuItem(XPLMMenuID, int, int);
+#include "XPLMUtilities.h"
+int XPLMAppendMenuItemWithCommand(XPLMMenuID, const char*, XPLMCommandRef);
+void XPLMRemoveMenuItem(XPLMMenuID, int);

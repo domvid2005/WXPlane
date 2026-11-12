@@ -13,6 +13,9 @@ WXPlane includes the following open-source software. Their licences require thes
     (the weather window's report text), Copyright 2020 The JetBrains Mono Project Authors - SIL Open Font License 1.1 (full text
     at the end). Both are subset to Latin characters and embedded in the plugin.
 
+  * Natural Earth 1:50m coastlines, borders, state/province lines and lakes (the radar map) - public domain
+    (https://www.naturalearthdata.com), converted by tools/make_basemap.py and embedded in the plugin.
+
 Data used by WXPlane (not included in the plugin, downloaded while flying):
   * NOAA / National Weather Service: Aviation Weather Center (METAR, pilot reports), MRMS radar (reflectivity, echo tops,
     precipitation type), GTGN turbulence nowcast (GTG developed by NCAR for the FAA). Public domain.
