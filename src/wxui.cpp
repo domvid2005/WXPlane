@@ -202,7 +202,8 @@ long isaDevIn(double devC) { return std::lround(tempF() ? devC * 9.0 / 5.0 : dev
 
 // The units switch, right-aligned on the current line: a slightly bigger bubble holding two small labelled switches,
 // TEMP (°C / °F) and WIND (°T / °M); the airport lists use it (the home page's and the Airports tab's are the same switch)
-void windRefSwitch(const char* id, float rightGap = 0.0f) {
+bool& dialHeadingUp();
+void windRefSwitch(const char* id, float rightGap = 0.0f, bool withLock = false) {
     // one row, the height of the text: WIND °T °M | TEMP °C °F, in one bubble, right-aligned on the current line
     ImGui::PushID(id);
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -211,7 +212,10 @@ void windRefSwitch(const char* id, float rightGap = 0.0f) {
     auto bw = [&](const char* t) { return ImGui::CalcTextSize(t).x + 2 * st.FramePadding.x; };
     const float lt = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "TEMP").x, lw = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "WIND").x;
     const float pad = 6, inner = 4, gapG = 12;
-    const float boxW = pad + lt + inner + bw("°C") + 2 + bw("°F") + gapG + lw + inner + bw("°T") + 2 + bw("°M") + pad;
+    // withLock: a North Lock / Heading Lock switch first, in the same bubble (the wind dial's switch: the arrows turn with it)
+    const char* lockTxt = dialHeadingUp() ? "Heading Lock" : "North Lock";
+    const float lockW = withLock ? std::max(bw("Heading Lock"), bw("North Lock")) + gapG : 0.0f;
+    const float boxW = pad + lockW + lt + inner + bw("°C") + 2 + bw("°F") + gapG + lw + inner + bw("°T") + 2 + bw("°M") + pad;
     const float boxH = ImGui::GetTextLineHeight() + 4;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - boxW - rightGap));
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
@@ -233,6 +237,18 @@ void windRefSwitch(const char* id, float rightGap = 0.0f) {
         }
         x += gapG - 2;
     };
+    if (withLock) {
+        const bool on = dialHeadingUp();
+        ImGui::SetCursorScreenPos(ImVec2(x, p0.y + 2));
+        ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
+        ImGui::PushStyleColor(ImGuiCol_Text, v4(on ? cAccent : cSoft));
+        const float lwb = std::max(bw("Heading Lock"), bw("North Lock"));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(st.FramePadding.x, 0.0f));   // the height of the °T / °M buttons
+        if (ImGui::Button(lockTxt, ImVec2(lwb, ImGui::GetTextLineHeight()))) dialHeadingUp() = !dialHeadingUp();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+        x += lwb + gapG;
+    }
     group("WIND", lw, "°T", "°M", windMagnetic(), 1);
     group("TEMP", lt, "°C", "°F", tempF(), 0);
     ImGui::SetCursorScreenPos(p0);
@@ -790,7 +806,7 @@ double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k
 // Up to two of them can be open at once (the oldest closes when a third is clicked), and they never overlap each other.
 struct SelItem { int kind = 0; std::string key; ImVec2 at; ImVec2 lastSize = ImVec2(300, 200); ImVec2 pos, size; bool shown = false;
                  bool dragged = false, dragging = false;
-                 bool fixed = false; int frames = 0; };   // fixed: placed once (after it was measured), it stays on that spot   // dragged: moved by hand, it stays where it was put (inside the map, off the other window)   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
+                 bool fixed = false; int frames = 0, stable = 0; ImVec2 measSize = ImVec2(-1, -1); };   // fixed: placed once (after it was measured), it stays on that spot   // dragged: moved by hand, it stays where it was put (inside the map, off the other window)   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
 struct MapSel { std::vector<SelItem> items; ImVec2 mapMin, mapMax; };
 MapSel& mapSel() { static MapSel s; return s; }
 SelItem* selFind(int kind, const std::string& key) { for (auto& it : mapSel().items) if (it.kind == kind && it.key == key) return &it; return nullptr; }
@@ -806,6 +822,7 @@ void selOpen(int kind, const std::string& key, ImVec2 at) {
 std::string pirepKey(const hz::Pirep& p) { return p.raw + "|" + std::to_string((long long)p.obsTime); }
 void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, std::vector<std::string>& open);
 std::string pirepConditions(const hz::Pirep& p);
+bool pirepListed(const hz::Pirep& p);   // a report the lists show (it says something)
 std::string advKey(const hz::Advisory& a) { return a.name + "|" + std::to_string((long long)a.from) + "|" + std::to_string(a.pts.size()); }
 
 bool& showAirports() { static bool v = true; return v; }
@@ -1548,11 +1565,11 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         const bool movedOff = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
         if (movedOff && !recentering()) {   // the map moved off the aircraft: a small + marks its centre (the local time's place):
             // see-through inside, outlined in white (with a faint dark edge, so it shows on light radar colours too)
-            const float a = 7.0f, w = 2.0f;   // arm length, half the arm width
+            const float a = 5.0f, w = 1.5f;   // arm length, half the arm width
             const ImVec2 pts[12] = {{c.x - w, c.y - a}, {c.x + w, c.y - a}, {c.x + w, c.y - w}, {c.x + a, c.y - w}, {c.x + a, c.y + w}, {c.x + w, c.y + w},
                                     {c.x + w, c.y + a}, {c.x - w, c.y + a}, {c.x - w, c.y + w}, {c.x - a, c.y + w}, {c.x - a, c.y - w}, {c.x - w, c.y - w}};
-            dl->AddPolyline(pts, 12, IM_COL32(0, 0, 0, 110), ImDrawFlags_Closed, 2.6f);
-            dl->AddPolyline(pts, 12, IM_COL32(255, 255, 255, 235), ImDrawFlags_Closed, 1.1f);
+            dl->AddPolyline(pts, 12, IM_COL32(0, 0, 0, 90), ImDrawFlags_Closed, 1.8f);
+            dl->AddPolyline(pts, 12, IM_COL32(255, 255, 255, 220), ImDrawFlags_Closed, 0.7f);
         }
         {   // the time: Zulu, or (clicked: blue) local time at the aircraft, or at the + in the middle while the map is moved off it
             bool est = false;
@@ -1702,7 +1719,12 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
         }
         if (!found) return false;
         sel.pos = ImVec2(x, y);
-        if (++sel.frames >= 3) sel.fixed = true;
+        // shown only once its size has settled (the same for 2 frames running: wrapped text can take a few frames to fit), so it
+        // appears at its final place and never jumps inside the map after it was seen ("opens outside, then jumps in", 2026-11-12)
+        const bool same = std::fabs(sel.lastSize.x - sel.measSize.x) < 0.5f && std::fabs(sel.lastSize.y - sel.measSize.y) < 0.5f;
+        sel.stable = same ? sel.stable + 1 : 0;
+        sel.measSize = sel.lastSize;
+        if ((++sel.frames >= 3 && sel.stable >= 2) || sel.frames >= 15) sel.fixed = true;
         ImGui::SetNextWindowPos(ImVec2(x, y));
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, mx.x - mn.x - 8), std::max(120.0f, mx.y - mn.y - 8)));
     }
@@ -2079,7 +2101,7 @@ void radarPanel(const UiData& d, const UiFonts& f, bool big) {
         ImGui::Spacing();
         sectionTitle(f, "Pilot reports");
         size_t shown = 0;   // the ones the list shows (a report that says nothing is not listed)
-        if (d.reports) for (const auto& q : d.reports->pireps) if (pirepConditions(q) != "—") ++shown;
+        if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) ++shown;
         if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", shown).c_str()); }
         const float lh = ImGui::GetContentRegionAvail().y - 4;
         if (!d.reports || shown == 0) mutedWrapped("No pilot reports in the last 90 minutes.");
@@ -2101,6 +2123,15 @@ std::string pirepConditions(const hz::Pirep& p) {
     if (c.empty() && p.windKt >= 0) add(fmt("wind %03.0f/%.0f", std::max(0.0, p.windDir), p.windKt));
     if (c.empty() && p.tempC > -100) add("temp " + tempText(p.tempC));
     return c.empty() ? std::string("—") : c;
+}
+// A report the lists show: it says something (turbulence, icing, weather, clouds, wind or temperature) and has a place. Ones that
+// only carry a remark or nothing at all made rows of dashes ("blank PIREP rows", 2026-11-12).
+bool pirepListed(const hz::Pirep& p) {
+    if (std::fabs(p.lat) > 90 || std::fabs(p.lon) > 360) return false;
+    const std::string c = pirepConditions(p);
+    if (c == "—") return false;
+    for (char ch : c) if (!std::isspace((unsigned char)ch) && ch != '-' && ch != '/' && ch != '.') return true;
+    return false;
 }
 // how much attention a report needs (colour and the Conditions sort): turbulence by EDR, icing and wind shear count too
 double pirepSeverity(const hz::Pirep& p) {
@@ -2127,7 +2158,7 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
     ImGui::TableHeadersRow();
     std::vector<const hz::Pirep*> v;
     // reports that say nothing (no turbulence, icing, weather, clouds, wind or temperature: an empty line of dashes) are left out
-    if (d.reports) for (const auto& q : d.reports->pireps) if (pirepConditions(q) != "—") v.push_back(&q);
+    if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) v.push_back(&q);
     auto dd = [&](const hz::Pirep* q) { return d.havePos ? distNm(d.lat, d.lon, q->lat, q->lon) : 0.0; };
     int col = kPrDist; bool desc = false;
     if (ImGuiTableSortSpecs* sp = ImGui::TableGetSortSpecs())
@@ -2227,14 +2258,14 @@ bool aloftAt(const UiData& d, std::vector<AloftRow>& rows, float& tropoFt, float
     return true;
 }
 
-// points where the wind goes (from dirDeg towards dirDeg+180). North Lock: north is up, in blue; Heading Lock: the aircraft's heading
-// is up (like the wind dial), in white
+// points where the wind goes (from dirDeg towards dirDeg+180). North Lock: north is up, in white; Heading Lock: the aircraft's heading
+// is up (like the wind dial), in blue (as the dial's lock is lit blue)
 void windArrow(float dirDeg, float size, float upDeg = 0.0f, bool headingUp = false) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float h = ImGui::GetTextLineHeight();
     const ImVec2 c(p.x + size * 0.5f, p.y + h * 0.5f);
     const double a = (dirDeg + 180.0 - upDeg) * kPi / 180.0;
-    const ImU32 col = headingUp ? IM_COL32(236, 239, 244, 255) : IM_COL32(127, 182, 255, 255);
+    const ImU32 col = headingUp ? IM_COL32(127, 182, 255, 255) : IM_COL32(236, 239, 244, 255);
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
     const float L = size * 0.45f;
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -2373,7 +2404,7 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
     if (!d.turbData.empty()) { ImGui::SameLine(); muted(d.turbData.c_str()); }
     if (!slider) {   // the home page: three rows
         int withTurb = 0, total = 0;
-        if (d.reports) for (const auto& p : d.reports->pireps) { ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }
+        if (d.reports) for (const auto& p : d.reports->pireps) { if (!pirepListed(p)) continue; ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }
         if (!d.turbConflict.empty()) statRow(f, "At the aircraft", "Other add-on", d.turbConflict + " controls it", cDown);
         else statRow(f, "At the aircraft", d.turbOn ? turbWord(d.turbEdr) : std::string("Off"), d.turbOn && d.turbEdr >= 0 ? fmt("EDR %.2f · %s", d.turbEdr, d.turbSource.c_str()) : std::string());
         (void)total;
@@ -2385,7 +2416,7 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
     }
     const float bw = (ImGui::GetContentRegionAvail().x - 16) / 3.0f;
     int withTurb = 0, total = 0;
-    if (d.reports) for (const auto& p : d.reports->pireps) { ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }
+    if (d.reports) for (const auto& p : d.reports->pireps) { if (!pirepListed(p)) continue; ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }
     statBox(f, "At the aircraft", d.turbOn ? turbWord(d.turbEdr) : std::string("Off"), d.turbOn && d.turbEdr >= 0 ? fmt("EDR %.2f · %s", d.turbEdr, d.turbSource.c_str()) : std::string(" "), bw);
     ImGui::SameLine(0, 8);
     statBox(f, "Pilot reports", d.reports ? fmt("%d", total) : std::string("—"), d.reports ? fmt("%d with turbulence", withTurb) : std::string(" "), bw);
@@ -2783,35 +2814,13 @@ void tabRadar(const UiData& d, const UiFonts& f) {
     panelEnd();
 }
 
-// A North Lock / Heading Lock bubble at the right end of the current line (the same switch as a click on the wind dial)
-float lockButtonWidth() { return ImGui::CalcTextSize("Heading Lock").x + 2 * ImGui::GetStyle().FramePadding.x + 8; }
-void lockButton(const char* id) {
-    const float w = lockButtonWidth();
-    ImGui::SameLine();
-    const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - w;
-    ImGui::SetCursorPosX(x);
-    const bool on = dialHeadingUp();
-    ImGui::PushID(id);
-    ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(40, 62, 98, 255) : IM_COL32(36, 39, 46, 255)));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v4(on ? IM_COL32(52, 78, 120, 255) : IM_COL32(48, 52, 62, 255)));
-    ImGui::PushStyleColor(ImGuiCol_Text, v4(on ? cAccent : cSoft));
-    ImGui::PushStyleColor(ImGuiCol_Border, v4(on ? cAccent : cBorder));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-    if (ImGui::SmallButton(on ? "Heading Lock" : "North Lock")) dialHeadingUp() = !dialHeadingUp();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(4);
-    ImGui::PopID();
-}
-
 void tabAloft(const UiData& d, const UiFonts& f) {
     const float H = ImGui::GetContentRegionAvail().y;
     if (panelBegin("aloftfull", ImVec2(0, H))) {
         sectionTitle(f, "Winds & temperatures aloft at the aircraft");
         const Station* st = nearestStation(d);
         if (st) { ImGui::SameLine(); muted(fmt("GFS, blended for %s", st->icao.c_str()).c_str()); }
-        { UnitScope us(g_unitsAloft); windRefSwitch("wrAloftTab", lockButtonWidth() + 10); }
-        lockButton("lkAloftTab");   // North / Heading Lock, the same as the wind dial's (the arrows turn with it)
+        { UnitScope us(g_unitsAloft); windRefSwitch("wrAloftTab", 0.0f, true); }   // with North / Heading Lock in the same bubble
         // as many levels as fit without scrolling (the densest set of these that fits the window's height)
         const float rowH = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
         const int rows = std::max(6, (int)((ImGui::GetContentRegionAvail().y - 4) / rowH) - 2);   // header and tropopause rows
@@ -2887,7 +2896,7 @@ void tabTurbulence(const UiData& d, const UiFonts& f, UiActions& act) {
     ImGui::SameLine(0, 12);
     if (panelBegin("treports", ImVec2(0, H))) {
         sectionTitle(f, "Pilot reports nearby");
-        if (!d.reports || d.reports->pireps.empty()) mutedWrapped("No pilot reports in the last 90 minutes.");
+        if (!d.reports || std::none_of(d.reports->pireps.begin(), d.reports->pireps.end(), [](const hz::Pirep& q) { return pirepListed(q); })) mutedWrapped("No pilot reports in the last 90 minutes.");
         else {
             // every report (sortable, nearest first); a click on a row opens (and closes) its details below it
             static std::vector<std::string> open;
