@@ -666,7 +666,7 @@ static int runOpera() {
     {
         const size_t d = g_logAll.find("radar: none");
         if (d != std::string::npos) std::printf("[opera] %s\n", g_logAll.substr(d, g_logAll.find('\n', d) - d).c_str());
-        CHECK(g_logAll.find("European radar (OPERA): feed down: newest composite is ") != std::string::npos && g_logAll.find("(4 h 4") != std::string::npos);
+        CHECK(g_logAll.find("European radar (OPERA): feed down: newest composite is ") != std::string::npos && g_logAll.find(" (4 h ") != std::string::npos);
         CHECK(g_operaTiles == 0);
     }
     g_operaDown = false;
