@@ -428,9 +428,11 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
     const float hub = 33.0f;   // the middle circle: the same size in both modes, big enough for the components with their gusts
     const ImVec2 c(p.x + size * 0.5f, p.y + size * 0.5f);
     dl->AddCircleFilled(c, R, cInset, 64);
-    (void)hovered;
-    dl->AddCircle(c, R, dialHeadingUp() ? cLockBlue : IM_COL32(58, 62, 70, 255), 64, dialHeadingUp() ? 2.0f : 1.5f);   // Heading Lock: outlined in blue
-    dl->AddCircle(c, R * 0.72f, cRing, 64, 1.0f);
+    // the outer ring: blue in Heading Lock; hovering flips it (blue in North Lock, grey in Heading Lock) to show it can be clicked
+    const bool blueRing = dialHeadingUp() != hovered;
+    dl->AddCircle(c, R, blueRing ? cLockBlue : IM_COL32(58, 62, 70, 255), 64, blueRing ? 2.0f : 1.5f);
+    const float mid = (R + hub) * 0.5f;   // the middle ring halfway between the outer ring and the centre circle: two equal bands
+    dl->AddCircle(c, mid, cRing, 64, 1.0f);
     auto onDial = [&](double trueDeg, float rad) {
         const double a = (trueDeg - rot) * kPi / 180.0;
         return ImVec2(c.x + (float)std::sin(a) * rad, c.y - (float)std::cos(a) * rad);
@@ -438,7 +440,7 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
     const char* nesw[] = {"N", "E", "S", "W"};
     for (int k = 0; k < 4; ++k) {
         const ImVec2 ts = ImGui::CalcTextSize(nesw[k]);
-        const ImVec2 q = onDial(k * 90.0, R - 9);
+        const ImVec2 q = onDial(k * 90.0, (R + mid) * 0.5f);   // in the outer band
         dl->AddText(ImVec2(q.x - ts.x * 0.5f, q.y - ts.y * 0.5f), k == 0 ? cSoft : cMuted, nesw[k]);
     }
     if (headingUpness() > 0.02f) {   // the aircraft's nose at the top of the dial (fades in and out with the mode)
@@ -451,10 +453,10 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
         const double a = (r.windDir - rot) * kPi / 180.0;
         const ImVec2 dir((float)std::sin(a), -(float)std::cos(a));
         const ImVec2 n(-dir.y, dir.x);
-        const ImVec2 tail(c.x + dir.x * (R - 16), c.y + dir.y * (R - 16)), tip(c.x + dir.x * (hub + 2), c.y + dir.y * (hub + 2)),
-                     base(c.x + dir.x * (hub + 15), c.y + dir.y * (hub + 15));
-        dl->AddLine(tail, base, cAccent, 4.0f);
-        dl->AddTriangleFilled(tip, ImVec2(base.x + n.x * 7, base.y + n.y * 7), ImVec2(base.x - n.x * 7, base.y - n.y * 7), cAccent);
+        // the wind triangle inside the outer band: its base near the outer ring, its tip on the middle ring, pointing in
+        const float rb = R - 2.5f, rt = mid + 1.0f, hw = std::min(7.0f, (rb - rt) * 0.6f);
+        const ImVec2 tip(c.x + dir.x * rt, c.y + dir.y * rt), base(c.x + dir.x * rb, c.y + dir.y * rb);
+        dl->AddTriangleFilled(tip, ImVec2(base.x + n.x * hw, base.y + n.y * hw), ImVec2(base.x - n.x * hw, base.y - n.y * hw), cAccent);
     }
     dl->AddCircleFilled(c, hub, cPanel, 48);
     dl->AddCircle(c, hub, IM_COL32(58, 62, 70, 255), 48);
@@ -524,15 +526,6 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
     ImGui::SameLine(0, 10);
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, lineY + 5));
     muted(fmt("%.0f nm · field %.0f ft", distTo(d, st), st.elevM / 0.3048).c_str());
-    if (st.hasAtis && full) {   // the ATIS information letter, bold and blue (the home page shows it on its METAR / ATIS bubble instead)
-        ImGui::SameLine(0, 8); muted("·");
-        ImGui::SameLine(0, 8);
-        ImGui::PushFont(f.bold);
-        ImGui::PushStyleColor(ImGuiCol_Text, v4(IM_COL32(120, 180, 255, 255)));
-        ImGui::TextUnformatted(("ATIS " + (st.atisLetter.empty() ? std::string("?") : st.atisLetter)).c_str());
-        ImGui::PopStyleColor();
-        ImGui::PopFont();
-    }
     badgeRight(f, flightCategory(r), lineY + 1);
     // the report, labelled with its source and which north its winds use. On the home page, with an ATIS there, the label is a
     // bubble: a click switches the box between the METAR and the ATIS (the bubble keeps its size, only its text changes)
@@ -2103,6 +2096,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
     bool& aloftMag = windMagnetic();
     bool flipMag = false, flipTemp = false;
     ImGui::TableSetupColumn(aloftMag ? "Wind °M###w" : "Wind °T###w", ImGuiTableColumnFlags_WidthFixed, textColW("Wind °T  "));
+    // the other wind reference (°M / °T box) next to the wind, the temperature / ISA bubble at the end
     ImGui::TableSetupColumn(aloftMag ? "°T###b" : "°M###b", ImGuiTableColumnFlags_WidthFixed, textColW("000°M") + 10);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn(tempF() ? "Temp / ISA °F###t" : "Temp / ISA °C###t", ImGuiTableColumnFlags_WidthFixed, textColW("-000°F  ISA +00") + 18);
@@ -2377,7 +2371,7 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("time", ImVec2(colW, timeH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) timeBox(d, f);
     panelEnd();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + gap);   // exactly `gap` between stacked panels, so every column ends level
-    if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); windRefSwitch("wrNear"); nearbyTable(d, st, 0, true); }
+    if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); nearbyTable(d, st, 0, true); }
     panelEnd();
     ImGui::EndGroup();
     ImGui::SameLine(0, gap);
