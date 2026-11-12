@@ -197,7 +197,7 @@ long isaDevIn(double devC) { return std::lround(tempF() ? devC * 9.0 / 5.0 : dev
 // The units switch, right-aligned on the current line: a slightly bigger bubble holding two small labelled switches,
 // TEMP (°C / °F) and WIND (°T / °M); the airport lists use it (the home page's and the Airports tab's are the same switch)
 void windRefSwitch(const char* id) {
-    // one row, the height of the text: TEMP °C °F | WIND °T °M, in one bubble, right-aligned on the current line
+    // one row, the height of the text: WIND °T °M | TEMP °C °F, in one bubble, right-aligned on the current line
     ImGui::PushID(id);
     const ImGuiStyle& st = ImGui::GetStyle();
     const float lblFs = ImGui::GetFontSize() * 0.72f;
@@ -227,8 +227,8 @@ void windRefSwitch(const char* id) {
         }
         x += gapG - 2;
     };
-    group("TEMP", lt, "°C", "°F", tempF(), 0);
     group("WIND", lw, "°T", "°M", windMagnetic(), 1);
+    group("TEMP", lt, "°C", "°F", tempF(), 0);
     ImGui::SetCursorScreenPos(p0);
     ImGui::Dummy(ImVec2(boxW, boxH));
     ImGui::PopID();
@@ -2127,10 +2127,10 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
             ImGui::TableSetColumnIndex(2);
             ImGui::PushID(i);
             const std::string w = fmt("%03d/%.0f", aloftMag ? dM : dT, r.kt);
-            if (ImGui::Selectable(w.c_str(), false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(w.c_str()).x, 0))) flipMag = true;
+            ImGui::TextUnformatted(w.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
             ImGui::TableSetColumnIndex(3);
-            if (magBox(fmt(aloftMag ? "%03d°T" : "%03d°M", aloftMag ? dT : dM).c_str(), cMuted, true)) flipMag = true;
+            magBox(fmt(aloftMag ? "%03d°T" : "%03d°M", aloftMag ? dT : dM).c_str(), cMuted);
             ImGui::PopID();
         }
         ImGui::TableSetColumnIndex(4); speedBar(r.kt, maxKt);
@@ -2140,7 +2140,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
         if (r.hasT) {
             const long dv = isaDevIn(r.tempC - isaTempC(r.ft * 0.3048f));
             const std::string t = fmt("%.0f%s  ", tempIn(r.tempC), tempUnit()) + (dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld", dv));
-            if (magBox(t.c_str(), cSoft, true)) flipTemp = true;
+            magBox(t.c_str(), cSoft);
         } else muted("—");
         ImGui::PopID();
     }
@@ -2386,6 +2386,7 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("aloft", ImVec2(col3, aloftH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
         sectionTitle(f, "Winds & temps aloft");
         ImGui::SameLine(); muted("GFS");
+        { UnitScope us(g_unitsAloft); windRefSwitch("wrAloftHome"); }
         const int fit = std::max(4, (int)((ImGui::GetContentRegionAvail().y - 6) / rowH) - 2);   // header and tropopause rows
         static const float kAll[] = {3000, 5000, 7000, 10000, 12000, 15000, 18000, 21000, 24000, 27000, 30000, 32000, 34000, 36000, 39000, 41000, 45000, 50000};
         static const int kPick[][18] = {{1, 3, 6, 8, 10, 12, 14, 16}, {1, 3, 6, 8, 10, 12, 14, 15, 16}, {0, 1, 3, 6, 8, 10, 12, 14, 15, 16},
@@ -2546,6 +2547,7 @@ void tabAloft(const UiData& d, const UiFonts& f) {
         sectionTitle(f, "Winds & temperatures aloft at the aircraft");
         const Station* st = nearestStation(d);
         if (st) { ImGui::SameLine(); muted(fmt("GFS, blended for %s", st->icao.c_str()).c_str()); }
+        { UnitScope us(g_unitsAloft); windRefSwitch("wrAloftTab"); }
         // as many levels as fit without scrolling (the densest set of these that fits the window's height)
         const float rowH = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
         const int rows = std::max(6, (int)((ImGui::GetContentRegionAvail().y - 4) / rowH) - 2);   // header and tropopause rows
