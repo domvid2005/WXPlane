@@ -2096,7 +2096,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
     for (const auto& r : rows) maxKt = std::max(maxKt, r.kt);
     const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | (scroll ? ImGuiTableFlags_ScrollY : 0);
     UnitScope us(g_unitsAloft);   // the winds-aloft tables (home page and Winds & Temps tab) have their own units
-    if (!ImGui::BeginTable("aloft", 7, fl)) return;
+    if (!ImGui::BeginTable("aloft", 6, fl)) return;
     ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, textColW("00000 ft"));
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 18);
     // winds in degrees true or magnetic: a click on a row's wind (or its small box) swaps them for the whole table
@@ -2105,8 +2105,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
     ImGui::TableSetupColumn(aloftMag ? "Wind °M###w" : "Wind °T###w", ImGuiTableColumnFlags_WidthFixed, textColW("Wind °T  "));
     ImGui::TableSetupColumn(aloftMag ? "°T###b" : "°M###b", ImGuiTableColumnFlags_WidthFixed, textColW("000°M") + 10);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn(tempF() ? "Temp °F###t" : "Temp °C###t", ImGuiTableColumnFlags_WidthFixed, textColW("Temp °C"));
-    ImGui::TableSetupColumn("ISA", ImGuiTableColumnFlags_WidthFixed, textColW("ISA +00"));
+    ImGui::TableSetupColumn(tempF() ? "Temp / ISA °F###t" : "Temp / ISA °C###t", ImGuiTableColumnFlags_WidthFixed, textColW("-000°F  ISA +00") + 18);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
     plainHeaders();
@@ -2120,8 +2119,10 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
             ImGui::TableSetColumnIndex(0);
             ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn));
             ImGui::TextUnformatted("Tropo");
-            ImGui::TableSetColumnIndex(4);
-            ImGui::Text("FL%03.0f · %s", tropoFt / 100.0f, tempText(tropoC).c_str());
+            ImGui::TableSetColumnIndex(2);   // its level under the winds, its temperature under the temperatures (fits a narrow table)
+            ImGui::Text("FL%03.0f", tropoFt / 100.0f);
+            ImGui::TableSetColumnIndex(5);   // with its unit, as plain text (no bubble, no switch)
+            ImGui::Text("%.0f %s", tempIn(tropoC), tempUnit());
             ImGui::PopStyleColor();
         }
         ImGui::TableNextRow();
@@ -2139,24 +2140,14 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
             ImGui::PopID();
         }
         ImGui::TableSetColumnIndex(4); speedBar(r.kt, maxKt);
-        // temperature and ISA deviation: a click on either swaps °C / °F for the whole table
+        // temperature and ISA deviation in one bubble (like the wind's): a click swaps °C / °F for the whole table
         ImGui::PushID(i + 10000);
         ImGui::TableSetColumnIndex(5);
         if (r.hasT) {
-            const std::string t = fmt("%.0f°", tempIn(r.tempC));
-            if (ImGui::Selectable(t.c_str(), false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(t.c_str()).x, 0))) flipTemp = true;
-            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            const long dv = isaDevIn(r.tempC - isaTempC(r.ft * 0.3048f));
+            const std::string t = fmt("%.0f%s  ", tempIn(r.tempC), tempUnit()) + (dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld", dv));
+            if (magBox(t.c_str(), cSoft, true)) flipTemp = true;
         } else muted("—");
-        ImGui::TableSetColumnIndex(6);
-        if (r.hasT) {
-            const float dev = r.tempC - isaTempC(r.ft * 0.3048f);
-            const long dv = isaDevIn(dev);
-            const std::string t = dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld", dv);
-            ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft));
-            if (ImGui::Selectable(t.c_str(), false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(t.c_str()).x, 0))) flipTemp = true;
-            ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        }
         ImGui::PopID();
     }
     ImGui::EndTable();
