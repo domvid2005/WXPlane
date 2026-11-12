@@ -144,7 +144,11 @@ add_custom_command(TARGET WXPlane POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if
 file(STRINGS "${CMAKE_SOURCE_DIR}/src/version.h" WX_VERSION_LINE REGEX "#define WX_VERSION ")
 string(REGEX REPLACE ".*\"(.*)\".*" "\\1" WX_VERSION_STR "${WX_VERSION_LINE}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/version.h")
-configure_file("${CMAKE_SOURCE_DIR}/tools/skunkcrafts_updater.cfg.in" "${CMAKE_BINARY_DIR}/package/WXPlane/skunkcrafts_updater.cfg" @ONLY NEWLINE_STYLE UNIX)
+# Written by the Linux build only: the CI bundle merges the three platforms' folders, and the same file from each of them made the
+# copy fail ("will not overwrite just-created", 2026-11-12).
+if(NOT WIN32 AND NOT APPLE)
+  configure_file("${CMAKE_SOURCE_DIR}/tools/skunkcrafts_updater.cfg.in" "${CMAKE_BINARY_DIR}/package/WXPlane/skunkcrafts_updater.cfg" @ONLY NEWLINE_STYLE UNIX)
+endif()
 set_target_properties(WXPlane PROPERTIES
   PREFIX "" OUTPUT_NAME "WXPlane" SUFFIX ".xpl"
   LIBRARY_OUTPUT_DIRECTORY "${WX_OUT}" RUNTIME_OUTPUT_DIRECTORY "${WX_OUT}")
