@@ -695,7 +695,7 @@ void turbulenceTick() {
 // The weather window's map: turbulence on a 25 x 25 grid over 300 x 300 nm at the map's altitude (its slider), rebuilt every 10 s and
 // whenever the slider has moved (at most 4 times a second, so dragging it stays smooth), while the turbulence layer is shown.
 void uiTurbGridTick(double mapAltFt) {
-    if (mapAltFt < 0 || !(g_cfg.enabled && g_cfg.realisticTurbulence)) return;
+    if ((mapAltFt < 0 && mapAltFt != -2.0) || !(g_cfg.enabled && g_cfg.realisticTurbulence)) return;   // -2: composite
     const auto now = Clock::now();
     const double since = std::chrono::duration<double>(now - g_uiTs.gridAt).count();
     if (!(since >= 10.0 || (std::fabs(mapAltFt - g_uiTs.gridAltFt) > 150.0 && since >= 0.25))) return;
@@ -712,6 +712,15 @@ void uiTurbGridTick(double mapAltFt) {
     for (int gy = 0; gy < 25; ++gy)
         for (int gx = 0; gx < 25; ++gx) {
             const double la = lat + (gy - 12) * 12.0 / 60.0, lo = lon + (gx - 12) * 12.0 / (60.0 * kx);
+            if (mapAltFt == -2.0) {   // composite: the most turbulent level in the column (every 3,000 ft, 1,000 to 45,000 ft)
+                double e = -1;
+                for (double ft = 1000; ft <= 45000; ft += 3000) {
+                    const wx::turb::Sample g = wx::turb::sampleAt(in, la, lo, ft, wall, simT);
+                    if (std::strcmp(g.source, "none") != 0) e = std::max(e, g.edr);
+                }
+                if (e >= 0) g_uiTs.grid.push_back({la, lo, e});
+                continue;
+            }
             const wx::turb::Sample g = wx::turb::sampleAt(in, la, lo, mapAltFt, wall, simT);
             if (std::strcmp(g.source, "none") == 0) continue;
             g_uiTs.grid.push_back({la, lo, g.edr});

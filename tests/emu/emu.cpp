@@ -221,7 +221,7 @@ void fillUi(UiData& d) {
 }
 
 void turbGrid(UiData& d, double altFt) {
-    if (altFt < 0) return;
+    if (altFt < 0 && altFt != -2.0) return;   // -2: composite
     if (std::fabs(altFt - g_lastGridAlt) < 150 && g_t - g_gridAt < 10) return;
     g_lastGridAlt = altFt; g_gridAt = g_t;
     d.turbGrid.clear();
@@ -229,7 +229,10 @@ void turbGrid(UiData& d, double altFt) {
     for (int gy = 0; gy < 25; ++gy)
         for (int gx = 0; gx < 25; ++gx) {
             const double la = g_lat + (gy - 12) * 0.2, lo = g_lon + (gx - 12) * 0.2 / kx;
-            d.turbGrid.push_back({la, lo, edrAt(la, lo, altFt) * g_cfg.maxTurbulence});
+            double e = 0;
+            if (altFt == -2.0) for (double ft = 1000; ft <= 45000; ft += 3000) e = std::max(e, edrAt(la, lo, ft));
+            else e = edrAt(la, lo, altFt);
+            d.turbGrid.push_back({la, lo, e * g_cfg.maxTurbulence});
         }
     d.turbGridDLat = 0.2; d.turbGridDLon = 0.2 / kx; d.turbGridAltFt = altFt;
     ++d.turbGridSeq;

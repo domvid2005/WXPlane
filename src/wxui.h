@@ -76,7 +76,7 @@ struct UiData {
     int forceAdv = -1;                  // 1: AIRMET and SIGMET layers on, 0: off
     int forceAloftLayers = -1;          // bit 1 wind barbs, bit 2 clouds (map layers)
     double forceMapAltFt = -1;          // the map's altitude slider
-    int forceMapMode = -1;              // the slider's mode: 0 chosen altitude, 1 ACFT (follows the aircraft), 2 SFC
+    int forceMapMode = -1;              // the slider's mode: 0 chosen altitude, 1 ACFT (follows the aircraft), 2 SFC, 3 composite (all altitudes)
     int forceWindSel = -1;              // open this winds-aloft point's decode window on the Map tab
     // the airport search (Airports tab)
     bool searchBusy = false;
@@ -93,7 +93,7 @@ struct UiActions {
     // the settings (the plugin's former menu toggles): flip these
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
     std::string search;                 // look up this ICAO code anywhere in the world (METAR + ATIS)
-    double mapAltFt = -1;               // the map's altitude slider (turbulence layer), when the turbulence layer is shown
+    double mapAltFt = -1;               // the map's altitude slider (turbulence layer), when the turbulence layer is shown; -2: composite (the worst level)
 };
 
 struct UiFonts {

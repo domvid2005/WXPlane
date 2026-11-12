@@ -326,12 +326,12 @@ int main(int argc, char** argv) {
     // winds aloft and clouds at FL180 (the altitude slider), one wind barb decoded; then clouds alone low down
     // (pass 2: the surface - SFC: airport winds and the lowest clouds, one airport's wind decoded)
     d.magVarEast = -14.5;   // Boston: 14.5 degrees west
-    for (int pass = 0; pass < 3; ++pass) {
-        d.forceLayers = pass == 0 ? 5 : (pass == 1 ? 3 : 1); d.forceAloftLayers = pass == 1 ? 2 : 3;   // pass 0: pilot reports too, two windows open
+    for (int pass = 0; pass < 4; ++pass) {   // pass 3: the composite (all altitudes), turbulence, clouds and the strongest winds
+        d.forceLayers = pass == 0 ? 5 : (pass == 1 ? 3 : (pass == 3 ? 3 : 1)); d.forceAloftLayers = pass == 1 ? 2 : 3;   // pass 0: pilot reports too, two windows open
         d.forcePirep = pass == 0 ? 2 : -1; d.forceMapAltFt = pass == 0 ? 18000 : (pass == 1 ? 3000 : -1);
-        d.forceMapMode = pass == 2 ? 2 : -1;
+        d.forceMapMode = pass == 2 ? 2 : (pass == 3 ? 3 : -1);
         for (int fr = 0; fr < 40; ++fr) {
-            d.forceWindSel = (pass == 0 && fr == 0) ? 9 : ((pass == 2 && fr == 20) ? 3 : -1);
+            d.forceWindSel = (pass == 0 && fr == 0) ? 9 : ((pass == 2 && fr == 20) ? 3 : ((pass == 3 && fr == 36) ? 9 : -1));
             io.DeltaTime = 1.0f / 30.0f;
             ImGui::NewFrame();
             d.forceTab = fr == 0 ? 2 : -1;
@@ -343,7 +343,7 @@ int main(int argc, char** argv) {
         d.forceWindSel = -1;
         Canvas cv((int)(W * scale), (int)(H * scale));
         raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
-        const std::string p = out + (pass == 0 ? "/ui_map_aloft.png" : (pass == 1 ? "/ui_map_clouds_low.png" : "/ui_map_sfc.png"));
+        const std::string p = out + (pass == 0 ? "/ui_map_aloft.png" : (pass == 1 ? "/ui_map_clouds_low.png" : (pass == 2 ? "/ui_map_sfc.png" : "/ui_map_composite.png")));
         if (!writePng(cv, p)) return 1;
         std::printf("wrote %s\n", p.c_str());
     }

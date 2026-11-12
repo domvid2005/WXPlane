@@ -134,8 +134,16 @@ MAP
         SFC  - the surface: the slider goes to the bottom ("SFC"), Winds
                shows the airports' reported winds and Clouds the lowest
                layer.
-    Click ACFT or SFC again to go back to the altitude you chose with the
-    slider. Dragging the slider ends ACFT or SFC.
+        COMP - composite, all altitudes at once: every cloud layer
+               together (darker where the column holds more cloud), the
+               most turbulent level at each point, and the strongest wind
+               at each point with its flight level (its decode lists every
+               level).
+    Click ACFT, SFC or COMP again to go back to the altitude you chose
+    with the slider. Dragging the slider ends them. The slider clicks into
+    whole thousands of feet when it comes within 300 ft of one, and the
+    mouse wheel steps 1,000 ft at a time. Max turbulence clicks into
+    tenths the same way.
   * Radar echoes are drawn as a radar picture: green edges into yellow,
     orange and red cores.
   * True and magnetic: winds are given in degrees true (°T) as METARs and

@@ -666,20 +666,21 @@ bool altLayersOn() { return showTurb() || showWinds() || showClouds(); }
 // (clicking it again) goes back to the altitude chosen before. What the layers use (shown) glides to the target, so they change
 // smoothly while the slider moves.
 const float kMapAltMax = 60000.0f;
-enum class AltMode { Chosen = 0, Acft = 1, Sfc = 2 };
+enum class AltMode { Chosen = 0, Acft = 1, Sfc = 2, Comp = 3 };   // Comp: every altitude at once (composite)
 struct MapAlt { float shown = -1, target = -1, chosen = -1; AltMode mode = AltMode::Acft; };
 MapAlt& mapAlt() { static MapAlt a; return a; }
 bool atSurface() { return mapAlt().mode == AltMode::Sfc && mapAlt().shown < 50.0f; }   // the surface layers (METAR winds, lowest clouds)
 // the airports' reported winds instead of winds aloft: at SFC, and whenever the map's altitude is below 1,000 ft (an aircraft on
 // the ground with ACFT on: winds aloft start a few thousand feet up)
-bool surfaceWinds() { return atSurface() || mapAlt().shown < 1000.0f; }
+bool composite() { return mapAlt().mode == AltMode::Comp; }   // all altitudes combined: the most turbulent level, every cloud layer, the strongest wind
+bool surfaceWinds() { return !composite() && (atSurface() || mapAlt().shown < 1000.0f); }
 void updateMapAlt(const UiData& d) {
     MapAlt& a = mapAlt();
     const float acft = d.havePos ? (float)std::max(0.0, std::min((double)kMapAltMax, d.altFt)) : 0.0f;
     if (a.chosen < 0) a.chosen = acft;
     if (d.forceMapMode >= 0) a.mode = (AltMode)d.forceMapMode;
     if (d.forceMapAltFt >= 0) { if (d.forceMapMode < 0) a.mode = AltMode::Chosen; a.chosen = (float)d.forceMapAltFt; }
-    a.target = a.mode == AltMode::Acft ? acft : (a.mode == AltMode::Sfc ? 0.0f : a.chosen);
+    a.target = a.mode == AltMode::Acft ? acft : (a.mode == AltMode::Sfc ? 0.0f : (a.mode == AltMode::Comp ? kMapAltMax : a.chosen));   // composite: the knob goes to the top, the whole track lit
     if (a.shown < 0 || d.forceMapAltFt >= 0) a.shown = a.target;
     const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
     const float k = 1.0f - std::exp(-dt * 9.0f);
@@ -689,7 +690,10 @@ std::string altLabel(float ft) { return ft >= 18000 ? fmt("FL%03.0f", std::round
 
 // A slider whose knob glides (instead of jumping) to where it is clicked or dragged: `target` is what the user chose, `shown` what is
 // drawn and used, eased towards it every frame. Returns true while the user holds it; `released` is set when they let go.
-bool smoothSlider(const char* id, float& shown, float& target, float vmin, float vmax, ImVec2 size, bool vertical, const std::string& label, bool& released, bool disabled = false) {
+// snapStep / snapRadius: values within snapRadius of a multiple of snapStep are pulled onto it (the knob "clicks" into whole thousands
+// of feet, or tenths), and the mouse wheel steps from one multiple to the next.
+bool smoothSlider(const char* id, float& shown, float& target, float vmin, float vmax, ImVec2 size, bool vertical, const std::string& label, bool& released,
+                  bool disabled = false, float snapStep = 0.0f, float snapRadius = 0.0f) {
     released = false;
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton(id, size);
@@ -700,10 +704,18 @@ bool smoothSlider(const char* id, float& shown, float& target, float vmin, float
         const ImVec2 m = ImGui::GetIO().MousePos;
         const float fr = vertical ? 1.0f - (m.y - p.y - knobR) / std::max(1.0f, size.y - 2 * knobR) : (m.x - p.x - knobR) / std::max(1.0f, size.x - 2 * knobR);
         target = vmin + std::max(0.0f, std::min(1.0f, fr)) * (vmax - vmin);
+        if (snapStep > 0) {
+            const float snapTo = std::round(target / snapStep) * snapStep;
+            if (std::fabs(target - snapTo) <= snapRadius) target = std::max(vmin, std::min(vmax, snapTo));
+        }
     }
     if (ImGui::IsItemDeactivated()) released = true;
     if (hov && !active && ImGui::GetIO().MouseWheel != 0.0f) {   // the wheel nudges it by 2 % of the range per notch
-        target = std::max(vmin, std::min(vmax, target + ImGui::GetIO().MouseWheel * 0.02f * (vmax - vmin)));
+        if (snapStep > 0) {   // from one multiple to the next
+            const float w = ImGui::GetIO().MouseWheel;
+            const float base = w > 0 ? std::floor(target / snapStep + 1e-3f) : std::ceil(target / snapStep - 1e-3f);
+            target = std::max(vmin, std::min(vmax, (base + (w > 0 ? 1.0f : -1.0f)) * snapStep));
+        } else target = std::max(vmin, std::min(vmax, target + ImGui::GetIO().MouseWheel * 0.02f * (vmax - vmin)));
         released = true;
     }
     const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
@@ -745,7 +757,9 @@ bool smoothSlider(const char* id, float& shown, float& target, float vmin, float
 // updates: the FD id, or the model point's position.
 // rangeA: how much the point has data at the map's altitude (fading over the last 1,500 ft beyond its top or bottom level);
 // show: what is drawn, eased towards rangeA (and towards 0 where the map is too crowded), so barbs come and go smoothly.
-struct WindPt { std::string key, id; bool model = false, surface = false; double lat = 0, lon = 0; float u = 0, v = 0, tempC = 0, gustKt = 0; bool hasT = false; float rangeA = 0, show = 0; bool seen = false; };
+struct WindPt { std::string key, id; bool model = false, surface = false; double lat = 0, lon = 0; float u = 0, v = 0, tempC = 0, gustKt = 0; bool hasT = false; float rangeA = 0, show = 0; bool seen = false;
+                float levelFt = -1;                        // composite: the level of the strongest wind
+                std::vector<AloftLevel> levels; };         // composite: the point's whole profile (its decode window)
 std::vector<WindPt>& windPts() { static std::vector<WindPt> v; return v; }
 bool windAtLevel(const AloftStation& s, float ft, float& dir, float& kt, float& tempC, bool& hasT, float* edge = nullptr) {
     const AloftLevel *lo = nullptr, *hi = nullptr;
@@ -794,7 +808,13 @@ void updateWinds(const UiData& d) {
         for (const auto& s : d.res->aloft) {
             if (!s.located) continue;
             float dir = 0, kt = 0, tc = 0, edge = 0; bool hasT = false;
-            const bool have = windAtLevel(s, ft, dir, kt, tc, hasT, &edge);
+            bool have = false;
+            float levelFt = -1;
+            if (composite()) {   // the strongest wind anywhere in the column
+                for (const auto& L : s.levels)
+                    if (L.hasWind && (!have || L.speedKt > kt)) { have = true; kt = (float)L.speedKt; dir = (float)L.dirDeg; hasT = L.hasTemp; tc = (float)L.tempC; levelFt = (float)L.altFt; }
+                edge = 1;
+            } else have = windAtLevel(s, ft, dir, kt, tc, hasT, &edge);
             const std::string key = s.model ? fmt("m%.2f,%.2f", s.lat, s.lon) : s.id;
             WindPt* w = find(key);
             if (!have && !w) continue;
@@ -804,6 +824,8 @@ void updateWinds(const UiData& d) {
             w->id = s.id; w->model = s.model; w->lat = s.lat; w->lon = s.lon; w->seen = true;
             if (!have) continue;   // out of its levels' reach: it keeps its last wind while it fades out
             w->hasT = hasT;
+            w->levelFt = levelFt;
+            if (composite()) w->levels = s.levels; else w->levels.clear();
             w->rangeA = std::max(0.0f, std::min(1.0f, edge));
             w->u += (tu - w->u) * kE; w->v += (tv - w->v) * kE; w->tempC += (tc - w->tempC) * kE;
         }
@@ -844,6 +866,17 @@ void cloudAtAlt(const UiCloudGrid& g, int ix, int iy, float ft, float& cov, floa
     cov = 0; thickFt = 0;
     if (ix < 0 || iy < 0 || ix >= g.nx || iy >= g.ny) return;
     const size_t c = (size_t)iy * (size_t)g.nx + (size_t)ix;
+    if (composite()) {   // every layer at once: the cover of them all together, the depth of cloud in the column
+        float clear = 1;
+        for (int k = 0; k < g.n[c] && k < 3; ++k) {
+            const UiCloudLayer& L = g.layers[c * 3 + (size_t)k];
+            if (L.cover <= 0.01f || L.topFt <= L.baseFt) continue;
+            clear *= 1.0f - std::min(1.0f, L.cover);
+            thickFt += L.topFt - L.baseFt;
+        }
+        cov = 1.0f - clear;
+        return;
+    }
     if (lowest) {   // the surface view: the lowest layer wherever there is one
         float base = 1e9f;
         for (int k = 0; k < g.n[c] && k < 3; ++k) {
@@ -1132,6 +1165,10 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const ImU32 col = sel ? IM_COL32(255, 196, 70, std::max(al, 200)) : (kt < 2.5f ? IM_COL32(255, 255, 255, al) : blue);
             if (sel) selAt(4, w.key, q);
             drawBarb(dl, q, dir, kt, viewRot(), col, sel ? 1.12f : 1.0f);
+            if (composite() && w.levelFt > 0) {   // which level that strongest wind is at
+                const std::string lv = fmt("%03.0f", w.levelFt / 100.0f);
+                dl->AddText(f.body, ImGui::GetFontSize() * 0.72f, ImVec2(q.x + 5, q.y + 2), IM_COL32(170, 180, 195, (int)(220 * w.show)), lv.c_str());
+            }
             // clicked on its staff and feathers (not on the point itself, which belongs to the airport there, if any)
             const double ang = (dir - viewRot()) * kPi / 180.0;
             const ImVec2 sv((float)std::sin(ang), -(float)std::cos(ang));
@@ -1349,7 +1386,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
             float dir = 0, kt = 0;
             windOf(*wp, dir, kt);
             const float ft = mapAlt().shown;
-            title(wp->surface ? "Surface wind  " + wp->id : "Winds aloft  " + altLabel(ft), IM_COL32(150, 200, 255, 255));
+            title(wp->surface ? "Surface wind  " + wp->id : (composite() && wp->levelFt > 0 ? "Strongest wind  " + altLabel(wp->levelFt) : "Winds aloft  " + altLabel(ft)), IM_COL32(150, 200, 255, 255));
             if (ImGui::BeginTable("wa", 2, ImGuiTableFlags_SizingFixedFit)) {
                 infoRow("Source", wp->surface ? "METAR " + wp->id + " (true north)" : (wp->model ? std::string("GFS model (Open-Meteo)") : "NOAA winds aloft (FD), station " + wp->id));
                 ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); muted("Wind"); ImGui::TableSetColumnIndex(1);
@@ -1369,8 +1406,8 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
                 if (wp->hasT && wp->surface) infoRow("Temperature", fmt("%.0f °C", wp->tempC));
                 else if (wp->hasT) {
                     infoRow("Temperature", fmt("%.0f °C", wp->tempC));
-                    const float dev = wp->tempC - isaTempC(ft * 0.3048f);
-                    infoRow("vs standard", std::fabs(dev) < 0.5f ? std::string("ISA 0") : fmt("ISA %+.0f °C", dev));
+                    const float dev = wp->tempC - isaTempC((composite() && wp->levelFt > 0 ? wp->levelFt : ft) * 0.3048f);
+                    { const long dv = std::lround(dev); infoRow("vs standard", dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld °C", dv)); }
                 }
                 if (d.havePos && kt >= 2.5f) {
                     double head = 0, cross = 0;
@@ -1379,6 +1416,20 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, ImVec2 other
                 }
                 if (d.havePos) infoRow("From you", fmt("%.0f nm", distNm(d.lat, d.lon, wp->lat, wp->lon)));
                 ImGui::EndTable();
+            }
+            if (composite() && !wp->levels.empty()) {   // the whole column, highest first, the strongest level marked
+                ImGui::Spacing();
+                muted("All levels (true)");
+                ImGui::PushFont(f.mono);
+                for (int i = (int)wp->levels.size() - 1; i >= 0; --i) {
+                    const AloftLevel& L = wp->levels[(size_t)i];
+                    if (!L.hasWind) continue;
+                    const bool top = std::fabs(L.altFt - wp->levelFt) < 1;
+                    ImGui::PushStyleColor(ImGuiCol_Text, v4(top ? IM_COL32(255, 196, 70, 255) : cSoft));
+                    ImGui::Text("%-7s %03.0f/%3.0f kt%s", altLabel((float)L.altFt).c_str(), L.dirDeg, L.speedKt, L.hasTemp ? fmt("  %4.0f°C", L.tempC).c_str() : "");
+                    ImGui::PopStyleColor();
+                }
+                ImGui::PopFont();
             }
         }
         sel.lastSize = ImGui::GetWindowSize();
@@ -1542,9 +1593,10 @@ void altitudeSlider(const UiData& d, float w, float h) {
     };
     modeButton("ACFT##alt", AltMode::Acft, "Follow the aircraft's altitude as it climbs and descends (click again: back to the altitude you chose)");
     modeButton("SFC##alt", AltMode::Sfc, "The surface: airport winds (METAR), the lowest clouds (click again: back to the altitude you chose)");
+    modeButton("COMP##alt", AltMode::Comp, "Composite: all altitudes at once - every cloud layer together, the worst turbulence in the column, the strongest wind (click again: back to the altitude you chose)");
     bool released = false;
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float sh = std::max(60.0f, h - 2 * bh - 2 * ImGui::GetStyle().ItemSpacing.y);
+    const float sh = std::max(60.0f, h - 3 * bh - 3 * ImGui::GetStyle().ItemSpacing.y);
     // scale marks every 10,000 ft on the right of the track
     ImDrawList* dl = ImGui::GetWindowDrawList();
     for (int k = 0; k <= 6; ++k) {
@@ -1554,9 +1606,9 @@ void altitudeSlider(const UiData& d, float w, float h) {
         dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.72f, ImVec2(p.x + w * 0.5f + 12, y - ImGui::GetFontSize() * 0.36f), cIdle, t.c_str());
     }
     float tgt = a.target < 0 ? 0.0f : a.target;
-    const std::string label = a.mode == AltMode::Sfc ? std::string("SFC") : altLabel(a.shown);
+    const std::string label = a.mode == AltMode::Sfc ? std::string("SFC") : (a.mode == AltMode::Comp ? std::string("ALL") : altLabel(a.shown));
     // dragging (or the wheel) chooses an altitude: ACFT / SFC end there
-    if (smoothSlider("##mapalt", a.shown, tgt, 0.0f, kMapAltMax, ImVec2(w, sh), true, label, released, off) || released) { a.mode = AltMode::Chosen; a.chosen = tgt; a.target = tgt; }
+    if (smoothSlider("##mapalt", a.shown, tgt, 0.0f, kMapAltMax, ImVec2(w, sh), true, label, released, off, 1000.0f, 300.0f) || released) { a.mode = AltMode::Chosen; a.chosen = tgt; a.target = tgt; }
     (void)d;
     ImGui::EndGroup();
     if (off) ImGui::EndDisabled();
@@ -1688,7 +1740,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
         ImGui::TableSetColumnIndex(4); speedBar(r.kt, maxKt);
         ImGui::TableSetColumnIndex(5); if (r.hasT) ImGui::Text("%.0f°", r.tempC); else muted("—");
         ImGui::TableSetColumnIndex(6);
-        if (r.hasT) { const float dev = r.tempC - isaTempC(r.ft * 0.3048f); ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); ImGui::Text(std::fabs(dev) < 0.5f ? "ISA 0" : "ISA %+.0f", dev); ImGui::PopStyleColor(); }
+        if (r.hasT) { const float dev = r.tempC - isaTempC(r.ft * 0.3048f); ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); const long dv = std::lround(dev); if (dv == 0) ImGui::TextUnformatted("ISA 0"); else ImGui::Text("ISA %+ld", dv); ImGui::PopStyleColor(); }
     }
     ImGui::EndTable();
 }
@@ -1761,7 +1813,7 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
     const float before = shown;
     bool released = false;
     const float w = ImGui::GetContentRegionAvail().x - 50;
-    held = smoothSlider("##maxturb", shown, target, 0.0f, 1.0f, ImVec2(w, ImGui::GetFrameHeight()), false, "", released);
+    held = smoothSlider("##maxturb", shown, target, 0.0f, 1.0f, ImVec2(w, ImGui::GetFrameHeight()), false, "", released, false, 0.1f, 0.025f);   // clicks into tenths
     ImGui::SameLine(0, 8);
     ImGui::AlignTextToFramePadding();
     ImGui::Text("%.2f", shown);
@@ -2381,7 +2433,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     updateShownRange();
     updateMapAlt(d);
     updateWinds(d);
-    act.mapAltFt = showTurb() ? mapAlt().shown : -1.0;
+    act.mapAltFt = !showTurb() ? -1.0 : (composite() ? -2.0 : mapAlt().shown);   // -2: the composite (worst level in the column)
     // X-Plane's own real weather on: nothing in the window can be clicked, and a red warning covers it (finish(), below)
     if (d.xpRealWeather) ImGui::BeginDisabled();
     auto finish = [&]() {
