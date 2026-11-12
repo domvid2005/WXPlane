@@ -180,20 +180,48 @@ std::string windShortRef(const Report& r, double varEast, bool mag) {
     if (r.gustKt > r.windKt) s += fmt(" G%.0f", r.gustKt);
     return s;
 }
-// the °T / °M switch (right-aligned on the current line)
+// Temperatures in degrees Celsius or Fahrenheit: one switch for the whole window, next to the wind one
+bool& tempF() { static bool v = false; return v; }
+double tempIn(double c) { return tempF() ? c * 9.0 / 5.0 + 32.0 : c; }
+const char* tempUnit() { return tempF() ? "°F" : "°C"; }
+std::string tempText(double c) { return fmt("%.0f %s", tempIn(c), tempUnit()); }
+long isaDevIn(double devC) { return std::lround(tempF() ? devC * 9.0 / 5.0 : devC); }   // a difference: no offset
+
+// The units switch, right-aligned on the current line: a slightly bigger bubble holding two small labelled switches,
+// TEMP (°C / °F) and WIND (°T / °M); the airport lists use it (the home page's and the Airports tab's are the same switch)
 void windRefSwitch(const char* id) {
     ImGui::PushID(id);
-    const float w = ImGui::CalcTextSize("°T").x + ImGui::CalcTextSize("°M").x + 4 * ImGui::GetStyle().FramePadding.x + 2;
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - w));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, ImGui::GetStyle().ItemSpacing.y));
-    for (int m = 0; m < 2; ++m) {
-        const bool on = windMagnetic() == (m == 1);
-        ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
-        if (m) ImGui::SameLine();
-        if (ImGui::SmallButton(m ? "°M" : "°T")) windMagnetic() = m == 1;
-        ImGui::PopStyleColor();
-    }
-    ImGui::PopStyleVar();
+    const ImGuiStyle& st = ImGui::GetStyle();
+    auto pairW = [&](const char* a, const char* b) { return ImGui::CalcTextSize(a).x + ImGui::CalcTextSize(b).x + 4 * st.FramePadding.x + 2; };
+    const float lblFs = ImGui::GetFontSize() * 0.68f;
+    const float w1 = std::max(pairW("°C", "°F"), ImGui::CalcTextSize("TEMP").x * 0.68f), w2 = std::max(pairW("°T", "°M"), ImGui::CalcTextSize("WIND").x * 0.68f);
+    const float pad = 6, gapX = 10, bh = ImGui::GetTextLineHeight() + 2;
+    const float boxW = pad * 2 + w1 + gapX + w2, boxH = pad * 2 + lblFs + 2 + bh;
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - boxW));
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(30, 32, 37, 255), 7.0f);
+    dl->AddRect(p0, ImVec2(p0.x + boxW, p0.y + boxH), IM_COL32(58, 62, 70, 255), 7.0f);
+    auto group = [&](float x, float w, const char* label, const char* a, const char* b, bool second, int which) {
+        const ImVec2 ls = ImGui::GetFont()->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, label);
+        dl->AddText(ImGui::GetFont(), lblFs, ImVec2(x + (w - ls.x) * 0.5f, p0.y + pad - 1), cIdle, label);
+        const float bw = pairW(a, b);
+        float bx = x + (w - bw) * 0.5f;
+        const float by = p0.y + pad + lblFs + 2;
+        for (int m = 0; m < 2; ++m) {   // each button placed explicitly (no SameLine across the cursor moves)
+            const bool on = second == (m == 1);
+            const char* t = m ? b : a;
+            ImGui::SetCursorScreenPos(ImVec2(bx, by));
+            ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
+            if (ImGui::SmallButton(t)) { if (which == 0) tempF() = m == 1; else windMagnetic() = m == 1; }
+            ImGui::PopStyleColor();
+            bx += ImGui::CalcTextSize(t).x + 2 * st.FramePadding.x + 2;
+        }
+    };
+    group(p0.x + pad, w1, "TEMP", "°C", "°F", tempF(), 0);
+    group(p0.x + pad + w1 + gapX, w2, "WIND", "°T", "°M", windMagnetic(), 1);
+    ImGui::SetCursorScreenPos(p0);
+    ImGui::Dummy(ImVec2(boxW, boxH));
     ImGui::PopID();
 }
 
@@ -487,7 +515,7 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
     ImGui::SameLine(0, 10);
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, lineY + 5));
     muted(fmt("%.0f nm · field %.0f ft", distTo(d, st), st.elevM / 0.3048).c_str());
-    if (st.hasAtis) {   // the ATIS information letter, bold and blue
+    if (st.hasAtis && full) {   // the ATIS information letter, bold and blue (the home page shows it on its METAR / ATIS bubble instead)
         ImGui::SameLine(0, 8); muted("·");
         ImGui::SameLine(0, 8);
         ImGui::PushFont(f.bold);
@@ -566,7 +594,19 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
         ImGui::TableNextColumn(); field(f, "Visibility", visText(r, us));
         ImGui::TableNextColumn(); field(f, "Weather", weatherText(r));
         ImGui::TableNextColumn(); field(f, us ? "Altimeter" : "QNH", !r.hasAltim ? std::string("—") : (us ? fmt("%.2f inHg", r.altimHpa / 33.8639) : fmt("%.0f hPa", r.altimHpa)));
-        ImGui::TableNextColumn(); field(f, "Temp / Dew", r.hasTemp ? (r.hasDewp ? fmt("%.0f / %.0f °C", r.tempC, r.dewpC) : fmt("%.0f °C", r.tempC)) : std::string("—"));
+        ImGui::TableNextColumn();
+        {   // temperature and dew point; the small box with the other unit switches °C / °F (for the whole window), like the wind's
+            ImGui::BeginGroup();
+            muted("Temp / Dew");
+            if (r.hasTemp) {
+                ImGui::SameLine(0, 8);
+                if (magBox(tempF() ? "°C" : "°F", IM_COL32(196, 200, 207, 255), true)) tempF() = !tempF();
+            }
+            ImGui::PushFont(f.bold);
+            ImGui::TextUnformatted((r.hasTemp ? (r.hasDewp ? fmt("%.0f / %.0f %s", tempIn(r.tempC), tempIn(r.dewpC), tempUnit()) : tempText(r.tempC)) : std::string("—")).c_str());
+            ImGui::PopFont();
+            ImGui::EndGroup();
+        }
         const int ceil = ceilingFt(r);
         ImGui::TableNextColumn(); field(f, "Ceiling", ceil < 0 ? std::string("None") : ftText(ceil) + " ft");
         {   // local time at the airport
@@ -1533,7 +1573,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
                 if (!p->icing.empty()) infoRow("Icing", p->icing);
                 if (!p->sky.empty()) infoRow("Clouds", p->sky);
                 if (!p->wx.empty()) infoRow("Weather", p->wx);
-                if (p->tempC > -100) infoRow("Temperature", fmt("%.0f °C", p->tempC));
+                if (p->tempC > -100) infoRow("Temperature", tempText(p->tempC));
                 if (p->windKt >= 0) infoRow("Wind", fmt("%03.0f°T / %.0f kt", std::max(0.0, p->windDir), p->windKt));
                 if (p->llws) infoRow("Wind shear", "low-level wind shear reported");
                 if (d.havePos) infoRow("Distance", fmt("%.0f nm", distNm(d.lat, d.lon, p->lat, p->lon)));
@@ -1607,11 +1647,11 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
                 add(pn, "pennant", "pennants", 50); add(fu, "full barb", "full barbs", 10); add(ha, "half barb", "half barbs", 5);
                 infoRow("Barb", kt < 2.5f ? std::string("circle = calm") : dec + fmt(" = %d kt", pn * 50 + fu * 10 + ha * 5));
                 infoRow("Staff", kt < 2.5f ? std::string("—") : fmt("points into the wind: from %03.0f°", dir));
-                if (wp->hasT && wp->surface) infoRow("Temperature", fmt("%.0f °C", wp->tempC));
+                if (wp->hasT && wp->surface) infoRow("Temperature", tempText(wp->tempC));
                 else if (wp->hasT) {
-                    infoRow("Temperature", fmt("%.0f °C", wp->tempC));
+                    infoRow("Temperature", tempText(wp->tempC));
                     const float dev = wp->tempC - isaTempC((composite() && wp->levelFt > 0 ? wp->levelFt : ft) * 0.3048f);
-                    { const long dv = std::lround(dev); infoRow("vs standard", dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld °C", dv)); }
+                    { const long dv = isaDevIn(dev); infoRow("vs standard", dv == 0 ? std::string("ISA 0") : fmt("ISA %+ld %s", dv, tempUnit())); }
                 }
                 if (d.havePos && kt >= 2.5f) {
                     double head = 0, cross = 0;
@@ -1630,7 +1670,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
                     if (!L.hasWind) continue;
                     const bool top = std::fabs(L.altFt - wp->levelFt) < 1;
                     ImGui::PushStyleColor(ImGuiCol_Text, v4(top ? IM_COL32(255, 196, 70, 255) : cSoft));
-                    ImGui::Text("%-7s %03.0f/%3.0f kt%s", altLabel((float)L.altFt).c_str(), L.dirDeg, L.speedKt, L.hasTemp ? fmt("  %4.0f°C", L.tempC).c_str() : "");
+                    ImGui::Text("%-7s %03.0f/%3.0f kt%s", altLabel((float)L.altFt).c_str(), L.dirDeg, L.speedKt, L.hasTemp ? fmt("  %4.0f%s", tempIn(L.tempC), tempUnit()).c_str() : "");
                     ImGui::PopStyleColor();
                 }
                 ImGui::PopFont();
@@ -1867,7 +1907,7 @@ std::string pirepConditions(const hz::Pirep& p) {
     if (!p.wx.empty()) add(p.wx);
     if (!p.sky.empty()) add(p.sky);
     if (c.empty() && p.windKt >= 0) add(fmt("wind %03.0f/%.0f", std::max(0.0, p.windDir), p.windKt));
-    if (c.empty() && p.tempC > -100) add(fmt("temp %.0f °C", p.tempC));
+    if (c.empty() && p.tempC > -100) add("temp " + tempText(p.tempC));
     return c.empty() ? std::string("—") : c;
 }
 // how much attention a report needs (colour and the Conditions sort): turbulence by EDR, icing and wind shear count too
@@ -1953,7 +1993,7 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
             if (!p.icing.empty()) det += "Icing " + p.icing + "    ";
             if (!p.sky.empty()) det += "Clouds " + p.sky + "    ";
             if (!p.wx.empty()) det += "Weather " + p.wx + "    ";
-            if (p.tempC > -100) det += fmt("Temp %.0f °C    ", p.tempC);
+            if (p.tempC > -100) det += "Temp " + tempText(p.tempC) + "    ";
             if (p.windKt >= 0) det += fmt("Wind %03.0f°T/%.0f kt    ", std::max(0.0, p.windDir), p.windKt);
             if (p.llws) det += "Low-level wind shear reported";
             // the details span the whole table width (the table does not clip its cells)
@@ -2054,7 +2094,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
             ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn));
             ImGui::TextUnformatted("Tropo");
             ImGui::TableSetColumnIndex(4);
-            ImGui::Text("FL%03.0f · %.0f °C", tropoFt / 100.0f, tropoC);
+            ImGui::Text("FL%03.0f · %s", tropoFt / 100.0f, tempText(tropoC).c_str());
             ImGui::PopStyleColor();
         }
         ImGui::TableNextRow();
@@ -2072,9 +2112,9 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
             ImGui::PopID();
         }
         ImGui::TableSetColumnIndex(4); speedBar(r.kt, maxKt);
-        ImGui::TableSetColumnIndex(5); if (r.hasT) ImGui::Text("%.0f°", r.tempC); else muted("—");
+        ImGui::TableSetColumnIndex(5); if (r.hasT) ImGui::Text("%.0f°", tempIn(r.tempC)); else muted("—");
         ImGui::TableSetColumnIndex(6);
-        if (r.hasT) { const float dev = r.tempC - isaTempC(r.ft * 0.3048f); ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); const long dv = std::lround(dev); if (dv == 0) ImGui::TextUnformatted("ISA 0"); else ImGui::Text("ISA %+ld", dv); ImGui::PopStyleColor(); }
+        if (r.hasT) { const float dev = r.tempC - isaTempC(r.ft * 0.3048f); ImGui::PushStyleColor(ImGuiCol_Text, v4(cSoft)); const long dv = isaDevIn(dev); if (dv == 0) ImGui::TextUnformatted("ISA 0"); else ImGui::Text("ISA %+ld", dv); ImGui::PopStyleColor(); }
     }
     ImGui::EndTable();
     if (flipMag) aloftMag = !aloftMag;
@@ -2366,7 +2406,7 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
             ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10 km+"), kSortVis);
             ImGui::TableSetupColumn("Weather", ImGuiTableColumnFlags_WidthFixed, textColW("+TSRA BR"), kSortWx);
             ImGui::TableSetupColumn("Ceiling", ImGuiTableColumnFlags_WidthStretch, textColW("00,000 ft"), kSortCeil);
-            ImGui::TableSetupColumn("T/Td", ImGuiTableColumnFlags_WidthFixed, textColW("-00/-00"), kSortTemp);
+            ImGui::TableSetupColumn(tempF() ? "T/Td °F###ttd" : "T/Td °C###ttd", ImGuiTableColumnFlags_WidthFixed, textColW("T/Td °C "), kSortTemp);
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
             ImGui::TableHeadersRow();
@@ -2388,7 +2428,7 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
                 ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(visText(r, usUnits(s->icao)).c_str());
                 ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(r.wxText.empty() ? "—" : r.wxText.c_str());
                 ImGui::TableSetColumnIndex(6); { const int c = ceilingFt(r); if (c < 0) muted("none"); else ImGui::TextUnformatted((ftText(c) + " ft").c_str()); }
-                ImGui::TableSetColumnIndex(7); if (r.hasTemp) ImGui::Text("%.0f/%.0f", r.tempC, r.dewpC); else muted("—");
+                ImGui::TableSetColumnIndex(7); if (r.hasTemp) ImGui::Text("%.0f/%.0f", tempIn(r.tempC), tempIn(r.dewpC)); else muted("—");
             }
             ImGui::EndTable();
         }
