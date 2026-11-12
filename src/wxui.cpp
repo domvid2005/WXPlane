@@ -2317,14 +2317,14 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     std::vector<const Station*> v;
     for (const auto& s : d.res->stations) if (&s != skip && s.icao.compare(0, 3, "GFS") != 0) v.push_back(&s);
     const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | (scroll ? ImGuiTableFlags_ScrollY : 0);
-    if (!ImGui::BeginTable("near", 6, fl)) return;
+    // no category column: the ICAO itself is coloured by its flight category (VFR green, MVFR blue, IFR red, LIFR magenta)
+    if (!ImGui::BeginTable("near", 5, fl)) return;
     ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
-    ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000") - 4, kSortDist);
-    ImGui::TableSetupColumn("Cat", ImGuiTableColumnFlags_WidthFixed, textColW("MVFR"), kSortCat);
+    ImGui::TableSetupColumn("nm", ImGuiTableColumnFlags_WidthFixed, textColW("000"), kSortDist);
     // the wind gets the room for a gusting wind and its reference (true or magnetic in the header)
     ImGui::TableSetupColumn(windMagnetic() ? "Wind °M###wind" : "Wind °T###wind", ImGuiTableColumnFlags_WidthFixed, textColW("000/00G00"), kSortWind);
-    ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10+ SM") - 6, kSortVis);
-    ImGui::TableSetupColumn("Ceil.", ImGuiTableColumnFlags_WidthStretch, textColW("00,000"), kSortCeil);
+    ImGui::TableSetupColumn("Vis", ImGuiTableColumnFlags_WidthFixed, textColW("10+ SM"), kSortVis);
+    ImGui::TableSetupColumn("Ceiling", ImGuiTableColumnFlags_WidthStretch, textColW("00,000"), kSortCeil);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
     ImGui::TableHeadersRow();
@@ -2334,12 +2334,12 @@ void nearbyTable(const UiData& d, const Station* skip, int maxRows, bool scroll)
     for (const Station* s : v) {
         const Report& r = s->report;
         ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(s->icao.c_str());
+        ImGui::TableSetColumnIndex(0);
+        { const std::string c = flightCategory(r); ImGui::PushStyleColor(ImGuiCol_Text, v4(c.empty() ? cText : catColor(c))); ImGui::TextUnformatted(s->icao.c_str()); ImGui::PopStyleColor(); }
         ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f", distTo(d, *s));
-        ImGui::TableSetColumnIndex(2); { const std::string c = flightCategory(r); ImGui::PushStyleColor(ImGuiCol_Text, v4(catColor(c))); ImGui::TextUnformatted(c.empty() ? "—" : c.c_str()); ImGui::PopStyleColor(); }
-        ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(windShortRef(r, magVar(d, s->lat, s->lon), windMagnetic()).c_str());
-        ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(visText(r, usUnits(s->icao)).c_str());
-        ImGui::TableSetColumnIndex(5); { const int c = ceilingFt(r); if (c < 0) muted("none"); else ImGui::TextUnformatted(ftText(c).c_str()); }
+        ImGui::TableSetColumnIndex(2); ImGui::TextUnformatted(windShortRef(r, magVar(d, s->lat, s->lon), windMagnetic()).c_str());
+        ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(visText(r, usUnits(s->icao)).c_str());
+        ImGui::TableSetColumnIndex(4); { const int c = ceilingFt(r); if (c < 0) muted("none"); else ImGui::TextUnformatted(ftText(c).c_str()); }
     }
     ImGui::EndTable();
 }
