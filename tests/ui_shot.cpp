@@ -466,6 +466,42 @@ int main(int argc, char** argv) {
         if (overlaps) { std::printf("UI: %d altitude box overlap(s) of %d\n", overlaps, checks); return 1; }
         std::printf("altitude box clear of the map in %d cases\n", checks);
     }
+    // map windows: never on one of the map's buttons, and dragging one onto another (or onto a button) only slides it up to them,
+    // it never overlaps them, and no window closes ("max popups")
+    {
+        extern int g_testPopups, g_testPopupTouches, g_testKeepOuts;
+        extern float g_testPopupRect[8][4], g_testKeepOut[8][4];
+        auto frame = [&](int tab) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = tab; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; };
+        d.forceLayers = 5; d.forceAloftLayers = 3; d.forceMapAltFt = 18000;
+        for (int fr = 0; fr < 40; ++fr) { d.forcePirep = fr == 3 ? 2 : -1; d.forceWindSel = fr == 3 ? 9 : -1; frame(fr == 0 ? 2 : -1); }
+        d.forcePirep = -1; d.forceWindSel = -1;
+        int bad = 0;
+        const int n0 = g_testPopups;
+        if (n0 < 2) { std::printf("map windows: expected 2 open, %d\n", n0); bad++; }
+        if (g_testPopupTouches) { std::printf("map windows: %d touch after opening\n", g_testPopupTouches); bad++; }
+        // drag the first window to the second one's centre, then to every map button, then back
+        std::vector<ImVec2> goals;
+        if (n0 >= 2) goals.push_back(ImVec2((g_testPopupRect[1][0] + g_testPopupRect[1][2]) * 0.5f, (g_testPopupRect[1][1] + g_testPopupRect[1][3]) * 0.5f));
+        for (int k = 0; k < g_testKeepOuts; ++k) goals.push_back(ImVec2((g_testKeepOut[k][0] + g_testKeepOut[k][2]) * 0.5f, (g_testKeepOut[k][1] + g_testKeepOut[k][3]) * 0.5f));
+        for (const ImVec2& goal : goals) {
+            if (g_testPopups < 1) break;
+            const ImVec2 grab(g_testPopupRect[0][0] + 3, (g_testPopupRect[0][1] + g_testPopupRect[0][3]) * 0.5f);
+            io.AddMousePosEvent(grab.x, grab.y); frame(-1);
+            io.AddMouseButtonEvent(0, true); frame(-1);
+            for (int st = 1; st <= 30; ++st) {
+                io.AddMousePosEvent(grab.x + (goal.x - grab.x) * st / 30.0f, grab.y + (goal.y - grab.y) * st / 30.0f);
+                frame(-1);
+                if (g_testPopupTouches || g_testPopups != n0) { std::printf("map windows: dragging toward %.0f,%.0f: %d shown, %d touching\n", goal.x, goal.y, g_testPopups, g_testPopupTouches); bad++; break; }
+            }
+            io.AddMouseButtonEvent(0, false); frame(-1); frame(-1);
+            if (std::getenv("UI_DBG")) std::printf("dbg after drag to %.0f,%.0f: shown %d, r0 %.0f,%.0f-%.0f,%.0f r1 %.0f,%.0f-%.0f,%.0f\n", goal.x, goal.y, g_testPopups, g_testPopupRect[0][0], g_testPopupRect[0][1], g_testPopupRect[0][2], g_testPopupRect[0][3], g_testPopupRect[1][0], g_testPopupRect[1][1], g_testPopupRect[1][2], g_testPopupRect[1][3]);
+            if (g_testPopupTouches || g_testPopups != n0) { std::printf("map windows: after the drag: %d shown, %d touching\n", g_testPopups, g_testPopupTouches); bad++; }
+        }
+        io.AddMousePosEvent(-1000, -1000); frame(-1);
+        d.forceLayers = 1; d.forceAloftLayers = 0; d.forceMapAltFt = -1;
+        if (bad) { std::printf("UI: map windows touched or closed (%d)\n", bad); return 1; }
+        std::printf("map windows: %d drags, none touched another window or a map button\n", (int)goals.size());
+    }
     // duplicate ImGui IDs (ImGui outlines them in red when one is hovered): sweep the mouse over every tab with every map layer on
     {
         d.forceLayers = 7; d.forceAdv = 1; d.forceAloftLayers = 3;

@@ -85,6 +85,14 @@ int main() {
     CHECK(parseReport("KXYZ ATIS INFORMATION B 1453Z WIND 270 AT 12 GUSTS 20 VISIBILITY 5 ALTIMETER 2987 TEMPERATURE 8 DEWPOINT 7", a, true));
     CHECK(a.windDir == 270 && a.windKt == 12 && a.gustKt == 20 && a.visM > 8000);
     NEAR(a.altimHpa, 1011.5, 0.3);
+    CHECK(a.hasTemp && a.tempC == 8 && a.dewpC == 7);
+    CHECK(parseReport("KXYZ ATIS INFO C 0153Z WIND 090 AT 5 TEMPERATURE MINUS 3, DEW POINT M7 ALTIMETER 3011", a, true));
+    CHECK(a.windDir == 90 && a.windKt == 5 && a.gustKt <= 0 && a.tempC == -3 && a.dewpC == -7);
+    {   // a very long token (junk in a feed) is no coded group and never reaches the regex matcher (it recursed on the stack)
+        const std::string junk(20000, '9');
+        CHECK(parseReport("KXYZ 121651Z 27012KT " + junk + " 10SM OVC020 05/02 A2990", a, false));
+        CHECK(a.hasWind && a.windDir == 270 && a.hasVis && a.hasTemp);
+    }
 
     // --- report age
     {

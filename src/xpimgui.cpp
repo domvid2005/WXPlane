@@ -332,6 +332,7 @@ void key(XPLMWindowID, char ch, XPLMKeyFlags flags, char vkey, void*, int losing
 
 } // namespace
 
+void createWindow();
 void open(BuildFn build) {
     g_build = build;
     if (!g_ctx) {
@@ -352,7 +353,15 @@ void open(BuildFn build) {
         g_fontsDirty = true;
         if (prev) ImGui::SetCurrentContext(prev);
     }
-    if (!g_win) {
+    if (!g_win) createWindow();
+    if (!g_win) return;
+    XPLMSetWindowIsVisible(g_win, 1);
+    XPLMBringWindowToFront(g_win);
+}
+
+// the in-sim window, top left of the screen (made on open, and again on pop-in: see tick)
+void createWindow() {
+    {
         int sl, st, sr, sb;
         XPLMGetScreenBoundsGlobal(&sl, &st, &sr, &sb);
         const int w = std::min(1240, std::max(600, sr - sl - 80)), h = std::min(820, std::max(420, st - sb - 120));
@@ -378,8 +387,6 @@ void open(BuildFn build) {
         if (!g_drVr) g_drVr = XPLMFindDataRef("sim/graphics/VR/enabled");
         if (g_drVr && XPLMGetDatai(g_drVr)) XPLMSetWindowPositioningMode(g_win, xplm_WindowVR, -1);
     }
-    XPLMSetWindowIsVisible(g_win, 1);
-    XPLMBringWindowToFront(g_win);
 }
 
 bool isOpen() { return g_win && XPLMGetWindowIsVisible(g_win); }
@@ -405,11 +412,15 @@ void tick() {
         ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
     }
     if (XPLMWindowIsPoppedOut(g_win)) {
-        XPLMSetWindowPositioningMode(g_win, xplm_WindowPositionFree, -1);
-        int sl, st, sr, sb;
-        XPLMGetScreenBoundsGlobal(&sl, &st, &sr, &sb);
-        const int w = std::max(400, std::min(1240, sr - sl - 80)), h = std::max(300, std::min(820, st - sb - 120));
-        XPLMSetWindowGeometry(g_win, sl + 40, st - 70, sl + 40 + w, st - 70 - h);
+        // Pop-in: the popped-out window is closed and a new in-sim window made, instead of switching the same window back to an
+        // in-sim position. Switching it back left X-Plane's scene dark (its exposure, after it rebuilt the main view's offscreens
+        // for the departing OS window, 2026-11-12), and every pop-out made another OS window that was never closed.
+        if (g_hasKeyFocus && XPLMHasKeyboardFocus(g_win)) XPLMTakeKeyboardFocus(nullptr);
+        g_hasKeyFocus = false;
+        XPLMDestroyWindow(g_win);
+        g_win = nullptr;
+        createWindow();
+        if (g_win) { XPLMSetWindowIsVisible(g_win, 1); XPLMBringWindowToFront(g_win); }
     } else {
         XPLMSetWindowPositioningMode(g_win, xplm_WindowPopOut, -1);
     }

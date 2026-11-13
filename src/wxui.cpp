@@ -32,7 +32,11 @@ extern const unsigned char wx_font_tzones[]; extern const unsigned int wx_font_t
 extern const unsigned char wx_font_logo[]; extern const unsigned int wx_font_logo_size;
 }
 
-float g_testMapRight = 0, g_testAltBoxLeft = 0;   // for the UI test: the Map tab's map's right edge and the altitude value box's left edge
+float g_testMapRight = 0, g_testAltBoxLeft = 0;
+int g_testPopups = 0, g_testPopupTouches = 0;   // for the UI test: the map windows shown, and how many touch each other or a map button
+float g_testPopupRect[8][4] = {};               // their rectangles (x0, y0, x1, y1)
+float g_testKeepOut[8][4] = {};                 // the map buttons'
+int g_testKeepOuts = 0;   // for the UI test: the Map tab's map's right edge and the altitude value box's left edge
 namespace wx {
 namespace {
 
@@ -836,7 +840,7 @@ double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k
 struct SelItem { int kind = 0; std::string key; ImVec2 at; ImVec2 lastSize = ImVec2(300, 200); ImVec2 pos, size; bool shown = false;
                  bool dragged = false, dragging = false;
                  bool fixed = false; int frames = 0, stable = 0; ImVec2 measSize = ImVec2(-1, -1); };   // fixed: placed once (after it was measured), it stays on that spot   // dragged: moved by hand, it stays where it was put (inside the map, off the other window)   // kind: 0 none, 1 pilot report, 2 airport, 3 AIRMET/SIGMET, 4 winds aloft
-struct MapSel { std::vector<SelItem> items; ImVec2 mapMin, mapMax; };
+struct MapSel { std::vector<SelItem> items; ImVec2 mapMin, mapMax; std::vector<std::pair<ImVec2, ImVec2>> keepOut; };   // keepOut: the map's own buttons (no window may touch them)
 MapSel& mapSel() { static MapSel s; return s; }
 SelItem* selFind(int kind, const std::string& key) { for (auto& it : mapSel().items) if (it.kind == kind && it.key == key) return &it; return nullptr; }
 bool isSel(int kind, const std::string& key) { return selFind(kind, key) != nullptr; }
@@ -1597,12 +1601,14 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                           ImVec2(ac.x - dir.x * 7 - n.x * 6, ac.y - dir.y * 7 - n.y * 6), IM_COL32(255, 255, 255, 255));
     // bubbles on the Map tab's map: the time (top left), Center on aircraft and North / Heading Lock (top right, clickable)
     int bubbleHit = 0;   // 1 center, 2 lock
+    if (interactive) mapSel().keepOut.clear();   // the bubbles drawn below: the info windows keep off them
     // blue: Heading Lock on (its text and outline in the dial's blue, like the wind wheel's outline)
     auto bubble = [&](ImVec2 b0, const char* label, const char* text, bool blue, bool dim) {
         const ImVec2 ls = label ? ImGui::CalcTextSize(label) : ImVec2(0, 0), ts = ImGui::CalcTextSize(text);
         const float lw = label ? ls.x * 0.82f + 6 : 0;
         const ImVec2 b1(b0.x + lw + ts.x + 12, b0.y + ts.y + 6);
         const bool hov = interactive && !dim && mouse.x >= b0.x && mouse.x <= b1.x && mouse.y >= b0.y && mouse.y <= b1.y;
+        if (interactive) mapSel().keepOut.push_back({b0, b1});
         dl->AddRectFilled(b0, b1, hov ? IM_COL32(34, 38, 46, 235) : IM_COL32(20, 22, 26, 220), 4.0f);
         dl->AddRect(b0, b1, blue ? cLockBlue : IM_COL32(60, 64, 72, 255), 4.0f, 0, blue ? 1.5f : 1.0f);
         if (label) dl->AddText(f.bold, ImGui::GetFontSize() * 0.82f, ImVec2(b0.x + 6, b0.y + 3 + ts.y * 0.09f), cIdle, label);
@@ -1815,8 +1821,37 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) sel.dragging = true;
         if (sel.dragging) {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                // it slides only where it touches nothing: not another window, not the map's buttons, not the map's edge. A move
+                // that would touch something goes as far as it can along each axis (it slides along the obstacle) and stops there,
+                // so a dragged window can never be pushed onto another one (which closed a window with "max popups")
                 const ImVec2 dlt = ImGui::GetIO().MouseDelta;
-                if (dlt.x != 0 || dlt.y != 0) { sel.pos.x += dlt.x; sel.pos.y += dlt.y; sel.dragged = true; }
+                if (dlt.x != 0 || dlt.y != 0) {
+                    const ImVec2 ws = ImGui::GetWindowSize();
+                    auto clear = [&](ImVec2 q) {
+                        if (q.x < mn.x + 4 || q.y < mn.y + 4 || q.x + ws.x > mx.x - 4 || q.y + ws.y > mx.y - 4) return false;
+                        auto hit = [&](ImVec2 o0, ImVec2 o1) { return q.x < o1.x + 8 && q.x + ws.x > o0.x - 8 && q.y < o1.y + 8 && q.y + ws.y > o0.y - 8; };
+                        for (const Rect& o : others) if (hit(o.first, o.second)) return false;
+                        // every other window too (`others` holds only the ones placed before this one in this frame)
+                        for (const SelItem& o : mapSel().items)
+                            if (&o != &sel && o.shown && o.kind != 0 && hit(o.pos, ImVec2(o.pos.x + o.lastSize.x, o.pos.y + o.lastSize.y))) return false;
+                        return true;
+                    };
+                    auto slide = [&](ImVec2 from, ImVec2 step) {   // as far as it goes toward from + step, a pixel at a time at the end
+                        if (clear(ImVec2(from.x + step.x, from.y + step.y))) return ImVec2(from.x + step.x, from.y + step.y);
+                        const float len = std::max(std::fabs(step.x), std::fabs(step.y));
+                        ImVec2 q = from;
+                        for (float t = 1.0f; t <= len; t += 1.0f) {
+                            const ImVec2 n(from.x + step.x * t / len, from.y + step.y * t / len);
+                            if (!clear(n)) break;
+                            q = n;
+                        }
+                        return q;
+                    };
+                    ImVec2 q = sel.pos;
+                    if (!clear(q)) q = ImVec2(q.x + dlt.x, q.y + dlt.y);   // (already touching something: free to be dragged off it)
+                    else { q = slide(q, ImVec2(dlt.x, 0)); q = slide(q, ImVec2(0, dlt.y)); }
+                    if (q.x != sel.pos.x || q.y != sel.pos.y) { sel.pos = q; sel.dragged = true; }
+                }
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
             } else sel.dragging = false;
         }
@@ -1975,12 +2010,21 @@ void infoWindow(const UiData& d, const UiFonts& f) {
     std::vector<size_t> order;
     for (size_t i = 0; i < v.size(); ++i) if (v[i].dragged || v[i].fixed) order.push_back(i);   // the ones already on their spot first
     for (size_t i = 0; i < v.size(); ++i) if (!v[i].dragged && !v[i].fixed) order.push_back(i);
-    std::vector<Rect> placed;
+    std::vector<Rect> placed = mapSel().keepOut;   // the map's buttons first: no window may touch them, like the other windows
     bool noRoom = false;
     for (size_t i : order) {
         std::vector<ImVec2> pts;
         for (size_t j = 0; j < v.size(); ++j) if (j != i) pts.push_back(v[j].at);
-        if (!infoWindowOne(d, f, v[i], placed, pts)) { v[i].shown = false; noRoom = true; continue; }
+        // kept off: the map's buttons, the windows already placed this frame, and the ones still to come that already have their
+        // spot (a window dragged first in the frame was only kept off the ones before it, and could be pushed onto a later one,
+        // which then found no room and closed with "max popups")
+        std::vector<Rect> others = placed;
+        bool after = false;
+        for (size_t j : order) {
+            if (j == i) { after = true; continue; }
+            if (after && v[j].shown && (v[j].fixed || v[j].dragged)) others.push_back({v[j].pos, ImVec2(v[j].pos.x + v[j].lastSize.x, v[j].pos.y + v[j].lastSize.y)});
+        }
+        if (!infoWindowOne(d, f, v[i], others, pts)) { v[i].shown = false; noRoom = true; continue; }
         v[i].shown = v[i].kind != 0;
         if (v[i].shown) placed.push_back({v[i].pos, ImVec2(v[i].pos.x + v[i].lastSize.x, v[i].pos.y + v[i].lastSize.y)});
     }
@@ -1989,6 +2033,20 @@ void infoWindow(const UiData& d, const UiFonts& f) {
         popupFullUntil() = ImGui::GetTime() + 1.2;
     }
     v.erase(std::remove_if(v.begin(), v.end(), [](const SelItem& it) { return it.kind == 0; }), v.end());
+    {   // the UI test's view: the windows shown and whether any of them touch (each other, or a button of the map)
+        std::vector<Rect> w;
+        for (const auto& it : v) if (it.shown && it.fixed) w.push_back({it.pos, ImVec2(it.pos.x + it.lastSize.x, it.pos.y + it.lastSize.y)});
+        auto touch = [](const Rect& a, const Rect& b) { return a.first.x < b.second.x && a.second.x > b.first.x && a.first.y < b.second.y && a.second.y > b.first.y; };
+        int t = 0;
+        for (size_t i = 0; i < w.size(); ++i) {
+            for (size_t j = i + 1; j < w.size(); ++j) if (touch(w[i], w[j])) ++t;
+            for (const Rect& k : mapSel().keepOut) if (touch(w[i], k)) ++t;
+        }
+        g_testPopups = (int)w.size(); g_testPopupTouches = t;
+        for (size_t i = 0; i < w.size() && i < 8; ++i) { g_testPopupRect[i][0] = w[i].first.x; g_testPopupRect[i][1] = w[i].first.y; g_testPopupRect[i][2] = w[i].second.x; g_testPopupRect[i][3] = w[i].second.y; }
+        g_testKeepOuts = (int)std::min<size_t>(8, mapSel().keepOut.size());
+        for (int i = 0; i < g_testKeepOuts; ++i) { const Rect& k = mapSel().keepOut[(size_t)i]; g_testKeepOut[i][0] = k.first.x; g_testKeepOut[i][1] = k.first.y; g_testKeepOut[i][2] = k.second.x; g_testKeepOut[i][3] = k.second.y; }
+    }
 }
 
 void radarLegend() {
@@ -3585,6 +3643,35 @@ UiFonts uiLoadFonts(float pixelScale) {
     return f;
 }
 
+// Refresh and Pop out: two tabs at the right end of the tab row (standing on the line, like the others: the same width, font, colours
+// and text offset), clickable as buttons. Narrower (to their text) when the window is too narrow for both rows of tabs side by side.
+float sideTabW() { return uniformTabWidth(); }
+float sideTabsWidth() { return 2 * sideTabW() + ImGui::GetStyle().ItemInnerSpacing.x; }
+void sideTabs(float top, float bottom, float right, float leftLimit, bool poppedOut, UiActions& act) {
+    float w = sideTabW();
+    const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+    if (right - 2 * w - gap < leftLimit) w = std::max(tabWidth("Pop out"), (right - gap - leftLimit) * 0.5f);
+    ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
+    const float fs = tf->FontSize * ImGui::GetIO().FontGlobalScale;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 keep = ImGui::GetCursorScreenPos();
+    auto tab = [&](const char* id, const char* label, float x0) {
+        const ImVec2 r0(x0, top), r1(x0 + w, bottom);
+        ImGui::SetCursorScreenPos(r0);
+        const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, bottom - top));
+        const bool hov = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
+        dl->AddRectFilled(r0, r1, ImGui::GetColorU32(held ? ImGuiCol_TabSelected : (hov ? ImGuiCol_TabHovered : ImGuiCol_Tab)), ImGui::GetStyle().TabRounding, ImDrawFlags_RoundCornersTop);
+        dl->PushClipRect(r0, ImVec2(r1.x - 1, r1.y), true);
+        dl->AddText(tf, fs, ImVec2(r0.x + ImGui::GetStyle().FramePadding.x, r0.y + kTabPad.y), ImGui::GetColorU32(ImGuiCol_Text), label);   // where the page tabs' labels start (ImGui uses the tab bar's FramePadding)
+        dl->PopClipRect();
+        if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        return clicked;
+    };
+    if (tab("##refreshtab", "Refresh", right - 2 * w - gap)) act.refresh = true;
+    if (tab("##popouttab", poppedOut ? "Pop in" : "Pop out", right - w)) act.popOut = true;
+    ImGui::SetCursorScreenPos(keep);
+}
+
 void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool poppedOut, UiActions& act) {
     s_drawData = &d;
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -3645,7 +3732,8 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             ImGui::PopFont();
         }
         (void)st;
-        const float bw = 84 + 86 + 8;
+        // the status in a dark bubble over the Refresh and Pop out tabs (as wide as the two of them), like the map's bubbles
+        const float bw = sideTabsWidth();
         const bool loading = d.loadingS >= 0;
         std::string live;
         if (loading) {   // the weather is being built from scratch: count down to when it should all be in
@@ -3655,32 +3743,47 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             live = d.busy ? std::string("Downloading…") : (d.nextUpdateS >= 0 ? fmt("Next update %d:%02d", (int)d.nextUpdateS / 60, (int)d.nextUpdateS % 60) : std::string(""));
             if (d.haveData && d.res) live += (live.empty() ? "" : " ") + std::string("(updated ") + hhmm(d.res->fetchedAt) + ")";
         }
-        const float lw = ImGui::CalcTextSize(live.c_str()).x + 20 + (loading ? 18 : 0);
-        ImGui::SameLine(right - bw - lw - 12);
-        if (loading) {
-            // a turning ring, then the countdown in amber
-            const ImVec2 p0 = ImGui::GetCursorScreenPos();
-            const float h = ImGui::GetFrameHeight(), r = 6.0f;
-            const ImVec2 c(p0.x + r + 2, p0.y + h * 0.5f);
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddCircle(c, r, IM_COL32(80, 66, 40, 255), 24, 2.0f);
-            const float a0 = (float)std::fmod(ImGui::GetTime() * 5.0, 2.0 * kPi);
-            dl->PathArcTo(c, r, a0, a0 + 1.9f, 12);
-            dl->PathStroke(cWarn, ImDrawFlags_None, 2.0f);
-            ImGui::Dummy(ImVec2(2 * r + 6, h));
-            ImGui::SameLine(0, 4);
-            ImGui::AlignTextToFramePadding();
-            ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn));
-            ImGui::TextUnformatted(live.c_str());
-            ImGui::PopStyleColor();
-        } else if (!live.empty()) { statusDot(d.busy ? SvcState::Degraded : SvcState::Ok, 4); ImGui::SameLine(0, 2); muted(live.c_str()); }
         ImGui::SameLine(right - bw);
-        if (ImGui::Button("Refresh", ImVec2(84, 0))) act.refresh = true;
-        ImGui::SameLine(0, 8);
-        if (ImGui::Button(poppedOut ? "Pop in" : "Pop out", ImVec2(86, 0))) act.popOut = true;
+        {
+            const ImVec2 b0 = ImGui::GetCursorScreenPos();
+            const float bh = ImGui::GetFrameHeight();
+            const ImVec2 b1(b0.x + bw, b0.y + bh);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(b0, b1, IM_COL32(20, 22, 26, 220), 4.0f);
+            dl->AddRect(b0, b1, IM_COL32(60, 64, 72, 255), 4.0f, 0, 1.0f);
+            dl->PushClipRect(b0, ImVec2(b1.x - 4, b1.y), true);
+            const float tx = b0.x + ImGui::GetStyle().FramePadding.x, ty = b0.y + (bh - ImGui::GetTextLineHeight()) * 0.5f;   // the tabs' left text offset
+            if (loading) {   // a turning ring, then the countdown in amber
+                const float r = 6.0f;
+                const ImVec2 c(tx + r, b0.y + bh * 0.5f);
+                dl->AddCircle(c, r, IM_COL32(80, 66, 40, 255), 24, 2.0f);
+                const float a0 = (float)std::fmod(ImGui::GetTime() * 5.0, 2.0 * kPi);
+                dl->PathArcTo(c, r, a0, a0 + 1.9f, 12);
+                dl->PathStroke(cWarn, ImDrawFlags_None, 2.0f);
+                dl->AddText(ImVec2(tx + 2 * r + 8, ty), cWarn, live.c_str());
+            } else if (!live.empty()) {
+                const SvcState sv = d.busy ? SvcState::Degraded : SvcState::Ok;
+                dl->AddCircleFilled(ImVec2(tx + 4, b0.y + bh * 0.5f), 4.0f, sv == SvcState::Ok ? IM_COL32(76, 175, 80, 255) : cWarn, 16);
+                dl->AddText(ImVec2(tx + 14, ty), cMuted, live.c_str());
+            }
+            dl->PopClipRect();
+            ImGui::Dummy(ImVec2(bw, bh));
+        }
     }
 
     if (!d.haveData || !d.res) {
+        {   // no tabs yet: the tab row with only Refresh and Pop out, on the line
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);
+            ImFont* tf = tabFont() ? tabFont() : (tabFontBig() ? tabFontBig() : f.bold);
+            const float h = tf->FontSize * ImGui::GetIO().FontGlobalScale + 2 * kTabPad.y;
+            const ImVec2 q = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            ImFont*& tfr = tabFont(); ImFont* was = tfr; tfr = tf;
+            sideTabs(q.y, q.y + h, q.x + w, q.x, poppedOut, act);
+            tfr = was;
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(q.x, q.y + h + 0.5f), ImVec2(q.x + w, q.y + h + 0.5f), IM_COL32(58, 62, 70, 255), 1.0f);
+            ImGui::Dummy(ImVec2(w, h));
+        }
         ImGui::Spacing();
         mutedWrapped(d.status1.empty() ? std::string("No weather downloaded yet.") : d.status1 + (d.status2.empty() ? "" : "  ·  " + d.status2));
         ImGui::Spacing();
@@ -3693,13 +3796,30 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     tabFont() = tabFontBig() ? tabFontBig() : f.bold;
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);   // the gap between the logo row and the tabs as between the tabs and the panels
     ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0.0f);
-    const bool tabBarOpen = ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_None);
+    // the tab bar ends where Refresh and Pop out begin, so in a narrow window ImGui narrows the page tabs instead of running them under those
+    bool tabBarOpen = false;
+    {
+        ImGuiContext& g = *GImGui;
+        ImGuiWindow* win = g.CurrentWindow;
+        const ImGuiID id = win->GetID("tabs");
+        ImGuiTabBar* tb = g.TabBars.GetOrAddByKey(id);
+        const float maxX = std::max(win->DC.CursorPos.x + 200.0f, win->WorkRect.Max.x - sideTabsWidth() - 12.0f);
+        const ImRect bb(win->DC.CursorPos.x, win->DC.CursorPos.y, maxX, win->DC.CursorPos.y + g.FontSize + g.Style.FramePadding.y * 2);
+        tb->ID = id;
+        tb->SeparatorMinX = tb->BarRect.Min.x - IM_TRUNC(win->WindowPadding.x * 0.5f);
+        tb->SeparatorMaxX = tb->BarRect.Max.x + IM_TRUNC(win->WindowPadding.x * 0.5f);
+        tabBarOpen = !win->SkipItems && ImGui::BeginTabBarEx(tb, bb, ImGuiTabBarFlags_None | ImGuiTabBarFlags_IsFocused);
+    }
     ImGui::PopStyleVar();
+    ImRect tabsBar;
+    float tabsEnd = 0;
     if (tabBarOpen) {
         {   // the line across the window runs right along the bottom of the tabs (the tabs stand on it)
             const ImRect bar = GImGui->CurrentTabBar->BarRect;
+            tabsBar = bar;
+            tabsEnd = bar.Min.x + GImGui->CurrentTabBar->WidthAllTabs;
             const float x0 = ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x;
-            const float x1 = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x;
+            const float x1 = ImGui::GetCurrentWindow()->WorkRect.Max.x;
             ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, bar.Max.y + 0.5f), ImVec2(x1, bar.Max.y + 0.5f), IM_COL32(58, 62, 70, 255), 1.0f);
         }
         if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
@@ -3734,6 +3854,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
         if (bigTab("Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }
         if (bigTab("Settings", nullptr, d.forceTab == 6 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabSettings(d, f, act); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
+        sideTabs(tabsBar.Min.y, tabsBar.Max.y, ImGui::GetCurrentWindow()->WorkRect.Max.x, tabsEnd + 12, poppedOut, act);
     }
     finish();
 }

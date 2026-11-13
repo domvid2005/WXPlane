@@ -101,7 +101,7 @@ double smValue(const std::string& tok, bool& ok) {
     static const std::regex re(R"(^([MP]?)(\d+)(?:/(\d+))?SM$)");
     std::smatch m;
     ok = false;
-    if (!std::regex_match(tok, m, re)) return 0;
+    if (tok.size() > 12 || !std::regex_match(tok, m, re)) return 0;   // (a visibility group is short: no regex over long junk)
     double v = std::atof(m[2].str().c_str());
     if (m[3].matched) {
         double d = std::atof(m[3].str().c_str());
@@ -141,6 +141,9 @@ bool parseReport(const std::string& text, Report& r, bool isAtis) {
         const std::string& tok = t[i];
         if (tok == "RMK" || tok == "TEMPO" || tok == "BECMG") break;
         std::smatch m;
+        // every coded group is short (the longest, a wind with gusts in KMH, is 13 characters): a long token is never one of them,
+        // and is kept out of std::regex, whose matcher recurses on the stack (MSVC's can overflow it on long input)
+        if (tok.size() > 16) { parseWx(tok, r); continue; }
 
         if (!sawTime && std::regex_match(tok, m, reTime)) {
             r.day = std::atoi(m[1].str().c_str());
@@ -244,26 +247,45 @@ bool parseReport(const std::string& text, Report& r, bool isAtis) {
         // Spoken-format fallbacks used by some ATIS texts.
         std::string up;
         for (const auto& tk : t) { up += tk; up += ' '; }
-        std::smatch m;
-        if (!r.hasAltim && std::regex_search(up, m, std::regex(R"(ALTIMETER (\d{4}) )"))) {
-            double hpa = std::atof(m[1].str().c_str()) / 100.0 * kInHgToHpa;
+        // (plain scanning, no std::regex over the whole text: its matcher recurses on the stack)
+        auto num = [&](size_t& p, int minD, int maxD, int& out) {   // digits at p
+            size_t q = p; while (q < up.size() && q - p < (size_t)maxD && std::isdigit((unsigned char)up[q])) ++q;
+            if ((int)(q - p) < minD || (q < up.size() && std::isdigit((unsigned char)up[q]))) return false;
+            out = std::atoi(up.substr(p, q - p).c_str()); p = q; return true;
+        };
+        auto lit = [&](size_t& p, const char* w) { const size_t n = std::strlen(w); if (up.compare(p, n, w) != 0) return false; p += n; return true; };
+        auto each = [&](const char* word, auto&& fn) { for (size_t at = up.find(word); at != std::string::npos; at = up.find(word, at + 1)) { size_t p = at + std::strlen(word); if (fn(p)) return; } };
+        if (!r.hasAltim) each("ALTIMETER ", [&](size_t& p) {
+            int v; if (!num(p, 4, 4, v) || !lit(p, " ")) return false;
+            const double hpa = v / 100.0 * kInHgToHpa;
             if (hpa > 850 && hpa < 1090) { r.hasAltim = true; r.altimHpa = hpa; }
-        }
-        if (!r.hasWind && std::regex_search(up, m, std::regex(R"(WIND (\d{3}) AT (\d{1,3})(?: GUSTS? (\d{1,3}))? )"))) {
-            r.hasWind = true;
-            r.windDir = std::atoi(m[1].str().c_str());
-            r.windKt = std::atof(m[2].str().c_str());
-            if (m[3].matched) r.gustKt = std::atof(m[3].str().c_str());
-        }
-        if (!r.hasTemp && std::regex_search(up, m, std::regex(R"(TEMPERATURE (M|MINUS )?(\d{1,2}),? DEW ?POINT (M|MINUS )?(\d{1,2}) )"))) {
-            r.hasTemp = r.hasDewp = true;
-            r.tempC = std::atof(m[2].str().c_str()) * (m[1].matched && !m[1].str().empty() ? -1 : 1);
-            r.dewpC = std::atof(m[4].str().c_str()) * (m[3].matched && !m[3].str().empty() ? -1 : 1);
-        }
-        if (!r.hasVis && std::regex_search(up, m, std::regex(R"(VISIBILITY (\d{1,2}) )"))) {
-            r.hasVis = true;
-            r.visM = std::atof(m[1].str().c_str()) * kSmToM;
-        }
+            return true;
+        });
+        if (!r.hasWind) each("WIND ", [&](size_t& p) {
+            int dir, kt, g = -1; if (!num(p, 3, 3, dir) || !lit(p, " AT ") || !num(p, 1, 3, kt)) return false;
+            size_t q = p;
+            if ((lit(q, " GUSTS ") || lit(q, " GUST ")) && num(q, 1, 3, g)) p = q; else g = -1;
+            if (!lit(p, " ")) return false;
+            r.hasWind = true; r.windDir = dir; r.windKt = kt; if (g >= 0) r.gustKt = g;
+            return true;
+        });
+        if (!r.hasTemp) each("TEMPERATURE ", [&](size_t& p) {
+            const bool mt = lit(p, "MINUS ") || lit(p, "M");
+            int tc, dc; if (!num(p, 1, 2, tc)) return false;
+            lit(p, ",");
+            if (!lit(p, " DEW")) return false;
+            lit(p, " ");
+            if (!lit(p, "POINT ")) return false;
+            const bool md = lit(p, "MINUS ") || lit(p, "M");
+            if (!num(p, 1, 2, dc) || !lit(p, " ")) return false;
+            r.hasTemp = r.hasDewp = true; r.tempC = mt ? -tc : tc; r.dewpC = md ? -dc : dc;
+            return true;
+        });
+        if (!r.hasVis) each("VISIBILITY ", [&](size_t& p) {
+            int v; if (!num(p, 1, 2, v) || !lit(p, " ")) return false;
+            r.hasVis = true; r.visM = v * kSmToM;
+            return true;
+        });
     }
 
     return r.hasWind || r.hasVis || r.hasTemp || r.hasAltim || !r.clouds.empty() || r.clearSky;
