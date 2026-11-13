@@ -10,6 +10,13 @@
 - Softer storm edges, no cloud spires; smoother map radar
 - Lists in whole rows with scroll bars and counts beside titles; popups never outside the map; altitude slider clear of the map; sharper logo; even tabs
 - Aircraft plugins (e.g. ERJ EICAS) no longer lock turbulence settings
+- Dim at night (Settings, on by default): the window dims with the daylight so the night cockpit no longer darkens while it is open
+- Overcast (OVC) at 97% coverage, never thinned below 95% where it blends with its neighbours
+- Refresh and Pop out as tabs, with the status in a bubble above them
+- All tabs stay up during the first download; a slow download shows "Still downloading… 0:47" instead of a frozen countdown
+- Map popups keep off the map's buttons and can't be dragged onto each other ("max popups" fixed)
+- North Lock: north is the north at the + when the map is moved off the aircraft (°M turns the map with the local variation); "Center On Aircraft"
+- Pop-in opens a fresh window in the sim; sturdier METAR/ATIS reading
 - Australia/New Zealand daylight saving time; rough-top clouds keep their deck's layers; many smaller fixes
 
 ## 5.0

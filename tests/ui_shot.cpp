@@ -301,7 +301,16 @@ int main(int argc, char** argv) {
     const char* names[] = {"overview", "airports", "radar", "winds", "turbulence", "services", "settings"};
     int frames = 0;
     for (int tab = 0; tab < 7; ++tab) {
-        for (int fr = 0; fr < 3; ++fr) {
+        // the Turbulence tab: 30 s of a bumpy ride first, so its g meter shows a trace (light chop with a few jolts)
+        const int nfr = tab == 4 ? 930 : 3;
+        for (int fr = 0; fr < nfr; ++fr) {
+            if (tab == 4) {
+                const double t = fr / 30.0;
+                d.haveG = true;
+                d.gNormal = (float)(1.0 + 0.06 * std::sin(t * 7.3) + 0.04 * std::sin(t * 13.1 + 1.0) + 0.03 * std::sin(t * 23.7)
+                                    + 0.22 * std::exp(-std::pow((t - 11.0) / 0.35, 2)) - 0.17 * std::exp(-std::pow((t - 11.8) / 0.3, 2))
+                                    + 0.15 * std::exp(-std::pow((t - 22.5) / 0.4, 2)));
+            }
             io.DeltaTime = 1.0f / 30.0f;
             io.AddMousePosEvent(-1000, -1000);
             ImGui::NewFrame();
