@@ -101,9 +101,11 @@ MAP
   A larger map around your aircraft.
   * Zoom with the mouse wheel or the - / + buttons: 1, 2, 5, 10, 20, 40, 80,
     160 and 320 nm. The zoom eases smoothly between steps.
-  * Drag to pan. "Center on aircraft" glides back to you. While the map is
+  * Drag to pan. "Center On Aircraft" glides back to you. While the map is
     moved off the aircraft a small dark + marks its centre, and the LOCAL
-    time bubble shows the local time at the +.
+    time bubble shows the local time at the +. In North Lock the top of the +
+    points to north there (true, or magnetic with WIND °M): the map turns a
+    little as you move it, with the magnetic variation under the +.
   * North Lock / Airplane Heading Lock button (the same as clicking the
     wind dial).
   * Layer buttons:
@@ -165,7 +167,7 @@ MAP
     magnetic; METAR winds are true.
   * Popups can be moved: drag a popup by its background. Two can be open
     at once and they never touch.
-  * "TIME" (Zulu) is at the top left of the map; "Center on aircraft" and
+  * "TIME" (Zulu) is at the top left of the map; "Center On Aircraft" and
     North Lock / Heading Lock are at its top right.
   * Click the circle of an airport for its METAR, ATIS and surface wind,
     and a wind barb's staff or feathers for its decode (the selected barb

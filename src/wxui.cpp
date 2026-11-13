@@ -876,7 +876,7 @@ bool& showRadar() { static bool v = true; return v; }   // the radar echoes (sto
 // The Map tab's view can be dragged away from the aircraft: the offset of its centre, nm east and north (the Overview's map always
 // stays on the aircraft)
 ImVec2& mapPan() { static ImVec2 v(0, 0); return v; }
-bool& recentering() { static bool v = false; return v; }   // "Center on aircraft": the map glides back (updateShownRange)
+bool& recentering() { static bool v = false; return v; }   // "Center On Aircraft": the map glides back (updateShownRange)
 // a click on a storm cell in the list: the map glides until its centre (the +) is over that cell (nm east, north of the aircraft)
 bool& panGliding() { static bool v = false; return v; }
 std::string& pendingPirep() { static std::string k; return k; }   // a report picked in the Map tab's list: its window opens when the glide ends
@@ -1220,8 +1220,10 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     (void)rangeNm;
     rangeNm = shownRange();   // eased zoom
     const float px = (float)(R / rangeNm);   // pixels per nm
-    // the map turns like the wind wheel: heading up in Heading Lock; in North Lock true north up, or magnetic north up with °M
-    const float mapRotDeg = viewRot() + magTurn(interactive ? 3 : 4, windMagnetic(), (float)magVar(d, aLat, aLon)) * (1.0f - headingUpness());
+    // the map turns like the wind wheel: heading up in Heading Lock; in North Lock true north up, or magnetic north up with °M. The
+    // north is the north at the map's centre: at the aircraft, or (moved off it) at the + in the middle, so the top of the + always
+    // points to true or magnetic north there; the map turns as the + is moved (the variation changes from place to place)
+    const float mapRotDeg = viewRot() + magTurn(interactive ? 3 : 4, windMagnetic(), (float)magVar(d, cLat, cLon)) * (1.0f - headingUpness());
     const double rot = mapRotDeg * kPi / 180.0;
     const float cr = (float)std::cos(rot), sr = (float)std::sin(rot);
     auto at = [&](double lat, double lon) {
@@ -1599,7 +1601,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
     dl->AddTriangleFilled(ImVec2(ac.x + dir.x * 10, ac.y + dir.y * 10), ImVec2(ac.x - dir.x * 7 + n.x * 6, ac.y - dir.y * 7 + n.y * 6),
                           ImVec2(ac.x - dir.x * 7 - n.x * 6, ac.y - dir.y * 7 - n.y * 6), IM_COL32(255, 255, 255, 255));
-    // bubbles on the Map tab's map: the time (top left), Center on aircraft and North / Heading Lock (top right, clickable)
+    // bubbles on the Map tab's map: the time (top left), Center On Aircraft and North / Heading Lock (top right, clickable)
     int bubbleHit = 0;   // 1 center, 2 lock
     if (interactive) mapSel().keepOut.clear();   // the bubbles drawn below: the info windows keep off them
     // blue: Heading Lock on (its text and outline in the dial's blue, like the wind wheel's outline)
@@ -1644,7 +1646,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         }
         const std::string lkS = dialHeadingUp() && d.havePos ? headingText(d) : std::string(dialHeadingUp() ? "Heading Lock" : "North Lock");
         const char* lk = lkS.c_str();
-        const char* ce = "Center on aircraft";
+        const char* ce = "Center On Aircraft";
         const float wl = ImGui::CalcTextSize(lk).x + 12, wc = ImGui::CalcTextSize(ce).x + 12;
         const bool panned = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
         if (bubble(ImVec2(p.x + size - 8 - wl, p.y + 8), nullptr, lk, dialHeadingUp(), false).first) bubbleHit = 2;
@@ -2111,7 +2113,7 @@ void wrapBefore(const char* label, float gap) {
 
 void toggleButton(const char* label, bool& v) {
     // the colour is pushed and popped on the state from before the click: flipping `v` in between left one push unmatched for a
-    // frame, and the buttons after it (Center on aircraft, North Lock) flickered in the wrong colour
+    // frame, and the buttons after it (Center On Aircraft, North Lock) flickered in the wrong colour
     const bool on = v;
     if (on) ImGui::PushStyleColor(ImGuiCol_Button, v4(IM_COL32(43, 69, 102, 255)));
     if (ImGui::SmallButton(label)) v = !v;
@@ -2138,7 +2140,7 @@ void layerButtons(bool lockButton) {
     toggleButton("AIRMET", showAirmets());
     wrapBefore("SIGMET", 4);
     toggleButton("SIGMET", showSigmets());
-    (void)lockButton;   // Center on aircraft and North / Heading Lock are bubbles on the map itself (radarCanvas)
+    (void)lockButton;   // Center On Aircraft and North / Heading Lock are bubbles on the map itself (radarCanvas)
 }
 
 // The range: the mouse wheel over the map, or these buttons (VR, no wheel)
