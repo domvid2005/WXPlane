@@ -60,7 +60,7 @@ jobs:
           objdump -p "$X" | grep NEEDED
           if objdump -p "$X" | grep NEEDED | grep -vE 'libc\.so|libm\.so|ld-linux'; then echo "unexpected shared library dependency"; exit 1; fi
           if objdump -T "$X" | grep -E 'curl_|SSL_|CRYPTO_'; then echo "curl/OpenSSL symbols visible"; exit 1; fi
-      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: ctest --test-dir build -C Release --output-on-failure -j 4
       - uses: actions/upload-artifact@v4
         with:
           name: WXPlane-${{ runner.os }}

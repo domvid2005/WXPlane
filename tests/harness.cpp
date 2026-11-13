@@ -10,6 +10,8 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <map>
+#include <cstdlib>
 
 #include "stubs/XPLMDataAccess.h"
 #include "stubs/XPLMMenus.h"
@@ -89,7 +91,26 @@ static int g_regenCalls = 0;
 XPLMCommandRef XPLMFindCommand(const char* n) { return std::strcmp(n, "sim/operation/regen_weather") == 0 ? (void*)0x77 : nullptr; }
 void XPLMCommandOnce(XPLMCommandRef r) { if (r == (void*)0x77) ++g_regenCalls; }
 void XPLMDebugString(const char* s) { std::printf("  log: %s", s); g_logAll += s; }
-void XPLMGetPrefsPath(char* o) { std::strcpy(o, "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/X-Plane.prf"); }
+// Where the harness keeps its X-Plane preferences and WXPlane.cfg: HARNESS_DIR, or a fresh folder of its own (so scenarios can run
+// side by side, as ctest -j does), and where its recorded data is (tests/data/harness, or WX_HARNESS_DATA)
+static const std::string& harnessDir() {
+    static std::string dir;
+    if (dir.empty()) {
+        if (const char* e = std::getenv("HARNESS_DIR")) dir = e;
+        else { char t[] = "/tmp/wxharness.XXXXXX"; dir = mkdtemp(t) ? t : "/tmp"; }
+    }
+    return dir;
+}
+static const char* hpath(const char* name) {   // a stable C string: the file in the harness folder
+    static std::map<std::string, std::string> m;
+    std::string& v = m[name];
+    if (v.empty()) v = harnessDir() + "/" + name;
+    return v.c_str();
+}
+#ifndef WX_HARNESS_DATA
+#define WX_HARNESS_DATA "tests/data/harness"
+#endif
+void XPLMGetPrefsPath(char* o) { std::strcpy(o, hpath("X-Plane.prf")); }
 const char* XPLMGetDirectorySeparator(void) { return "/"; }
 char* XPLMExtractFileAndPath(char* p) { char* s = std::strrchr(p, '/'); if (s) *s = 0; return p; }
 static std::string g_navId;
@@ -400,7 +421,7 @@ static bool pump(size_t wantCalls, int ms = 3000) {
 
 // HARNESS_RAMP=1: the first load is released evenly over transition_s instead of in one burst.
 static int runRamp() {
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\ntransition_s = 3\nvis_autocal = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     g_loadingFlag = 0;
@@ -427,7 +448,7 @@ static int runRamp() {
 
 // HARNESS_STAGED=1: the first update has no radar; storms follow startup_radar_delay_s later.
 static int runStaged() {
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nmax_age_hours = 40\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 1\nstartup_wait_fps = 1\nstartup_staged = 1\nstartup_radar_delay_s = 1\nvis_autocal = 0\nradar_minutes = 0.1\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
@@ -439,6 +460,12 @@ static int runStaged() {
     CHECK(g_logAll.find("radar: NOAA MRMS") != std::string::npos);   // storms arrive in the second update
     CHECK(g_logAll.find("gap-fill records") != std::string::npos && g_logAll.find(" 0 gap-fill records") == std::string::npos);   // gap fill produced records
     // radar refreshes on its own schedule: only the MRMS grids are downloaded, only changed storm records are sent, with X-Plane's fade
+    {   // the start-up load (immediate by design) is logged as applied before it is handed over: wait until it is all out, so the
+        // radar-only refresh below is judged on its own updates
+        const size_t mark = g_logAll.rfind("radar: NOAA MRMS");
+        for (int i = 0; i < 1500 && g_logAll.find("all weather records handed to X-Plane", mark) == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        CHECK(g_logAll.find("all weather records handed to X-Plane", mark) != std::string::npos);
+    }
     g_urls.clear();
     const int endsBefore = g_end;
     for (int i = 0; i < 1500 && g_logAll.find("(radar only)") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
@@ -462,7 +489,7 @@ static int runStaged() {
 
 // HARNESS_ONESHOT=1: with default settings, the first load is ONE weather update containing every record.
 static int runOneShot() {
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
     const bool realWx = std::getenv("HARNESS_REALWX") != nullptr;   // X-Plane's own real weather left on
     if (realWx) g_xpWxSource = 1;
@@ -491,7 +518,7 @@ static int runOneShot() {
 
 // HARNESS_DEBOUNCE=1: clicking Refresh repeatedly (default 60 s gap) sends ONE download; applied weather fades in (no freeze).
 static int runDebounce() {
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
@@ -512,7 +539,7 @@ static int runDebounce() {
 
 // HARNESS_BUMPS=1: rough-top records scattered over the overcast: billowy, base inside the deck, tops at different heights.
 static int runBumps() {
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\nmax_age_hours = 40\nradar = 0\nfill_gaps = 0\nuse_aloft = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\nregen_weather_on_start = 0\ntop_bumps = 1\nbump_count = 8\nrough_min_coverage = 0.85\n", f); std::fclose(f); }
     g_agl = 0.0f; g_lat = 38.79; g_lon = -97.65;
     char n[256], s[256], d[256];
@@ -673,7 +700,7 @@ static std::string operaTileFor(uint64_t off) {
 
 static int runOpera() {
     // Madrid: no MRMS, the European composite gives the storms (tiles downloaded once per 5-minute slot)
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nmanual_refresh_gap_s = 0\nradar = 1\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\n", f); std::fclose(f); }
     g_operaHead = readFile("tests/data/opera_head.bin");
     CHECK(g_operaHead.size() == 5469);
@@ -716,7 +743,7 @@ static int runOpera() {
 
 static int runOcean() {
     // 2026-11-09 crash report: "[WXPlane] no METARs within search radius" then X-Plane crashed (the open ocean).
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\n", f); std::fclose(f); }
     g_ocean = true;
     g_loadingFlag = 0;
@@ -760,7 +787,7 @@ static int runOcean() {
 }
 
 static int runTurb() {
-    const char* kCfg = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg";
+    const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 30\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 1\nmax_turbulence = 1\ndiag_verbosity = 2\n", f); std::fclose(f); }
     const std::time_t now = std::time(nullptr), t15 = (now - 300) / 900 * 900;   // a file at least 5 minutes old (newer ones are skipped)
     char nm[64]; std::tm g{}; gmtime_r(&t15, &g); std::strftime(nm, sizeof nm, "gtgn.t%H%Mz.3km.grib2", &g);
@@ -891,13 +918,13 @@ int main() {
     if (std::getenv("HARNESS_BUMPS")) { return runBumps(); }
     if (std::getenv("HARNESS_DEBOUNCE")) { return runDebounce(); }
     if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
-    if (std::getenv("HARNESS_STAGED")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
+    if (std::getenv("HARNESS_STAGED")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_TURB")) return runTurb();
     if (std::getenv("HARNESS_OCEAN")) return runOcean();
     if (std::getenv("HARNESS_OPERA")) return runOpera();
-    if (std::getenv("HARNESS_RAMP")) { std::string base = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
-    { FILE* f = std::fopen("/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/WXPlane.cfg", "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
-    const char* kScratch = "/tmp/claude-0/-home-claude/c23185cf-c8b3-5194-9c46-5d7884d08eaf/scratchpad/inf/";
+    if (std::getenv("HARNESS_RAMP")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
+    { FILE* f = std::fopen(hpath("WXPlane.cfg"), "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
+    const char* kScratch = WX_HARNESS_DATA "/";
     g_mrmsRefl = readFile((std::string(kScratch) + "mrms_refl.grib2.gz").c_str());
     g_mrmsTop = readFile((std::string(kScratch) + "mrms_top.grib2.gz").c_str());
     g_mrmsFlag = readFile((std::string(kScratch) + "mrms_flag.grib2.gz").c_str());

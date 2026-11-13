@@ -183,6 +183,7 @@ struct Rec {
     std::string icao;
     double lat = 0, lon = 0, elev = 0;
     bool kept = false;        // an airport that left range, left in place with its surroundings' weather (see applyResult)
+    std::string bumpOf;       // a rough-top record: the key of the deck record it sits on (it follows that record's final layers)
 };
 std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by station
 
@@ -341,6 +342,25 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         for (int k = 0; k < K; ++k) L[k] = out[k];
         isReal[i] = used;
     }
+    // The rough-top records: how much higher than their deck each slot's top is (the rest of the record is the deck's). Smoothing and
+    // the fillers below would treat a bump as a record of its own and change its coverage, base or type away from the deck's (the
+    // rough-top check in the harness: coverage 0.94 under the deck, 0.94-0.95 in its bumps), which X-Plane blends into walls; so the
+    // bumps take no part in them, and at the end each bump becomes a copy of its deck's final layers with only its tops raised again.
+    std::map<std::string, size_t> indexOf;
+    for (size_t i = 0; i < n; ++i) indexOf[todo[i].key] = i;
+    std::vector<std::array<float, 3>> bumpRise(n, std::array<float, 3>{0, 0, 0});
+    std::vector<size_t> bumpParent(n, n);
+    for (size_t i = 0; i < n; ++i) {
+        if (todo[i].rec.bumpOf.empty()) continue;
+        const auto it = indexOf.find(todo[i].rec.bumpOf);
+        if (it == indexOf.end()) continue;
+        bumpParent[i] = it->second;
+        for (int k = 0; k < K; ++k) {
+            const XPLMWeatherInfoClouds_t &b = todo[i].rec.info.cloud_layers[k], &p = todo[it->second].rec.info.cloud_layers[k];
+            if (isReal[i][k] && isReal[it->second][k]) bumpRise[i][(size_t)k] = std::max(0.0f, b.alt_top - p.alt_top);
+        }
+    }
+    auto isBump = [&](size_t i) { return bumpParent[i] < n; };
     // 2b) Smooth cloud edges (2026-11-04: "no sign of a square grid anywhere"). Each record stood for its own square or tile, so where a
     // cloudy one met a clear one the edge of the deck ran along the record grid. Now every layer's coverage, base, top and type is a
     // Gaussian-weighted mean over the records around it (sigma cloud_smooth_nm, each record weighted by its area), with a gentle
@@ -356,10 +376,11 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         for (size_t i = 0; i < n; ++i) {
             const XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
             for (int k = 0; k < K; ++k) { out[i][k] = L[k]; outReal[i][k] = isReal[i][k]; }
-            if (todo[i].rec.airport) continue;
+            if (todo[i].rec.airport || isBump(i)) continue;
             Acc a[3];
             const double sig = sigOf(i), reach = 3.0 * sig;
             for (size_t j = 0; j < n; ++j) {
+                if (isBump(j)) continue;   // a bump is its deck again (see above): it would count the deck twice
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
                 if (d > reach) continue;
                 const double r = std::max(1.0, (double)todo[j].rec.info.radius_nm);
@@ -469,6 +490,26 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             // a filler is (almost) invisible; as stratus it brings none of the up- and downdrafts of a convective cloud (cirrus stays cirrus)
             if (L[k].cloud_type >= 0.5f) L[k].cloud_type = 1.0f;
             L[k].alt_top = std::min(L[k].alt_top, L[k].alt_base + wx::xpMaxThicknessM(L[k].cloud_type));
+        }
+    }
+    // the rough-top records: their deck's final layers, each top raised by its own rise again (within the same limits as when it was made)
+    for (size_t i = 0; i < n; ++i) {
+        if (!isBump(i)) continue;
+        const XPLMWeatherInfo_t& P = todo[bumpParent[i]].rec.info;
+        XPLMWeatherInfo_t& B = todo[i].rec.info;
+        for (int k = 0; k < K; ++k) {
+            B.cloud_layers[k] = P.cloud_layers[k];
+            XPLMWeatherInfoClouds_t& L = B.cloud_layers[k];
+            const float want = bumpRise[i][(size_t)k];
+            if (want <= 0.0f || L.coverage <= 0.0f) continue;
+            float ceilM = 1e9f;
+            for (int j = 0; j < K; ++j)
+                if (j != k && P.cloud_layers[j].coverage > 0 && P.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, P.cloud_layers[j].alt_base);
+            const float thick = L.alt_top - L.alt_base;
+            const float rise = std::min({want, 0.2f * thick, std::max(0.0f, ceilM - L.alt_top - 120.0f), std::max(0.0f, wx::xpMaxThicknessM(L.cloud_type) - thick), std::max(0.0f, wx::kXpTopM - L.alt_top)});
+            if (rise < 1.0f) continue;
+            L.alt_top += rise;
+            B.max_altitude_msl_ft = std::max(B.max_altitude_msl_ft, L.alt_top / 0.3048f);
         }
     }
     // the empty slots go out as before (0 m, no coverage), so X-Plane drops them
@@ -1600,7 +1641,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // Rough tops (experimental, off by default): small records over a thick overcast whose layers equal the parent's except for a slightly
     // higher top, so the top is a little uneven. Used for the station decks and for the overcast that continues over the gap-fill tiles between stations.
     auto addBumps = [&](const wx::XpWx& x, const XPLMWeatherInfo_t& info, double cLat, double cLon, double radNm, double elev,
-                        const std::string& id, int count, double fracMin, double fracMax) {
+                        const std::string& id, const std::string& parentKey, int count, double fracMin, double fracMax) {
         if (!g_cfg.topBumps || bumpCount >= g_cfg.bumpMax) return;
         auto ovc = [&](int i) { return x.clouds[i].coverage >= (float)g_cfg.roughMinCoverage && x.clouds[i].type > 0.5f && !(i == 0 && x.fogLayerApplied); };
         bool any = false;
@@ -1623,6 +1664,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             e.elev = elev;
             e.info = info;
             e.info.radius_nm = (float)bumpR;
+            e.bumpOf = parentKey;
             bool changed = false;
             for (int i = 0; i < 3; ++i) {
                 auto& L = e.info.cloud_layers[i];
@@ -1708,7 +1750,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         r.info = info;
         r.info.age = 0.0f;
         seen[s.icao] = true;
-        addBumps(x, info, s.lat, s.lon, info.radius_nm, s.elevM, s.icao, g_cfg.bumpCount, 0.15, 0.85);
+        addBumps(x, info, s.lat, s.lon, info.radius_nm, s.elevM, s.icao, s.icao, g_cfg.bumpCount, 0.15, 0.85);
         auto it = g_recs.find(s.icao);
         (void)it;   // compared with what the sim already has after the cloud-slot pass (see matchEmptyLayers)
         r.info.age = info.age; // keep the real age for the call itself
@@ -1789,8 +1831,8 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     r.lat = latc; r.lon = lonc; r.elev = nearest->elevM;
                     r.info = info;
                     r.info.age = 0.0f;
-                    addBumps(x, info, latc, lonc, cellNm * 0.5, nearest->elevM, std::string("f") + tag + std::to_string(j) + "_" + std::to_string(i), g_cfg.bumpFillCount, 0.0, 0.9);
                     const std::string key = std::string("fill") + tag + ":" + std::to_string(j) + ":" + std::to_string(i);
+                    addBumps(x, info, latc, lonc, cellNm * 0.5, nearest->elevM, std::string("f") + tag + std::to_string(j) + "_" + std::to_string(i), key, g_cfg.bumpFillCount, 0.0, 0.9);
                     seen[key] = true;
                     ++fillCount;
                     auto it = g_recs.find(key);
