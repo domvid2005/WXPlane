@@ -220,6 +220,7 @@ int main(int argc, char** argv) {
     d.extraServices = {{"NOAA Aviation Weather Center", "pilot reports", SvcState::Degraded, "5 report(s), downloaded 02:40Z; failed: PIREPs: HTTP 502;", now - 600},
                        {"NOAA GTGN", "turbulence (US)", SvcState::Ok, "analysis 02:30Z", now - 1200},
                        {"ECMWF Open Data", "turbulence (outside the US)", SvcState::NotHere, "GTGN covers this area", 0}};
+    d.haveG = true; d.gNormal = 1.04f;
     d.turbOn = true; d.turbEdr = 0.055; d.turbSource = "GTGN"; d.turbData = "GTGN 02:30Z";
     const double alts[] = {1000, 2000, 3000, 4500, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000};
     const double edrs[] = {0.06, 0.07, 0.05, 0.04, 0.03, 0.05, 0.08, 0.10, 0.14, 0.19, 0.12, 0.07, 0.04};

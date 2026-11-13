@@ -234,6 +234,11 @@ void fillUi(UiData& d) {
                        {"NOAA GTGN", "turbulence (US)", SvcState::Ok, "analysis 02:30Z", kStart - 1200},
                        {"ECMWF Open Data", "turbulence (outside the US)", SvcState::NotHere, "GTGN covers this area", 0}};
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence;
+    {   // the felt load factor: level flight, bumps in proportion to the turbulence (like the plugin's g_nrml)
+        const double e = edrAt(g_lat, g_lon, g_alt) * g_cfg.maxTurbulence;
+        d.gNormal = (float)(1.0 + (g_alt > 50 ? e * (0.9 * std::sin(g_t * 7.3) + 0.6 * std::sin(g_t * 13.1 + 1.0) + 0.4 * std::sin(g_t * 2.1)) : 0.0));
+        d.haveG = true;
+    }
     d.turbEdr = edrAt(g_lat, g_lon, g_alt) * g_cfg.maxTurbulence; d.turbSource = "GTGN"; d.turbData = "GTGN 02:30Z";
     d.turbProfile.clear();
     const double alts[] = {1000, 2000, 3000, 4500, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000, 45000};

@@ -237,16 +237,16 @@ void windRefSwitch(const char* id, float rightGap = 0.0f, bool withLock = false)
         }
         x += gapG - 2;
     };
-    if (withLock) {
-        const bool on = dialHeadingUp();
-        ImGui::SetCursorScreenPos(ImVec2(x, p0.y + 2));
-        ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
-        ImGui::PushStyleColor(ImGuiCol_Text, v4(on ? cAccent : cSoft));
-        const float lwb = std::max(bw("Heading Lock"), bw("North Lock"));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(st.FramePadding.x, 0.0f));   // the height of the °T / °M buttons
-        if (ImGui::Button(lockTxt, ImVec2(lwb, ImGui::GetTextLineHeight()))) dialHeadingUp() = !dialHeadingUp();
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(2);
+    if (withLock) {   // drawn like the wind dial's mode box: dark, blue text and outline in Heading Lock (flipped while hovered)
+        const float lwb = std::max(bw("Heading Lock"), bw("North Lock")), lh2 = ImGui::GetTextLineHeight();
+        const ImVec2 b0(x, p0.y + 2), b1(x + lwb, p0.y + 2 + lh2);
+        ImGui::SetCursorScreenPos(b0);
+        if (ImGui::InvisibleButton("lock", ImVec2(lwb, lh2))) dialHeadingUp() = !dialHeadingUp();
+        const bool blue = dialHeadingUp() != ImGui::IsItemHovered();
+        dl->AddRectFilled(b0, b1, cInset, 4.0f);
+        dl->AddRect(b0, b1, blue ? cLockBlue : IM_COL32(58, 62, 70, 255), 4.0f);
+        const ImVec2 ts = ImGui::CalcTextSize(lockTxt);
+        dl->AddText(ImVec2(b0.x + (lwb - ts.x) * 0.5f, b0.y + (lh2 - ts.y) * 0.5f), blue ? cLockBlue : cSoft, lockTxt);
         x += lwb + gapG;
     }
     group("WIND", lw, "°T", "°M", windMagnetic(), 1);
@@ -2088,7 +2088,7 @@ void radarPanel(const UiData& d, const UiFonts& f, bool big) {
     mutedWrapped(radarSubtitle(d));
     const float sliderW = big ? 50.0f : 0.0f, gap = big ? 10.0f : 0.0f;
     const float avail = ImGui::GetContentRegionAvail().x - sliderW - gap;
-    const float hLeft = ImGui::GetContentRegionAvail().y - (big ? 40 : 110);
+    const float hLeft = ImGui::GetContentRegionAvail().y - (big ? 40 : 84);   // (home: the legend and the three storm figures under it)
     const float size = std::max(120.0f, std::min(avail, hLeft));
     if (size < avail) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - size) * 0.5f);
     radarCanvas(d, f, size, rangeNmOf(radarRange()), big);
@@ -2123,9 +2123,14 @@ void homePireps(const UiData& d, const UiFonts& f) {
     size_t shown = 0;   // the ones the list shows (a report that says nothing is not listed)
     if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) ++shown;
     if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", shown).c_str()); }
-    const float lh = ImGui::GetContentRegionAvail().y - 2;
+    // whole rows only: the list is as tall as its rows (all of them when they fit; otherwise as many whole rows as fit, and it
+    // scrolls), so no half-cut row hangs at the bottom of the panel
+    const float rowH = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
+    const float avail = ImGui::GetContentRegionAvail().y - 2;
+    const int fitRows = std::max(1, (int)std::floor((avail - rowH) / rowH));   // (the header row first)
+    const float lh = rowH * (1 + std::min<int>(fitRows, (int)shown)) + 2;
     if (!d.reports || shown == 0) mutedWrapped("No pilot reports in the last 90 minutes.");
-    else if (lh > 40) { static std::vector<std::string> open; pirepTable(d, f, "homepireps", ImVec2(0, lh), open, 1); }
+    else if (avail > 40) { static std::vector<std::string> open; pirepTable(d, f, "homepireps", ImVec2(0, lh), open, 1); }
 }
 
 
@@ -2687,7 +2692,7 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     ImGui::SameLine(0, gap);
     // column 2: the map with its storm figures, and the pilot reports in a panel of their own under it
     ImGui::BeginGroup();
-    const float radarH = std::floor(std::min(bodyH * 0.66f, colW + 128.0f)), pirepH = bodyH - radarH - gap;
+    const float radarH = std::floor(std::min(bodyH * 0.62f, colW + 102.0f)), pirepH = bodyH - radarH - gap;
     if (panelBegin("radar", ImVec2(colW, radarH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) radarPanel(d, f, false);
     panelEnd();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + gap);   // exactly `gap` between stacked panels, so every column ends level
@@ -2878,7 +2883,7 @@ void tabRadar(const UiData& d, const UiFonts& f) {
         sectionTitle(f, "Pilot reports");
         size_t shown = 0;
         if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) ++shown;
-        if (d.reports) { ImGui::SameLine(); muted(fmt("%zu · click one to see it on the map", shown).c_str()); }
+        if (d.reports) muted(shown == 1 ? "1 Pirep Reported" : fmt("%zu Pireps Reported", shown).c_str());   // under the title, like the cells
         if (!d.reports || shown == 0) mutedWrapped("No pilot reports in the last 90 minutes.");
         else { static std::vector<std::string> open; pirepTable(d, f, "mappireps", ImVec2(0, ImGui::GetContentRegionAvail().y - 2), open, 2); }
     }
@@ -2907,6 +2912,83 @@ void tabAloft(const UiData& d, const UiFonts& f) {
         aloftTable(d, f, lv, false);
     }
     panelEnd();
+}
+
+// The Turbulence tab's live panel: the EDR WXPlane is giving X-Plane at the aircraft now (after Max turbulence), as a bar over the
+// intensity bands, and a g meter of what the aircraft feels (X-Plane's normal load factor): the value, its range over the last
+// minute, and a 30 s trace around 1 g.
+void turbLive(const UiData& d, const UiFonts& f) {
+    sectionTitle(f, "Live at the aircraft");
+    muted("What the turbulence is doing to the aircraft now");
+    ImGui::Spacing();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float W = ImGui::GetContentRegionAvail().x;
+    // 1) the EDR being pushed
+    const double maxT = d.cfg ? d.cfg->maxTurbulence : 1.0;
+    const double edr = d.turbOn && d.turbEdr >= 0 ? d.turbEdr * maxT : -1.0;
+    {
+        ImGui::PushFont(f.bold); ImGui::TextUnformatted("EDR applied"); ImGui::PopFont();
+        ImGui::SameLine();
+        if (edr < 0) muted(d.turbOn ? "no turbulence data yet" : "realistic turbulence is off");
+        else {
+            const ImU32 col = edr < 0.08 ? cAccentDim : (edr < 0.15 ? IM_COL32(80, 160, 110, 255) : (edr < 0.35 ? cWarn : cDown));
+            ImGui::PushStyleColor(ImGuiCol_Text, v4(col)); ImGui::Text("%.2f  %s", edr, turbWord(edr).c_str()); ImGui::PopStyleColor();
+            ImGui::SameLine(); muted(fmt("(%s, x%.2f Max turbulence)", d.turbSource.c_str(), maxT).c_str());
+        }
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float h = 16, full = 0.6f;
+        struct Band { float a, b; ImU32 c; const char* t; };
+        const Band bands[] = {{0, 0.08f, IM_COL32(40, 52, 70, 255), "None"}, {0.08f, 0.15f, IM_COL32(40, 70, 56, 255), "Light"},
+                              {0.15f, 0.35f, IM_COL32(84, 70, 34, 255), "Moderate"}, {0.35f, 0.6f, IM_COL32(88, 40, 40, 255), "Severe"}};
+        for (const Band& b : bands) {
+            const float x0 = p.x + W * b.a / full, x1 = p.x + W * b.b / full;
+            dl->AddRectFilled(ImVec2(x0, p.y), ImVec2(x1, p.y + h), b.c);
+            dl->AddText(f.body, ImGui::GetFontSize() * 0.75f, ImVec2(x0 + 4, p.y + h + 3), cMuted, b.t);
+        }
+        if (edr >= 0) {
+            const float x = p.x + W * (float)std::min(1.0, edr / full);
+            dl->AddRectFilled(ImVec2(p.x, p.y + 4), ImVec2(std::max(p.x + 2, x), p.y + h - 4), IM_COL32(236, 239, 244, 230), 2.0f);
+            dl->AddLine(ImVec2(x, p.y - 3), ImVec2(x, p.y + h + 3), IM_COL32(255, 255, 255, 255), 2.0f);
+        }
+        ImGui::Dummy(ImVec2(W, h + ImGui::GetFontSize() * 0.75f + 8));
+    }
+    ImGui::Spacing(); ImGui::Spacing();
+    // 2) the g meter
+    struct GS { double t; float g; };
+    static std::vector<GS> hist;
+    const double now = ImGui::GetTime();
+    if (d.haveG && (hist.empty() || now - hist.back().t > 1.0 / 30.0)) hist.push_back({now, d.gNormal});
+    while (!hist.empty() && now - hist.front().t > 60.0) hist.erase(hist.begin());
+    float gMin = 1e9f, gMax = -1e9f;
+    for (const auto& q : hist) { gMin = std::min(gMin, q.g); gMax = std::max(gMax, q.g); }
+    ImGui::PushFont(f.bold); ImGui::TextUnformatted("Load factor"); ImGui::PopFont();
+    ImGui::SameLine();
+    if (!d.haveG) { muted("not available"); return; }
+    const float dev = std::fabs(d.gNormal - 1.0f);
+    const ImU32 gc = dev < 0.15f ? IM_COL32(236, 239, 244, 255) : (dev < 0.35f ? cWarn : cDown);
+    ImGui::PushStyleColor(ImGuiCol_Text, v4(gc)); ImGui::Text("%.2f g", d.gNormal); ImGui::PopStyleColor();
+    ImGui::SameLine(); muted(fmt("last minute %.2f to %.2f g", gMin, gMax).c_str());
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float gh = std::max(80.0f, ImGui::GetContentRegionAvail().y - 26), gw = W;
+    dl->AddRectFilled(p, ImVec2(p.x + gw, p.y + gh), cInset, 4.0f);
+    // scale: 1 g in the middle, +-1 g at the edges (fixed, so a bump looks as big as it is)
+    auto yOf = [&](float g) { return p.y + gh * 0.5f - (g - 1.0f) * gh * 0.5f; };
+    for (float g : {0.0f, 0.5f, 1.0f, 1.5f, 2.0f}) {
+        const float y = yOf(g);
+        dl->AddLine(ImVec2(p.x, y), ImVec2(p.x + gw, y), g == 1.0f ? IM_COL32(90, 96, 108, 255) : IM_COL32(44, 47, 54, 255), 1.0f);
+        dl->AddText(f.body, ImGui::GetFontSize() * 0.72f, ImVec2(p.x + 4, y - ImGui::GetFontSize() * 0.75f), cMuted, fmt("%.1f g", g).c_str());
+    }
+    // the last 30 s, newest on the right
+    std::vector<ImVec2> pts;
+    for (const auto& q : hist) {
+        const double age = now - q.t;
+        if (age > 30.0) continue;
+        pts.push_back(ImVec2(p.x + gw * (float)(1.0 - age / 30.0), std::max(p.y + 1, std::min(p.y + gh - 1, yOf(q.g)))));
+    }
+    if (pts.size() >= 2) dl->AddPolyline(pts.data(), (int)pts.size(), cAccent, ImDrawFlags_None, 1.8f);
+    if (!pts.empty()) dl->AddCircleFilled(pts.back(), 3.5f, gc);
+    ImGui::Dummy(ImVec2(gw, gh));
+    muted("30 s · 1 g is level flight; X-Plane's load factor at the aircraft");
 }
 
 // Another add-on controls the turbulence (ActiveSky XP, xProTurb ...): a red caution over the Turbulence tab, whose controls are
@@ -2969,16 +3051,7 @@ void tabTurbulence(const UiData& d, const UiFonts& f, UiActions& act) {
     panelEnd();
     ImGui::EndGroup();
     ImGui::SameLine(0, 12);
-    if (panelBegin("treports", ImVec2(0, lowH))) {
-        sectionTitle(f, "Pilot reports nearby");
-        if (!d.reports || std::none_of(d.reports->pireps.begin(), d.reports->pireps.end(), [](const hz::Pirep& q) { return pirepListed(q); })) mutedWrapped("No pilot reports in the last 90 minutes.");
-        else {
-            // every report (sortable, nearest first); a click on a row opens (and closes) its details below it
-            static std::vector<std::string> open;
-            pirepTable(d, f, "turbpireps", ImVec2(0, d.wsOn && !d.wsStrongest.empty() ? ImGui::GetContentRegionAvail().y - 40.0f : 0.0f), open);
-        }
-        if (d.wsOn && !d.wsStrongest.empty()) { ImGui::Spacing(); mutedWrapped("Windshear: strongest source " + d.wsStrongest); }
-    }
+    if (panelBegin("tlive", ImVec2(0, lowH), ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) turbLive(d, f);
     panelEnd();
 }
 

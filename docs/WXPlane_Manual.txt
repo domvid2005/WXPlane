@@ -208,6 +208,10 @@ TURBULENCE
   * Every nearby pilot report. Click one to open its details below it, and
     click again to close it.
   * Windshear near you.
+  * Live at the aircraft: the EDR WXPlane is giving X-Plane right now (after
+    Max turbulence) on a bar over the intensity bands, and a g meter of the
+    load factor the aircraft feels (the last 30 s, and its range over the
+    last minute). Pilot reports are on the Overview and the Map tab.
   * Windshear odds (0-1.0): how often gust fronts and microbursts form.
     1.0 is the realistic rate; 0 means none at all (like Max turbulence 0).
   * Another turbulence add-on running (ActiveSky XP, xProTurb,

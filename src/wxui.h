@@ -39,6 +39,8 @@ struct UiData {
     bool havePos = false;
     double lat = 0, lon = 0, altFt = 0, trackDeg = 0, gsKt = 0;
     double headingDeg = 0;              // true heading (the wind dial turns with it, and the components use it)
+    float gNormal = 1.0f;               // the load factor (g) the aircraft feels now, for the Turbulence tab's live g meter
+    bool haveG = false;
     // magnetic variation, degrees east positive (magnetic = true - variation): at a point (nullptr: use magVarEast everywhere)
     double (*magVarAt)(double lat, double lon) = nullptr;
     double magVarEast = 0;
