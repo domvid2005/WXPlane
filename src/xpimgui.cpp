@@ -40,6 +40,9 @@ const GLenum GL_TEXTURE_2D = 0x0DE1, GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401
              GL_VIEWPORT = 0x0BA2, GL_MODELVIEW_MATRIX = 0x0BA6, GL_PROJECTION_MATRIX = 0x0BA7, GL_CULL_FACE = 0x0B44, GL_SCISSOR_BOX = 0x0C10,
              GL_TEXTURE_WRAP_S = 0x2802, GL_TEXTURE_WRAP_T = 0x2803, GL_CLAMP_TO_EDGE = 0x812F;
 const unsigned int GL_CLIENT_VERTEX_ARRAY_BIT = 0x00000002;
+const GLenum GL_BLEND = 0x0BE2, GL_DEPTH_TEST = 0x0B71, GL_ALPHA_TEST = 0x0BC0, GL_FOG = 0x0B60, GL_LIGHTING = 0x0B50,
+             GL_BLEND_SRC = 0x0BE1, GL_BLEND_DST = 0x0BE0, GL_MATRIX_MODE = 0x0BA0, GL_TEXTURE_BINDING_2D = 0x8069,
+             GL_DEPTH_WRITEMASK = 0x0B72, GL_CURRENT_COLOR = 0x0B00;
 
 struct GL {
     void(WXGL_API* Enable)(GLenum) = nullptr;
@@ -67,6 +70,7 @@ struct GL {
     void(WXGL_API* PushClientAttrib)(unsigned int) = nullptr;
     void(WXGL_API* PopClientAttrib)(void) = nullptr;
     void(WXGL_API* Color4f)(float, float, float, float) = nullptr;
+    void(WXGL_API* DepthMask)(GLboolean) = nullptr;
     int state = 0;
 } gl;
 
@@ -101,6 +105,7 @@ bool loadGl() {
         ok &= get(gl.DrawElements, "glDrawElements"); ok &= get(gl.MatrixMode, "glMatrixMode"); ok &= get(gl.PushMatrix, "glPushMatrix");
         ok &= get(gl.PopMatrix, "glPopMatrix"); ok &= get(gl.Translatef, "glTranslatef"); ok &= get(gl.Scalef, "glScalef");
         ok &= get(gl.PushClientAttrib, "glPushClientAttrib"); ok &= get(gl.PopClientAttrib, "glPopClientAttrib"); ok &= get(gl.Color4f, "glColor4f");
+        ok &= get(gl.DepthMask, "glDepthMask");
         gl.state = ok ? 1 : -1;
         if (!ok) XPLMDebugString("[WXPlane] weather window: OpenGL functions not found, the window cannot be drawn\n");
     }
@@ -161,6 +166,8 @@ void buildFonts(float scale) {
     gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (GLint)GL_LINEAR);
     gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (GLint)GL_CLAMP_TO_EDGE);
     gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (GLint)GL_CLAMP_TO_EDGE);
+    GLint oldRow = 0, oldAlign = 4, oldTex = 0;
+    gl.GetIntegerv(GL_UNPACK_ROW_LENGTH, &oldRow); gl.GetIntegerv(GL_UNPACK_ALIGNMENT, &oldAlign); gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &oldTex);
     gl.PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
     gl.TexImage2D(GL_TEXTURE_2D, 0, (GLint)GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
@@ -186,6 +193,8 @@ void buildFonts(float scale) {
             g_logoAspect = (float)lw / (float)lh;
         }
     }
+    gl.PixelStorei(GL_UNPACK_ROW_LENGTH, oldRow); gl.PixelStorei(GL_UNPACK_ALIGNMENT, oldAlign);   // as X-Plane had them
+    XPLMBindTexture2d(oldTex, 0);
     g_fonts.logo = g_logoTex ? (void*)(intptr_t)g_logoTex : nullptr;
     g_fonts.logoAspect = g_logoAspect;
     g_fontScale = scale;
@@ -194,7 +203,19 @@ void buildFonts(float scale) {
 
 void renderDrawData(ImDrawData* dd, int left, int top) {
     const Xform xf = readXform();
-    XPLMSetGraphicsState(0, 1, 0, 0, 1, 0, 0);
+    // Every bit of OpenGL state the window's drawing changes is read first and put back exactly afterwards (blending, depth,
+    // fog/lighting/alpha test, texturing, blend function, matrix mode, colour, bound texture). The drawing used to leave
+    // XPLMSetGraphicsState's state behind (blending on, depth test and writes off), and plugins drawing after it (ToLiss Photon's
+    // cockpit lighting, for one) could draw differently: the likely reason the cockpit's exposure changed while it was open (2026-11-12).
+    // XPLMSetGraphicsState is not used: it caches, and putting the state back behind its back would leave its cache wrong.
+    struct Saved { GLboolean blend, depth, alpha, fog, light, tex2d; GLint src, dst, mode, tex, depthMask; float col[4]; } sv{};
+    sv.blend = gl.IsEnabled(GL_BLEND); sv.depth = gl.IsEnabled(GL_DEPTH_TEST); sv.alpha = gl.IsEnabled(GL_ALPHA_TEST);
+    sv.fog = gl.IsEnabled(GL_FOG); sv.light = gl.IsEnabled(GL_LIGHTING); sv.tex2d = gl.IsEnabled(GL_TEXTURE_2D);
+    gl.GetIntegerv(GL_BLEND_SRC, &sv.src); gl.GetIntegerv(GL_BLEND_DST, &sv.dst); gl.GetIntegerv(GL_MATRIX_MODE, &sv.mode);
+    gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &sv.tex); gl.GetIntegerv(GL_DEPTH_WRITEMASK, &sv.depthMask); gl.GetFloatv(GL_CURRENT_COLOR, sv.col);
+    auto setOn = [](GLenum c, bool on) { if (on) gl.Enable(c); else gl.Disable(c); };
+    setOn(GL_BLEND, true); setOn(GL_DEPTH_TEST, false); setOn(GL_ALPHA_TEST, false); setOn(GL_FOG, false); setOn(GL_LIGHTING, false); setOn(GL_TEXTURE_2D, true);
+    gl.DepthMask(0);
     gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     const bool cull = gl.IsEnabled(GL_CULL_FACE) != 0, sc = gl.IsEnabled(GL_SCISSOR_TEST) != 0;
     GLint oldBox[4] = {0, 0, 0, 0};
@@ -242,10 +263,16 @@ void renderDrawData(ImDrawData* dd, int left, int top) {
     }
     gl.PopMatrix();
     gl.PopClientAttrib();
-    gl.Color4f(1, 1, 1, 1);   // leave X-Plane's drawing as we found it (white, no texture of ours bound)
-    XPLMBindTexture2d(0, 0);
+    // and everything back as it was
     if (sc) gl.Scissor(oldBox[0], oldBox[1], oldBox[2], oldBox[3]); else gl.Disable(GL_SCISSOR_TEST);
     if (cull) gl.Enable(GL_CULL_FACE);
+    XPLMBindTexture2d(sv.tex, 0);
+    gl.Color4f(sv.col[0], sv.col[1], sv.col[2], sv.col[3]);
+    gl.BlendFunc((GLenum)sv.src, (GLenum)sv.dst);
+    gl.DepthMask((GLboolean)(sv.depthMask != 0));
+    gl.MatrixMode((GLenum)sv.mode);
+    setOn(GL_BLEND, sv.blend != 0); setOn(GL_DEPTH_TEST, sv.depth != 0); setOn(GL_ALPHA_TEST, sv.alpha != 0);
+    setOn(GL_FOG, sv.fog != 0); setOn(GL_LIGHTING, sv.light != 0); setOn(GL_TEXTURE_2D, sv.tex2d != 0);
 }
 
 // ---- XPLM callbacks --------------------------------------------------------------------------------------------------------------
