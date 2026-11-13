@@ -600,13 +600,11 @@ std::string utcHM(std::time_t t) {
 // it (the window says so and locks its turbulence controls). Checked when enabled and every 15 s: the name of the first such
 // enabled plugin, "" when none.
 std::string g_turbConflict;
-std::string g_turbNote;   // an aircraft's own plugin that may add turbulence effects: shown, nothing is turned off
 // Plugins that live in an aircraft's folder (Aircraft/...) never count as a conflict (2026-11-12: the X-Crafts ERJ's EICAS plugin
 // must not turn WXPlane's turbulence off); the known ones that add their own turbulence effects get a note on the Turbulence tab.
-std::string findTurbConflict(std::string* note) {
+std::string findTurbConflict() {
     const XPLMPluginID me = XPLMGetMyID();
     const int n = XPLMCountPlugins();
-    if (note) note->clear();
     for (int i = 0; i < n; ++i) {
         const XPLMPluginID id = XPLMGetNthPlugin(i);
         if (id == me || id < 0 || !XPLMIsPluginEnabled(id)) continue;
@@ -639,10 +637,7 @@ std::string findTurbConflict(std::string* note) {
             endPart();
         }
         auto has = [&](const char* k) { for (const auto& w : words) if (w.find(k) != std::string::npos) return true; return false; };
-        if (aircraft) {
-            if (note && note->empty() && has("erjeicas")) *note = name[0] ? std::string(name) : std::string("ERJ EICAS");
-            continue;
-        }
+        if (aircraft) continue;   // an aircraft's own plugin (the X-Crafts ERJ's EICAS, for one) is never a turbulence add-on: not mentioned
         static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic"};
         for (const char* k : kTurbAddons)
             if (has(k)) return name[0] ? std::string(name) : std::string(sig);
@@ -654,12 +649,7 @@ void turbConflictCheck(bool force) {
     const auto now = Clock::now();
     if (!force && now < next) return;
     next = now + std::chrono::seconds(15);
-    std::string note;
-    const std::string c = findTurbConflict(&note);
-    if (note != g_turbNote) {
-        g_turbNote = note;
-        if (!note.empty()) logf("turbulence: the aircraft's plugin %s may add turbulence effects of its own; WXPlane's turbulence stays on", note.c_str());
-    }
+    const std::string c = findTurbConflict();
     if (c == g_turbConflict) return;
     g_turbConflict = c;
     if (!c.empty()) logf("turbulence: %s is running and does the turbulence - WXPlane leaves X-Plane's turbulence to it", c.c_str());
@@ -1718,7 +1708,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         }
     };
     for (const auto& s : res.stations) {
-        wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog);
+        wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog, &res.stations);
         valFixes += wx::validateXp(x, false, &valNote);
         baseWx[s.icao] = x;
         // A station inside the storm area takes the radar's rain (if that is more than it reports). The station circle (about 11 nm) is
@@ -3149,7 +3139,6 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.xpRealWeather = g_xpRealWx;
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence && g_turbConflict.empty();
     d.turbConflict = g_turbConflict;
-    d.turbNote = g_turbNote;
     d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
     d.turbGridAltFt = g_uiTs.gridAltFt; d.turbGridSeq = g_uiTs.gridSeq;
     d.magVarAt = magVarEastAt;

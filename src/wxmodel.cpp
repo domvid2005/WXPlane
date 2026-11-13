@@ -10,13 +10,49 @@
 namespace wx {
 namespace {
 
-float coverageFor(int cover) {
+// How much of the sky each METAR cover is drawn with in X-Plane: a range per cover (FEW 10-25 %, SCT 35-50 %, BKN 70-85 %,
+// OVC 97-100 %; SKC/CLR has no layer at all). coverageFor gives the middle; buildXp places each station's layer in its range.
+void coverRange(int cover, float& lo, float& hi) {
     switch (cover) {
-        case CloudGroup::FEW: return 0.20f;
-        case CloudGroup::SCT: return 0.40f;
-        case CloudGroup::BKN: return 0.775f;   // (a station's own broken layers vary 75-80 %: see buildXp)
-        default: return 0.97f;   // OVC: 95-100 % (0.94 read as broken in X-Plane: KJFK OVC027 2026-11-13; still a little texture for the sun on the top)
+        case CloudGroup::FEW: lo = 0.10f; hi = 0.25f; break;
+        case CloudGroup::SCT: lo = 0.35f; hi = 0.50f; break;
+        case CloudGroup::BKN: lo = 0.70f; hi = 0.85f; break;
+        default: lo = 0.97f; hi = 1.00f; break;   // OVC (and VV)
     }
+}
+float coverageFor(int cover) { float lo, hi; coverRange(cover, lo, hi); return 0.5f * (lo + hi); }
+
+// Where in its range a station's layer sits (0 the light end, 1 the heavy end): a value of its own (steady between updates, from the
+// station and the layer's height), leaning to the heavy end when the stations around have more cloud at that height (a heavier
+// cover, or touching an overcast) and to the light end when they have less or none (clear sky), the nearer the more.
+float coverPlace(const Station& st, const CloudGroup& g, const std::vector<Station>* nb) {
+    uint32_t h = 2166136261u;
+    for (char ch : st.icao) { h ^= (uint8_t)ch; h *= 16777619u; }
+    h ^= (uint32_t)g.baseFtAgl * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+    const double own = (double)(h % 1001u) / 1000.0;   // 0..1
+    double lean = 0, wsum = 0;
+    if (nb) {
+        const double baseM = st.elevM + g.baseFtAgl * kFtToM;
+        const int cat = g.cover + 1;   // FEW 1 .. OVC 4
+        for (const Station& o : *nb) {
+            if (o.icao == st.icao) continue;
+            if (o.report.clouds.empty() && !o.report.clearSky && !o.report.skyClearAll) continue;   // no sky in its report: says nothing
+            const double d = distNm(st.lat, st.lon, o.lat, o.lon);
+            if (d > 40.0) continue;
+            int ocat = 0;   // its cover at this height (within 1500 ft): none is a clearer sky there
+            for (const auto& og : o.report.clouds) {
+                if (og.cover == CloudGroup::VV) continue;
+                if (std::fabs(o.elevM + og.baseFtAgl * kFtToM - baseM) <= 1500.0 * kFtToM) ocat = std::max(ocat, og.cover + 1);
+            }
+            // an automated station's "clear" only goes up to 12,000 ft: it says nothing about a layer above that
+            if (ocat == 0 && o.report.clouds.empty() && !o.report.skyClearAll && g.baseFtAgl > 12000) continue;
+            const double w = 1.0 / (1.0 + (d / 12.0) * (d / 12.0));
+            lean += w * std::max(-1.0, std::min(1.0, (double)(ocat - cat)));
+            wsum += w;
+        }
+    }
+    const double l = wsum > 0 ? lean / wsum : 0.0;   // -1 (all lighter or clear) .. +1 (all heavier)
+    return (float)std::max(0.0, std::min(1.0, 0.5 + 0.45 * l + (own - 0.5) * 0.5));
 }
 
 } // namespace
@@ -184,7 +220,8 @@ void buildAloftProfile(XpWx& x, const std::vector<AloftSample>& smp, double elev
     x.aloft = true;
 }
 
-XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft, bool fogSlot) {
+XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft, bool fogSlot,
+             const std::vector<Station>* neighbours) {
     const Report& r = st.report;
     XpWx x;
     x.ageS = (float)reportAgeSeconds(r, now);
@@ -297,12 +334,9 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     std::sort(cl.begin(), cl.end(), [](const CloudGroup& a, const CloudGroup& b) { return a.baseFtAgl < b.baseFtAgl; });
     for (const auto& g : cl) {
         XpCloud c;
-        c.coverage = coverageFor(g.cover);
-        if (g.cover == CloudGroup::BKN) {   // broken (5-7/8): 75-80 %, varying from station to station and layer to layer (steady between updates)
-            uint32_t h = 2166136261u;
-            for (char ch : st.icao) { h ^= (uint8_t)ch; h *= 16777619u; }
-            h ^= (uint32_t)g.baseFtAgl * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
-            c.coverage = 0.75f + 0.05f * (float)(h % 1001u) / 1000.0f;
+        {   // in its cover's range, by the station's own value and the sky around it (coverPlace)
+            float lo, hi; coverRange(g.cover, lo, hi);
+            c.coverage = lo + (hi - lo) * coverPlace(st, g, neighbours);
         }
         c.baseM = (float)(st.elevM + g.baseFtAgl * kFtToM);
         double thick;

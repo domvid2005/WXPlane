@@ -890,9 +890,11 @@ static int runTurb() {
     g_otherPlugin.clear();
     CHECK(pumpUntil("no other turbulence add-on running any more", 30));
     { const int w1 = g_turbWrites; for (int i = 0; i < 400 && g_turbWrites == w1; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); } CHECK(g_turbWrites > w1); }   // writing again
-    std::printf("[turb] 2c) an aircraft's own plugin (the X-Crafts ERJ's EICAS): a note, WXPlane's turbulence stays on\n");
+    std::printf("[turb] 2c) an aircraft's own plugin (the X-Crafts ERJ's EICAS): not mentioned, WXPlane's turbulence stays on\n");
+    g_logAll.clear();
     g_otherPlugin = "ERJ_EICAS";
-    CHECK(pumpUntil("may add turbulence effects of its own; WXPlane's turbulence stays on", 30));
+    for (int i = 0; i < 400; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+    CHECK(g_logAll.find("is running and does the turbulence") == std::string::npos && g_logAll.find("ERJ") == std::string::npos);
     { const int w2 = g_turbWrites; for (int i = 0; i < 400 && g_turbWrites == w2; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); } CHECK(g_turbWrites > w2); }
     g_otherPlugin.clear();
     // 2d) the same on a Mac, as a customer had it (2026-11-13): X-Plane hands out an HFS path there, and "ERJ_EICAS.xpl" run

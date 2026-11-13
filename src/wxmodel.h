@@ -83,8 +83,10 @@ int validateProfile(XpWx& x, bool fix, std::string* why = nullptr);
 // with unrelated clouds as you fly past (this shows up as flicker).
 // A report made from the global model's surface weather at a lattice node (open water: no airport within range). id "GFSN28W083".
 Station modelStation(const ModelPoint& p, std::time_t now);
+// neighbours: the other stations of the update (each cloud layer's coverage leans to the heavy or the light end of its range by the
+// sky around it); without them every layer sits in its range by its own station's pseudo-random value only
 XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::vector<AloftStation>* aloft = nullptr,
-             bool fogSlot = false);
+             bool fogSlot = false, const std::vector<Station>* neighbours = nullptr);
 
 // Sanity checks on a built weather record, fixing what X-Plane would otherwise render as artefacts: coverage outside 0..1, a top at or
 // below its base, a layer thinner than 30 m, absurd thickness (over 16 km, more than any real cloud), non-empty layers out of vertical

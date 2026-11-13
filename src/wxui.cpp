@@ -2623,12 +2623,6 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
         return;
     }
     if (!d.turbData.empty()) { ImGui::SameLine(); muted(d.turbData.c_str()); }
-    if (slider && !d.turbNote.empty()) {   // an aircraft's own plugin: a note only, WXPlane's turbulence stays on
-        ImGui::SameLine(0, 16);
-        ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn));
-        ImGui::TextUnformatted(fmt("Note: %s (the aircraft's plugin) may add turbulence effects of its own", d.turbNote.c_str()).c_str());
-        ImGui::PopStyleColor();
-    }
     if (!slider) {   // the home page: three rows
         int withTurb = 0, total = 0;
         if (d.reports) for (const auto& p : d.reports->pireps) { if (!pirepListed(p)) continue; ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }

@@ -11,8 +11,7 @@
 - Lists in whole rows with scroll bars and counts beside titles; popups never outside the map; altitude slider clear of the map; sharper logo; even tabs
 - Aircraft plugins (e.g. ERJ EICAS) no longer lock turbulence settings
 - Dim at night (Settings, on by default): the window dims with the daylight so the night cockpit no longer darkens while it is open
-- Overcast (OVC) at 97% coverage, never thinned below 95% where it blends with its neighbours
-- Broken (BKN) at 75–80% coverage (was 70%), varying from station to station
+- Cloud coverage varies within each METAR category – FEW 10–25%, SCT 35–50%, BKN 70–85%, OVC 97–100% – leaning to the heavy end next to heavier sky and to the light end next to lighter or clear sky; overcast never thins below 95% where it blends with its neighbours
 - Refresh and Pop out as tabs, with the status in a bubble above them
 - All tabs stay up during the first download; a slow download shows "Still downloading… 0:47" instead of a frozen countdown
 - Map popups keep off the map's buttons and can't be dragged onto each other ("max popups" fixed)

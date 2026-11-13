@@ -535,6 +535,37 @@ int main() {
         std::vector<RadarCell> c0 = L;
         CHECK(addStormRim(c0, 12.0, lat0, lon0, 500.0, 20.0, 0) == 0 && c0.size() == 3);   // budget 0
     }
+    // --- cloud coverage: each cover in its range (FEW 10-25, SCT 35-50, BKN 70-85, OVC 97-100 %), steady, and leaning to the heavy end
+    //     next to heavier sky, to the light end next to lighter or clear sky
+    {
+        auto mk = [](const char* icao, double lat, double lon, const char* metar) {
+            Station s; s.icao = icao; s.lat = lat; s.lon = lon; s.elevM = 10; parseReport(metar, s.report); return s;
+        };
+        const char* covers[] = {"FEW030", "SCT030", "BKN030", "OVC030"};
+        const float lo[] = {0.10f, 0.35f, 0.70f, 0.97f}, hi[] = {0.25f, 0.50f, 0.85f, 1.00f};
+        for (int c = 0; c < 4; ++c)
+            for (int i = 0; i < 40; ++i) {
+                char id[8]; std::snprintf(id, sizeof id, "K%03d", i);
+                const Station s = mk(id, 40, -74, (std::string(id) + " 131251Z 27010KT 10SM " + covers[c] + " 10/05 A3000").c_str());
+                const float cv = buildXp(s, cfg, now).clouds[0].coverage;
+                CHECK(cv >= lo[c] - 1e-4f && cv <= hi[c] + 1e-4f);
+                CHECK(buildXp(s, cfg, now).clouds[0].coverage == cv);   // the same every time
+            }
+        // a broken layer amid overcast at that height leans heavy; amid clear sky, light (the same station both times)
+        const Station bkn = mk("KJFK", 40.64, -73.78, "KJFK 131251Z 27010KT 10SM BKN030 10/05 A3000");
+        std::vector<Station> heavy = {bkn, mk("KLGA", 40.78, -73.87, "KLGA 131251Z 27010KT 10SM OVC031 10/05 A3000"),
+                                      mk("KEWR", 40.69, -74.17, "KEWR 131251Z 27010KT 10SM OVC029 10/05 A3000")};
+        std::vector<Station> light = {bkn, mk("KLGA", 40.78, -73.87, "KLGA 131251Z 27010KT 10SM CLR 10/05 A3000"),
+                                      mk("KEWR", 40.69, -74.17, "KEWR 131251Z 27010KT 10SM FEW030 10/05 A3000")};
+        const float alone = buildXp(bkn, cfg, now).clouds[0].coverage;
+        const float h = buildXp(bkn, cfg, now, nullptr, false, &heavy).clouds[0].coverage;
+        const float l = buildXp(bkn, cfg, now, nullptr, false, &light).clouds[0].coverage;
+        CHECK(h > alone && l < alone && h >= 0.80f && l <= 0.75f && h <= 0.85f && l >= 0.70f);
+        // overcast elsewhere (far away, or at another height) does not count
+        std::vector<Station> far = {bkn, mk("KBOS", 42.36, -71.01, "KBOS 131251Z 27010KT 10SM OVC030 10/05 A3000"),
+                                    mk("KLGA", 40.78, -73.87, "KLGA 131251Z 27010KT 10SM OVC250 10/05 A3000")};
+        CHECK(buildXp(bkn, cfg, now, nullptr, false, &far).clouds[0].coverage < alone);   // KLGA is clear at 3000 ft: lighter
+    }
     // --- mist with a low ceiling: the ceiling stays where it is reported and all three decks are kept
     {
         Station st; st.elevM = 132;
