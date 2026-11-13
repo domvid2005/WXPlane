@@ -658,6 +658,13 @@ int main() {
             CHECK(k.clouds[0].type == 2.0f && k.clouds[0].baseM == 2141 && k.clouds[0].topM > 5000);
             CHECK(k.clouds[0].topM - k.clouds[0].baseM <= xpMaxThicknessM(k.clouds[0].type) + 1.0f);
         }
+        {   // KAUN: a showery cell (not steady) under 40 dBZ goes into the deck too: no duplicate layer at the lowest base, nothing pushed out
+            XpWx sh = w;
+            RadarCell s2 = c; s2.stratiform = false; s2.dbz = s2.dbzFine = 32;
+            applyStorm(sh, s2, cfg, 50.0, 40.8);
+            CHECK(sh.cloudCount == 3 && sh.clouds[0].baseM == 662 && sh.clouds[1].baseM == 1180 && sh.clouds[2].baseM == 4038 && sh.clouds[2].coverage == 0.32f);
+            CHECK(sh.turbulence > 0.0f);   // a shower keeps its (light) turbulence
+        }
         RadarCell cb = c; cb.stratiform = false; cb.dbz = cb.dbzFine = 50;                              // a thunderstorm still builds its own cloud
         XpWx b = w; applyStorm(b, cb, cfg, 50.0, 40.8);
         bool tall = false; for (const auto& k : b.clouds) tall = tall || (k.type >= 2.9f && k.topM > 5000);
