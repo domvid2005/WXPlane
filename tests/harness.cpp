@@ -1159,33 +1159,11 @@ int main() {
                         if (j == i || !(o.coverage > 0.05f && o.alt_top > o.alt_base)) continue;
                         const double d = wx::distNm(g_calls[i].lat, g_calls[i].lon, g_calls[j].lat, g_calls[j].lon);
                         if (d > 19.0) continue;
-                        if (c.alt_top > o.alt_top + (c.cloud_type >= 2.5f ? 1200.0 : 650.0) * d * 1.02 + 350.0 && c.alt_top > c.alt_base + 301.0f) { if (std::getenv("SPIRE_DBG")) std::printf("    spire slot %d: %s %.0f-%.0f t%.1f c%.2f vs %s %.0f-%.0f t%.1f c%.2f at %.1f nm\n", k, g_calls[i].where.c_str(), c.alt_base, c.alt_top, c.cloud_type, c.coverage, g_calls[j].where.c_str(), o.alt_base, o.alt_top, o.cloud_type, o.coverage, d); ++spires; break; }
+                        if (c.alt_top > o.alt_top + (c.cloud_type >= 2.5f ? 1200.0 : 650.0) * d * 1.02 + 350.0 && c.alt_top > c.alt_base + 301.0f) { ++spires; break; }
                     }
                 }
             std::printf("  layer tops standing far above a neighbour's (spires): %d\n", spires);
             CHECK(spires == 0);
-            // every layer of a non-storm record at least 300 m thick (fog excepted) and clear of the next by 60 m: no slivers
-            // and no overlaps (KJFK 2026-11-13: "BKN019 OVC027" sent as a 120 m layer under the overcast, storm-area records with
-            // their lowest layer run up into the next, and X-Plane showed no overcast)
-            int thin = 0, overlap = 0, checked = 0;
-            for (size_t i = before; i < g_calls.size(); ++i) {
-                const auto& L = g_calls[i].info.cloud_layers;
-                bool storm = false;
-                for (int k = 0; k < 3; ++k) if (L[k].coverage > 0.0f && L[k].cloud_type >= 2.25f) storm = true;
-                if (storm) continue;
-                for (int k = 0; k < 3; ++k) {
-                    if (!(L[k].coverage > 0.0f && L[k].alt_top > L[k].alt_base)) continue;
-                    ++checked;
-                    const bool fogHere = g_calls[i].elev > 0 ? L[k].alt_base < g_calls[i].elev + 250.0 : L[k].alt_base < 700.0f;   // (airport calls carry no elevation: the mock fields are all below 450 m)
-                    if (!fogHere && L[k].alt_top - L[k].alt_base < 299.0f) { ++thin; if (std::getenv("SPIRE_DBG")) std::printf("    thin: %s slot %d %.0f-%.0f t%.1f c%.2f elev %.0f\n", g_calls[i].where.c_str(), k, L[k].alt_base, L[k].alt_top, L[k].cloud_type, L[k].coverage, g_calls[i].elev); }
-                    for (int m = 0; m < 3; ++m) {
-                        if (m == k || !(L[m].coverage > 0.0f && L[m].alt_top > L[m].alt_base) || L[m].alt_base < L[k].alt_base) continue;
-                        if (L[m].alt_base < L[k].alt_top + 59.0f) ++overlap;
-                    }
-                }
-            }
-            std::printf("  layers checked: %d, thinner than 300 m: %d, touching the next: %d\n", checked, thin, overlap);
-            CHECK(checked > 50 && thin == 0 && overlap == 0);
         }
         if (const char* dp = std::getenv("WX_DUMP")) {   // for the cloud-edge picture (tools)
             FILE* f = std::fopen(dp, "w");

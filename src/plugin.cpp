@@ -300,62 +300,16 @@ double noise2(double X, double Y, double scale, int salt) {
 // its band's slot in height order, and a band a record has no cloud in gets a nearly empty layer (g_cfg.emptyLayerCoverage) at the height
 // of the nearest record that has one there. Every record then sends the same three layers in the same order, and between a cloudy and
 // a clear record a layer only thins out, at its own height.
-// The last word on every record's cloud layers before they go to X-Plane: each layer at least 300 m thick (fog at the ground
-// excepted), with at least 60 m of clear air up to the next one. Where two layers are too close for that, the upper one's base
-// moves up just enough (its top stays; the lower one's base, the ceiling, never moves), so every layer keeps its own slot and no
-// slot is left empty under another. KJFK, 2026-11-13: "BKN019 OVC027" became a 120 m thick layer under the overcast (it had to end
-// below the next base), and the storm records around it got a 300 m minimum that ran their lowest layer up into the one above
-// (558-1101 m under 852-2257 m): X-Plane showed no overcast there at all.
-void sanitizeLayers(std::vector<Todo>& todo) {
-    const int K = XPLM_NUM_CLOUD_LAYERS;
-    const float kMin = 300.0f, kGap = 60.0f;
-    for (auto& t : todo) {
-        XPLMWeatherInfoClouds_t* L = t.rec.info.cloud_layers;
-        // storm records are left as they are: their towering cumulus / cumulonimbus runs on purpose through the station layers
-        // around it (validateXp's allowOverlap), and trimming it to the layer above would flatten the storm
-        bool storm = false;
-        for (int k = 0; k < K; ++k) if (L[k].coverage > 0.0f && L[k].cloud_type >= 2.25f) storm = true;
-        if (storm) continue;
-        int ord[XPLM_NUM_CLOUD_LAYERS], n = 0;   // the real layers, lowest base first
-        for (int k = 0; k < K; ++k) if (L[k].coverage > 0.0f && L[k].alt_top > L[k].alt_base) ord[n++] = k;
-        std::sort(ord, ord + n, [&](int a, int b) { return L[a].alt_base < L[b].alt_base; });
-        for (int m = 0; m < n; ++m) {
-            XPLMWeatherInfoClouds_t& c = L[ord[m]];
-            const bool fog = c.alt_base < t.rec.elev + 250.0;
-            if (m > 0) {   // clear of the layer below (whose top was set in the step before)
-                const XPLMWeatherInfoClouds_t& lo = L[ord[m - 1]];
-                if (c.alt_base < lo.alt_top + kGap) c.alt_base = lo.alt_top + kGap;
-            }
-            float top = std::max(c.alt_top, c.alt_base + (fog ? 1.0f : kMin));
-            if (m + 1 < n) {   // and the next layer's base: pushed up if this one needs the room
-                XPLMWeatherInfoClouds_t& up = L[ord[m + 1]];
-                const float room = up.alt_base - kGap;
-                if (top > room) {
-                    if (c.alt_top <= room && room >= c.alt_base + (fog ? 1.0f : kMin)) top = room;   // it fits under it as it is
-                    else top = std::min(top, std::max(room, c.alt_base + (fog ? 1.0f : kMin)));
-                }
-            }
-            c.alt_top = std::min({top, c.alt_base + wx::xpMaxThicknessM(c.cloud_type), wx::kXpTopM});
-            if (c.alt_top / 0.3048f > t.rec.info.max_altitude_msl_ft) t.rec.info.max_altitude_msl_ft = c.alt_top / 0.3048f;
-        }
-        for (int m = 0; m + 1 < n; ++m) {   // a layer pushed up whole: its top at least 300 m over its new base
-            XPLMWeatherInfoClouds_t& c = L[ord[m + 1]];
-            if (c.alt_top < c.alt_base + kMin) c.alt_top = std::min(c.alt_base + kMin, wx::kXpTopM);
-        }
-    }
-}
-
 void matchEmptyLayers(std::vector<Todo>& todo) {
     const int K = XPLM_NUM_CLOUD_LAYERS;
     const float ph = (float)g_cfg.emptyLayerCoverage;
-    if (todo.empty()) return;
-    if (ph <= 0.0f && g_cfg.cloudSmoothNm <= 0.0) { sanitizeLayers(todo); return; }
+    if (todo.empty() || (ph <= 0.0f && g_cfg.cloudSmoothNm <= 0.0)) return;
     auto real = [](const XPLMWeatherInfoClouds_t& c) { return c.coverage > 0.05f && c.alt_top > c.alt_base; };
     // 1) height bands: the layer bases, sorted, split at the largest jumps in height (at most 3 bands, a jump of 300 m or more), so layers
     // at nearly the same height always share a band (k-means once put a 761 m deck in a different band than the 695 m one next to it)
     std::vector<double> bases;
     for (const auto& t : todo) for (int k = 0; k < K; ++k) if (real(t.rec.info.cloud_layers[k])) bases.push_back(t.rec.info.cloud_layers[k].alt_base);
-    if (bases.empty()) { sanitizeLayers(todo); return; }
+    if (bases.empty()) return;
     std::sort(bases.begin(), bases.end());
     std::vector<std::pair<double, size_t>> jumps;   // (size, index after the jump)
     for (size_t i = 1; i < bases.size(); ++i) if (bases[i] - bases[i - 1] >= 300.0) jumps.push_back({bases[i] - bases[i - 1], i});
@@ -467,9 +421,6 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             isReal[i] = outReal[i];
         }
     }
-    sanitizeLayers(todo);   // thick enough and never touching, before the spire limit below caps the tops against the neighbours'
-    for (size_t i = 0; i < n; ++i)
-        for (int k = 0; k < K; ++k) { const auto& c = todo[i].rec.info.cloud_layers[k]; isReal[i][k] = isReal[i][k] && c.coverage > 0.0f && c.alt_top > c.alt_base; }
     // 2c) No spires (2026-11-12, an upward cone over KJFK): X-Plane blends a layer's top between records, so one record whose top stands
     // far above its neighbours' (an airport's CB with an estimated 10 km top in 6 km storm records around it) grew a smooth cone up out
     // of the deck. A top now rises at most 650 m per nm above the tops of the records around it (1,200 m for cumulonimbus), the same
