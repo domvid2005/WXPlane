@@ -120,7 +120,7 @@ std::chrono::steady_clock::time_point g_last{};
 bool g_hasKeyFocus = false;   // the window holds X-Plane's keyboard focus (a text field is active)
 int g_cursorFrames = 0;         // frames since the cursor callback last reported the mouse over the window
 float g_mouseX = -1e9f, g_mouseY = -1e9f;
-XPLMDataRef g_drMv = nullptr, g_drProj = nullptr, g_drVp = nullptr, g_drVr = nullptr;
+XPLMDataRef g_drMv = nullptr, g_drProj = nullptr, g_drVp = nullptr, g_drVr = nullptr, g_drSun = nullptr;
 
 // window units (boxels) -> native pixels, for glScissor (X-Plane scales its UI, and VR/pop-out windows have their own transforms)
 struct Xform { float mv[16], pr[16]; int vp[4]; bool ok = false; };
@@ -190,6 +190,29 @@ void buildFonts(float scale) {
     g_fonts.logoAspect = g_logoAspect;
     g_fontScale = scale;
     g_fontsDirty = false;
+}
+
+// Night dimming of the in-sim window. At night X-Plane's auto exposure counts the window (it is in the main view), and the window,
+// dark as it is, is far brighter than a night cockpit: the whole scene went dark while it was open, and came back when it closed
+// or was popped out (2026-11-13; not in daylight). So in the dark the window's colours are scaled down (alpha kept): from full at
+// sun 0° to 45% below -8° (civil twilight on). A popped-out window is left as it is (not in the main view).
+float nightDim(bool poppedOut) {
+    if (poppedOut) return 1.0f;
+    if (!g_drSun) g_drSun = XPLMFindDataRef("sim/graphics/scenery/sun_pitch_degrees");
+    if (!g_drSun) return 1.0f;
+    const float sun = XPLMGetDataf(g_drSun);
+    const float t = std::max(0.0f, std::min(1.0f, -sun / 8.0f));
+    return 1.0f - 0.55f * t;
+}
+void dimVertices(ImDrawData* dd, float k) {
+    if (k >= 0.999f) return;
+    const unsigned m = (unsigned)(k * 256.0f + 0.5f);
+    for (int n = 0; n < dd->CmdListsCount; ++n)
+        for (ImDrawVert& v : dd->CmdLists[n]->VtxBuffer) {
+            const ImU32 c = v.col;
+            const unsigned r = ((c >> IM_COL32_R_SHIFT) & 0xFF) * m >> 8, g = ((c >> IM_COL32_G_SHIFT) & 0xFF) * m >> 8, b = ((c >> IM_COL32_B_SHIFT) & 0xFF) * m >> 8;
+            v.col = (c & IM_COL32_A_MASK) | (r << IM_COL32_R_SHIFT) | (g << IM_COL32_G_SHIFT) | (b << IM_COL32_B_SHIFT);
+        }
 }
 
 void renderDrawData(ImDrawData* dd, int left, int top) {
@@ -282,6 +305,7 @@ void draw(XPLMWindowID w, void*) {
     // keyboard focus only while text is being typed
     if (io.WantTextInput && !g_hasKeyFocus) { XPLMTakeKeyboardFocus(w); g_hasKeyFocus = true; }
     else if (!io.WantTextInput && g_hasKeyFocus) { if (XPLMHasKeyboardFocus(w)) XPLMTakeKeyboardFocus(nullptr); g_hasKeyFocus = false; }
+    dimVertices(ImGui::GetDrawData(), nightDim(XPLMWindowIsPoppedOut(w) != 0));
     renderDrawData(ImGui::GetDrawData(), l, t);
 }
 
