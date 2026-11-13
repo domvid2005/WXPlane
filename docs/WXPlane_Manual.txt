@@ -1,5 +1,5 @@
 ================================================================================
-  WXPlane 5.0 for X-Plane 12  -  User Manual
+  WXPlane 5.1 for X-Plane 12  -  User Manual
 ================================================================================
 
 WXPlane replaces X-Plane 12's weather with live, real-world data: airport

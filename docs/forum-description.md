@@ -1,6 +1,6 @@
-# WXPlane 5.0 – live real-world weather for X-Plane 12
+# WXPlane 5.1 – live real-world weather for X-Plane 12
 
-**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.0 puts the winds, clouds and turbulence aloft on the map, at any altitude you choose.
+**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1 adds a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, and updates through SkunkCrafts Updater.
 
 Free. No accounts and no API keys. Windows, macOS and Linux.
 
@@ -14,6 +14,26 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Realistic windshear:** gust fronts and microburst outflow around real convective storms.
 - **Smooth:** downloads run in the background and every update fades in over 1–2 minutes. No freezes, no sudden jumps.
 
+## New in 5.1
+
+- **Updates through SkunkCrafts Updater:** WXPlane appears in the updater next to your other add-ons.
+- **Live turbulence feedback:** the Turbulence tab shows the turbulence at your aircraft now (EDR) on a bar over the intensity bands, and a g meter of the last 30 seconds.
+- **Windshear odds slider** (0–1.0): how often gust fronts and microbursts form around storms.
+- **°T / °M everywhere:** one switch for the whole window. The wind dial's letters, the aloft arrows, the map's rotation, the heading lock readout, PIREP winds and storm bearings all follow it. The same goes for °C / °F.
+- **Map tab:**
+  - **Strongest cells:** cells within 3 nm are merged into one storm. The list is sortable and shows a count; click a cell to glide the map there.
+  - **Pilot reports:** listed under the storms. Click one to fly the map to it and open its details.
+- **North Lock / Heading Lock** switch on the Winds & Temps and Airports tabs, with direction arrows.
+- **Natural-looking storms:** softer storm edges and no cloud spires in the sim, and a smoother radar picture on the map.
+- **Cleaner window:**
+  - Lists show whole rows with a scroll bar, and their counts sit beside the titles.
+  - Map popups never appear outside the map, even for a moment.
+  - The altitude slider never covers the map.
+  - The map's unit switches sit at the bottom right, and the tabs are all one size.
+  - The logo is sharp at every size.
+- **Aircraft plugins** (such as the X-Crafts ERJ's EICAS) no longer lock the turbulence settings. WXPlane shows a note instead.
+- Daylight saving time for Australia and New Zealand local times, plus many smaller fixes.
+
 ## New in 5.0
 
 - **Winds aloft on the map:** wind barbs (blue, deeper the stronger) at any level; click one to decode it, with the headwind and crosswind on your heading.
@@ -21,7 +41,7 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Altitude slider** beside the map for winds, clouds and turbulence: ACFT follows your aircraft, SFC shows the surface, COMP overlays all altitudes. It snaps to the nearest 1,000 ft, more firmly at 5,000 and 10,000 ft (which light up amber).
 - **Time zones:** a Time Zone layer draws the zone boundaries. The map's LOCAL time follows the + at the map centre when you pan away from the aircraft. Zulu, local time, sunrise and sunset are shown for every airport.
 - **Units per section:** °T / °M and °C / °F switches for the airports, the map and the winds aloft. METAR and ATIS can be toggled on the home page, with magnetic winds for performance calculations.
-- **Pilot reports:** every PIREP type on the home page and the Turbulence tab, sortable, with details on click.
+- **Pilot reports:** every PIREP type, sortable, with details on click.
 - **Map popups:** as many as fit, never overlapping and never leaving the map; they can be dragged.
 - **Turbulence add-on detection:** with ActiveSky XP, xProTurb or similar running, WXPlane leaves the turbulence to it and says so.
 - **Search by FAA code:** small US fields such as 35D or 1B9 work without the K.
@@ -40,9 +60,11 @@ Open it from **Plugins → WXPlane**, or bind it to a key or joystick button. It
   - time zone boundaries
   - PIREPs (UUA red, UA orange, click one for details)
   - colour-coded AIRMETs, SIGMETs and convective SIGMETs (click one for details)
-- **Airports:** worldwide METAR/ATIS search, plus every station in use, sortable by any column.
+
+  Beside the map are the strongest storm cells and the pilot reports, both sortable; click one to fly the map to it.
+- **Airports:** worldwide METAR/ATIS search, plus every station in use, sortable by any column, with wind arrows in North or Heading Lock.
 - **Winds & Temps:** the full profile up to FL600 with ISA deviation.
-- **Turbulence:** EDR by altitude and every nearby pilot report.
+- **Turbulence:** EDR by altitude, a live EDR bar and g meter at your aircraft, and the windshear odds.
 - **Services:** the live status of every data source.
 - **Settings:** every option in one place.
 
