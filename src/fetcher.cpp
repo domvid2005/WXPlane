@@ -244,14 +244,14 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
 
     // 3b) Global-model clouds and surface weather on the same lattice (every 30 min): cloud layers above what airport reports can see,
     //     and the weather over open water where no airport reports within the search radius.
-    if (cfg.useAloft && (cfg.modelClouds || cfg.oceanModelWeather)) {
+    if (cfg.useAloft && (cfg.modelClouds || cfg.modelTops || cfg.oceanModelWeather)) {
         std::string cNote;
         std::vector<ModelPoint> mp = fetchModelClouds(rq, now, cNote);
         if (mp.empty()) setSvc(kSvcClouds, SvcState::Down, cNote.empty() ? std::string("no data") : cNote, now);
         else if (cNote.find("using the earlier download") != std::string::npos) { setSvc(kSvcClouds, SvcState::Degraded, cNote, now); svc_[kSvcClouds].lastOk = cloudTime_; }
         else { setSvc(kSvcClouds, SvcState::Ok, std::to_string(mp.size()) + " model point(s), downloaded " + hhmm(cloudTime_), now); svc_[kSvcClouds].lastOk = cloudTime_; }
         if (!cNote.empty()) res.aloftNote += (res.aloftNote.empty() ? "" : "; ") + cNote;
-        if (cfg.modelClouds)
+        if (cfg.modelClouds || cfg.modelTops)
             for (auto& a : res.aloft) {
                 if (!a.model) continue;
                 const ModelPoint* best = nullptr; double bd = 1e9;

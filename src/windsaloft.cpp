@@ -195,7 +195,9 @@ std::vector<AloftStation> parseOpenMeteo(const std::string& body, const std::vec
 }
 
 const std::vector<int>& modelCloudLevels() {
-    static const std::vector<int> L = {1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150};
+    // every GFS level up to 350 hPa (25-50 hPa apart, 200-600 m), so a cloud's top can be told to a few hundred metres; above that
+    // only cirrus is taken from it
+    static const std::vector<int> L = {1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150};
     return L;
 }
 

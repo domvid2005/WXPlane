@@ -305,6 +305,13 @@ SETTINGS
                                        before and during the change, the
                                        longest frame) and when X-Plane's
                                        clouds at the aircraft settled
+      model_tops                (1)    cloud tops from the global model's
+                                       humidity: a reported deck reaches
+                                       the model's cloud top where the
+                                       model has cloud at its base, and
+                                       steady rain is never topped lower
+                                       than the model's cloud (storms keep
+                                       the radar's echo tops)
 
   The README in the source repository lists every key. If something goes
   wrong, delete WXPlane.cfg and WXPlane writes a fresh one with the

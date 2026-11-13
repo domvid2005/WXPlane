@@ -204,6 +204,7 @@ struct Rec {
     double lat = 0, lon = 0, elev = 0;
     bool kept = false;        // an airport that left range, left in place with its surroundings' weather (see applyResult)
     std::string bumpOf;       // a rough-top record: the key of the deck record it sits on (it follows that record's final layers)
+    std::string holdOf;       // a rain record over an airport: it keeps that airport's layers as sent (no cloud smoothing, like the airport)
 };
 std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by station
 
@@ -406,7 +407,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         for (size_t i = 0; i < n; ++i) {
             const XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
             for (int k = 0; k < K; ++k) { out[i][k] = L[k]; outReal[i][k] = isReal[i][k]; }
-            if (todo[i].rec.airport || isBump(i)) continue;
+            if (todo[i].rec.airport || !todo[i].rec.holdOf.empty() || isBump(i)) continue;
             Acc a[3];
             const double sig = sigOf(i), reach = 3.0 * sig;
             // Only layers that touch are blended (2026-11-13: decks at different heights were averaged into one in between, and
@@ -486,7 +487,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         const double S = 40.0, reachNm = 3.0 * g_cfg.cloudSmoothNm + 15.0;
         std::vector<std::vector<std::pair<size_t, float>>> nbrs(n);   // each record's neighbours within reach (and the distance), once
         for (size_t i = 0; i < n; ++i) {
-            if (todo[i].rec.airport || isBump(i)) continue;
+            if (todo[i].rec.airport || !todo[i].rec.holdOf.empty() || isBump(i)) continue;
             for (size_t j = 0; j < n; ++j) {
                 if (j == i || isBump(j)) continue;
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
@@ -497,7 +498,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             for (int pass = 0; pass < 4; ++pass) {
                 bool changed = false;
                 for (size_t i = 0; i < n; ++i) {
-                    if (!isReal[i][k] || todo[i].rec.airport || isBump(i)) continue;
+                    if (!isReal[i][k] || todo[i].rec.airport || !todo[i].rec.holdOf.empty() || isBump(i)) continue;
                     XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
                     if (c.alt_base < todo[i].rec.elev + 250.0) continue;   // ground fog stays as it is
                     float lo = -1e9f, hi = 1e9f;
@@ -600,13 +601,20 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             XPLMWeatherInfoClouds_t& L = B.cloud_layers[k];
             const float want = bumpRise[i][(size_t)k];
             if (want <= 0.0f || L.coverage <= 0.0f) continue;
+            // a real layer above caps the rise; an (almost invisible) filler slot does not, it is lifted clear of the bump instead
             float ceilM = 1e9f;
             for (int j = 0; j < K; ++j)
-                if (j != k && P.cloud_layers[j].coverage > 0 && P.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, P.cloud_layers[j].alt_base);
+                if (j != k && P.cloud_layers[j].coverage > 0.05f && P.cloud_layers[j].alt_base > L.alt_top) ceilM = std::min(ceilM, P.cloud_layers[j].alt_base);
             const float thick = L.alt_top - L.alt_base;
             const float rise = std::min({want, 0.2f * thick, std::max(0.0f, ceilM - L.alt_top - 120.0f), std::max(0.0f, wx::xpMaxThicknessM(L.cloud_type) - thick), std::max(0.0f, wx::kXpTopM - L.alt_top)});
             if (rise < 1.0f) continue;
             L.alt_top += rise;
+            for (int j = k + 1; j < K; ++j) {
+                XPLMWeatherInfoClouds_t& F = B.cloud_layers[j];
+                if (F.coverage <= 0.0f || F.coverage > 0.05f) continue;
+                const float lowest = B.cloud_layers[j - 1].alt_top + 120.0f;
+                if (F.alt_base < lowest) { const float up = lowest - F.alt_base; F.alt_base += up; F.alt_top = std::min(F.alt_top + up, wx::kXpTopM); }
+            }
             B.max_altitude_msl_ft = std::max(B.max_altitude_msl_ft, L.alt_top / 0.3048f);
         }
     }
@@ -2046,7 +2054,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     int stormCount = 0;
     if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
         // Pass 1: each cell's station weather and the base its own station deck would give it.
-        struct StormPre { wx::XpWx x; const wx::Station* nearest; double nd; float base; bool anchored; };
+        struct StormPre { wx::XpWx x; const wx::Station* nearest; double nd; float base; bool anchored; bool hold; };
         std::vector<StormPre> pre;
         pre.reserve(res.radar.cells.size());
         for (const auto& c : res.radar.cells) {
@@ -2073,6 +2081,10 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                     if (in < bestIn) { bestIn = in; nearest = &s; nd = d; anchored = true; }
                 }
             }
+            // Close to the airport (its record reaches at least halfway across this cell) the record also keeps the airport's coverage:
+            // the smoothing had thinned KAPC's broken deck from 81 % to 53-58 % there, and X-Plane read 70 % back at the airport.
+            bool hold = false;
+            if (anchored) { auto hr = stationRadius.find(nearest->icao); hold = hr != stationRadius.end() && nd <= hr->second + 0.5 * rc; }
             wx::XpWx x = baseWx[nearest->icao];
             // A station's ground fog and low visibility are local; do not project them onto storms far from it.
             if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
@@ -2084,7 +2096,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const bool overlapsStation = srit != stationRadius.end() && nd <= srit->second + std::max(6.0, g_cfg.radarCellNm * 0.9);
             if (nd > 60.0 || (x.visM < 5000.0f && !(overlapsStation && x.visM >= 1000.0f))) x.visM = (float)g_cfg.clearVisM;
             if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
-            pre.push_back({x, nearest, nd, wx::stormBaseFor(x, c, nearest->elevM), anchored});
+            pre.push_back({x, nearest, nd, wx::stormBaseFor(x, c, nearest->elevM), anchored, hold});
         }
         // Neighbouring cells take their base from different stations' decks (1051 m next to 1987 m in a log), which X-Plane blends into
         // a stepped underside and walls. Cells within 1.7 cell widths therefore share a distance-weighted mean base.
@@ -2121,6 +2133,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             r.lat = c.lat; r.lon = c.lon; r.elev = nearest->elevM;
             r.info = info;
             r.info.age = 0.0f;
+            if (pre[ci].hold) r.holdOf = nearest->icao;
             const std::string key = "radar:" + c.key;
             seen[key] = true;
             ++stormCount;

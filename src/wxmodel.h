@@ -40,6 +40,8 @@ struct XpWind {
 };
 
 struct XpWx {
+    // the global model's cloud cover on pressure levels here (altitude m MSL, cover 0..1, ascending): cloud tops (modelCloudTopM)
+    std::vector<std::pair<float, float>> modelProfM;
     bool hasTemp = false, hasDewp = false;
     float tempC = 0, dewpC = 0;
     float qnhPa = 0; // 0 = unknown
@@ -102,6 +104,9 @@ constexpr float kXpMaxTopM = 13716.0f;   // X-Plane's manual weather limits only
 constexpr float kXpMaxThickM[4] = {1800.0f * 0.3048f, 4920.0f * 0.3048f, 16680.0f * 0.3048f, 1e9f};
 inline float xpMaxThicknessM(float cloudType) { int t = (int)(cloudType + 0.5f); return kXpMaxThickM[t < 0 ? 0 : (t > 3 ? 3 : t)]; }
 int validateXp(XpWx& x, bool allowOverlap, std::string* note = nullptr);
+// The top of the cloud a deck based at baseM belongs to, from the model's cloud cover (modelProfM): the levels from the base up with at
+// least 40 % cover, the top halfway to the first level below that. -1 if the model has no cloud at that base (the rules decide then).
+float modelCloudTopM(const std::vector<std::pair<float, float>>& prof, float baseM);
 
 // True if this station's report calls for a fog layer under the given config.
 bool stationHasFog(const Station& st, const Config& cfg);

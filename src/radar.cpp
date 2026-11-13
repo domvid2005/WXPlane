@@ -1174,6 +1174,13 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     float topM = stormTopM(c, cfg, baseM);
     // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a wall.
     if (c.edge > 0) topM = std::max(baseM + 1500.0f, baseM + (topM - baseM) * (1.0f - 0.45f * c.edge));
+    // Steady rain (MRMS PrecipFlag): the radar sees the rain, not the small ice above it, so its echo top reads low for the cloud. Where
+    // the global model has the cloud reaching higher from this base, the top goes up to the model's (within the depth X-Plane allows
+    // for cumulus). It only ever raises a top: storms (40 dBZ and up, or convective) keep the radar's.
+    if (c.stratiform && dbz < 40.0f && !x.modelProfM.empty()) {
+        const float mt = modelCloudTopM(x.modelProfM, baseM);
+        if (mt > topM) topM = std::min({mt, baseM + xpMaxThicknessM(2.0f), kXpTopM});
+    }
     XpCloud& cl = x.clouds[slot];
     const float replacedCov = cl.coverage;   // the deck this storm grows out of (0 if the slot was free)
     // Cumulonimbus from 30 dBZ up (and for any measured echo top above 6 km); a weak echo is cumulus (2.0), not a deep anvil. Ramping

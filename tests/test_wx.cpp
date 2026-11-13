@@ -602,13 +602,45 @@ int main() {
         XpWx b = buildXp(fg, cfg, now, nullptr, true);
         CHECK(b.fogLayerApplied && b.clouds[1].baseM < b.clouds[0].topM + 41.0f);   // only a 40 m gap above the ground fog, not 150 m
     }
-    // --- mist (BR) shows as a thin ground layer, and not only as reduced visibility
+    // --- cloud tops from the global model: a reported deck reaches the model's top where the model has cloud at its base
+    {
+        std::vector<std::pair<float, float>> p = {{100, 0.0f}, {700, 0.9f}, {1400, 0.8f}, {3000, 0.1f}, {4200, 0.0f}};
+        NEAR(modelCloudTopM(p, 610), 2200, 1);                 // halfway between the last cloudy level (1400) and the next (3000)
+        CHECK(modelCloudTopM(p, 3500) < 0);                    // no cloud at that base in the model
+        std::vector<AloftStation> al(1);
+        al[0].model = true; al[0].located = true; al[0].lat = 40.0; al[0].lon = -100.0;
+        al[0].cloudLevels = {{328, 0.0}, {2297, 0.9}, {4593, 0.8}, {9843, 0.1}, {13780, 0.0}};   // the same profile in ft
+        Station st; st.elevM = 0; st.lat = 40.0; st.lon = -100.0;
+        parseReport("KTST 301553Z 18005KT 10SM BKN020 12/05 A3002", st.report);
+        Config mc = cfg; mc.modelClouds = false;
+        const XpWx m = buildXp(st, mc, now, &al);
+        NEAR(m.clouds[0].baseM, 610, 1);
+        NEAR(m.clouds[0].topM, 2200, 5);                       // the model's top, not the rule's 610 + 1300 m
+        al[0].cloudLevels = {{328, 0.0}, {2297, 0.0}, {4593, 0.0}, {9843, 0.0}, {13780, 0.0}};   // the model has no cloud there
+        const XpWx r = buildXp(st, mc, now, &al);
+        NEAR(r.clouds[0].topM - r.clouds[0].baseM, 1300, 1);   // the rule decides
+        mc.modelTops = false;
+        al[0].cloudLevels = {{328, 0.0}, {2297, 0.9}, {4593, 0.8}, {9843, 0.1}, {13780, 0.0}};
+        NEAR(buildXp(st, mc, now, &al).clouds[0].topM - 610, 1300, 1);   // model_tops = 0: the rule
+        // steady rain: the model raises a radar top that reads low; a storm keeps the radar's
+        XpWx s; s.modelProfM = {{500, 0.9f}, {1500, 0.9f}, {4000, 0.9f}, {6000, 0.1f}};
+        RadarCell c; c.dbz = 30; c.dbzFine = 30; c.rateMmH = 3; c.stratiform = true; c.topM = 2500; c.topKnown = true; c.lat = 40.0;
+        XpWx s1 = s; applyStorm(s1, c, cfg, 0.0, 40.0, 800.0f);
+        float t1 = 0; for (const auto& k : s1.clouds) t1 = std::max(t1, k.topM);
+        NEAR(t1, 5000, 1);
+        c.stratiform = false; c.dbz = c.dbzFine = 45;
+        XpWx s2 = s; applyStorm(s2, c, cfg, 0.0, 40.0, 800.0f);
+        float t2 = 0; for (const auto& k : s2.clouds) t2 = std::max(t2, k.topM);
+        NEAR(t2, 2500, 1);
+    }
+    // --- mist (BR) is shown by the visibility alone: no ground layer, no fog slot, and the deck keeps slot 0
     {
         Station st; st.elevM = 400;
         parseReport("KICT 301553Z 00000KT 3SM BR FEW002 12/11 A3002", st.report);
-        CHECK(stationHasFog(st, cfg));
+        CHECK(!stationHasFog(st, cfg));
         XpWx a = buildXp(st, cfg, now);
-        CHECK(a.fogLayerApplied && a.clouds[0].baseM == 400 && a.clouds[0].topM - a.clouds[0].baseM >= 80 && a.clouds[0].topM - a.clouds[0].baseM <= 120 && a.clouds[0].coverage < 0.6f);
+        CHECK(!a.fogLayerApplied && a.cloudCount == 1);
+        NEAR(a.clouds[0].baseM, 400 + 200 * 0.3048, 1);       // FEW002 is the only layer
         NEAR(a.visM, 4828, 5);                                // the 3 SM is still sent exactly
         Station clear; clear.elevM = 400;
         parseReport("KICT 301553Z 00000KT 10SM FEW040 12/05 A3002", clear.report);

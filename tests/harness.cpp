@@ -562,6 +562,7 @@ static int runBumps() {
     CHECK(sln != nullptr);
     if (sln) for (int k = 0; k < 3; ++k) if (sln->info.cloud_layers[k].coverage >= 0.85f && sln->info.cloud_layers[k].cloud_type > 0.5f) li = k;
     CHECK(li >= 0);
+    if (sln) for (int k = 0; k < 3; ++k) std::printf("  KSLN layer %d: type %.1f cov %.2f %.0f-%.0f m\n", k, sln->info.cloud_layers[k].cloud_type, sln->info.cloud_layers[k].coverage, sln->info.cloud_layers[k].alt_base, sln->info.cloud_layers[k].alt_top);
     for (auto& c : g_calls) {
         if (!sln || li < 0 || c.where != "loc" || !(c.info.radius_nm < sln->info.radius_nm) || std::fabs(c.lat - 38.79) > 0.6 || std::fabs(c.lon + 97.65) > 0.8) continue;
         ++bumps;

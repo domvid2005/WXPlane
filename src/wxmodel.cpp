@@ -126,10 +126,50 @@ bool stationHasFog(const Station& st, const Config& cfg) {
     if (!cfg.fogLayer) return false;
     for (const auto& g : r.clouds)
         if (g.cover == CloudGroup::VV) return true;
-    return r.fog || r.shallowFog || r.patchyFog || r.mist;
+    return r.fog || r.shallowFog || r.patchyFog;   // mist (BR) is visibility only: no ground layer, no fog slot
 }
 
 float isaTempC(float altM) { return altM < 11000.0f ? 15.0f - 0.0065f * altM : -56.5f; }
+
+float modelCloudTopM(const std::vector<std::pair<float, float>>& prof, float baseM) {
+    const float kCloudy = 0.4f;
+    size_t k = 0;
+    while (k < prof.size() && prof[k].first < baseM) ++k;   // the first level at or above the base
+    // the cloud must be there at the base: the level above it, or the one just below it (a base between two levels)
+    const bool atBase = (k < prof.size() && prof[k].second >= kCloudy && prof[k].first <= baseM + 900.0f) ||
+                        (k > 0 && prof[k - 1].second >= kCloudy && prof[k - 1].first >= baseM - 500.0f);
+    if (!atBase) return -1.0f;
+    if (k >= prof.size() || prof[k].second < kCloudy) return k < prof.size() ? 0.5f * (baseM + prof[k].first) : -1.0f;
+    size_t e = k;
+    while (e + 1 < prof.size() && prof[e + 1].second >= kCloudy) ++e;
+    if (e + 1 >= prof.size()) return prof[e].first;
+    return 0.5f * (prof[e].first + prof[e + 1].first);
+}
+
+// The model's cloud cover on pressure levels at a station: an inverse-distance blend of the model points within 150 nm (ft MSL, 0..1).
+static std::vector<std::pair<double, double>> modelCloudProfile(const Station& st, const std::vector<AloftStation>& aloft) {
+    std::vector<std::pair<double, double>> prof;
+    const AloftStation* nearest = nullptr; double nd = 150.0;
+    for (const auto& a : aloft) {
+        if (!a.model || a.cloudLevels.empty()) continue;
+        const double d = distNm(st.lat, st.lon, a.lat, a.lon);
+        if (d < nd) { nd = d; nearest = &a; }
+    }
+    if (!nearest) return prof;
+    const size_t n = nearest->cloudLevels.size();
+    std::vector<double> sa(n, 0), sc(n, 0);
+    double sw = 0;
+    for (const auto& a : aloft) {
+        if (!a.model || a.cloudLevels.size() != n) continue;
+        const double d = distNm(st.lat, st.lon, a.lat, a.lon);
+        if (d > 150.0) continue;
+        const double w = 1.0 / std::max(1.0, d * d);
+        for (size_t k = 0; k < n; ++k) { sa[k] += w * a.cloudLevels[k].first; sc[k] += w * a.cloudLevels[k].second; }
+        sw += w;
+    }
+    if (sw > 0) for (size_t k = 0; k < n; ++k) prof.push_back({sa[k] / sw, sc[k] / sw});
+    return prof;
+}
 
 XpWind windAt(const std::vector<XpWind>& p, float altM) {
     if (p.empty()) return XpWind();
@@ -306,7 +346,10 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     for (const auto& g : r.clouds)
         if (g.cover == CloudGroup::VV) vv = &g;
 
-    bool anyFog = r.fog || r.shallowFog || r.patchyFog || r.mist || vv != nullptr;
+    // Mist (BR, 1 km or more) is shown by the visibility alone (2026-11-13): drawn as a thin 45 % veil on the ground it looked like
+    // patchy fog, and it took one of the three cloud slots from a real deck. Fog (FG, under 1 km), shallow and patchy fog and an
+    // obscured sky (VV) keep their ground layer.
+    bool anyFog = r.fog || r.shallowFog || r.patchyFog || vv != nullptr;
     // Mist (BR) together with a low broken/overcast ceiling: the ceiling layer is the low cloud. A separate mist layer would take
     // the lowest slot and push the real ceiling up by the layer gap (100 ft showing as 800 ft), and cost a slot for the third deck.
     bool ceilingInsteadOfMist = false;
@@ -322,12 +365,16 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         if (vv) depth = std::min(400.0, std::max(120.0, vv->baseFtAgl * kFtToM));
         else if (r.shallowFog) { depth = 100.0; f.coverage = 0.9f; }
         else if (r.patchyFog) { depth = std::max(100.0, depth * 0.6); f.coverage = 0.5f; }
-        else if (r.mist && !r.fog) { depth = 90.0; f.coverage = 0.45f; }   // BR: a thin veil on the ground, so mist is visible and not only a shorter view
         f.topM = (float)(st.elevM + depth);
         layers.push_back(f);
         x.fogLayerApplied = true;
     }
 
+    // the model's cloud profile here, for the tops of the reported decks (a report gives only bases) and the layers above them
+    const bool ownModelPoint = st.icao.compare(0, 3, "GFS") == 0;
+    std::vector<std::pair<double, double>> prof;   // (alt ft, cover)
+    if (aloft && !ownModelPoint && (cfg.modelClouds || cfg.modelTops)) prof = modelCloudProfile(st, *aloft);
+    if (cfg.modelTops) for (const auto& p : prof) x.modelProfM.push_back({(float)(p.first * kFtToM), (float)p.second});
     std::vector<CloudGroup> cl;
     for (const auto& g : r.clouds)
         if (g.cover != CloudGroup::VV) cl.push_back(g);
@@ -351,7 +398,14 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
             thick = g.cover == CloudGroup::OVC ? 1400 : (g.cover == CloudGroup::BKN ? 1100 : 800);
         }
         else { c.type = (float)cfg.lowCloudType; thick = g.cover == CloudGroup::OVC ? 1600 : (g.cover == CloudGroup::BKN ? 1300 : 900); }
-        c.topM = (float)(c.baseM + thick);
+        // Tops (2026-11-13): a report gives no tops, so where the model has cloud at the reported base the deck reaches the model's top
+        // (within 300 m and the depth X-Plane allows for the type); where the model has none there, the rule above stays. Storms and
+        // cirrus keep theirs (radar echo tops decide for storms).
+        if (!x.modelProfM.empty() && g.kind == 0 && c.type >= 0.5f) {
+            const float mt = modelCloudTopM(x.modelProfM, c.baseM);
+            if (mt > 0) thick = std::min((double)xpMaxThicknessM(c.type), std::max(300.0, (double)(mt - c.baseM)));
+        }
+        c.topM = (float)std::min((double)kXpMaxTopM, c.baseM + thick);
         layers.push_back(c);
     }
     // Clouds from the global model above what the report can see (2026-11-09): automatic stations report nothing above 12,000 ft, and
@@ -361,31 +415,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     // mid-level cloud below that (at most 1.5 km deep); coverage 85 % of the model's, at most 85 %. Not over an SKC report (an observer
     // saw no cloud at any height) and not for the model's own open-water points (their report already has the model's layers).
     bool modelLayersDone = false;
-    const bool ownModelPoint = st.icao.compare(0, 3, "GFS") == 0;
     if (cfg.modelClouds && aloft && !r.skyClearAll && !ownModelPoint) {
-        std::vector<std::pair<double, double>> prof;   // (alt ft, cover)
-        {
-            const AloftStation* nearest = nullptr; double nd = 150.0;
-            for (const auto& a : *aloft) {
-                if (!a.model || a.cloudLevels.empty()) continue;
-                const double d = distNm(st.lat, st.lon, a.lat, a.lon);
-                if (d < nd) { nd = d; nearest = &a; }
-            }
-            if (nearest) {
-                const size_t n = nearest->cloudLevels.size();
-                std::vector<double> sa(n, 0), sc(n, 0);
-                double sw = 0;
-                for (const auto& a : *aloft) {
-                    if (!a.model || a.cloudLevels.size() != n) continue;
-                    const double d = distNm(st.lat, st.lon, a.lat, a.lon);
-                    if (d > 150.0) continue;
-                    const double w = 1.0 / std::max(1.0, d * d);
-                    for (size_t k = 0; k < n; ++k) { sa[k] += w * a.cloudLevels[k].first; sc[k] += w * a.cloudLevels[k].second; }
-                    sw += w;
-                }
-                if (sw > 0) for (size_t k = 0; k < n; ++k) prof.push_back({sa[k] / sw, sc[k] / sw});
-            }
-        }
         if (!prof.empty()) {
             modelLayersDone = true;
             float floorM = (float)(st.elevM + 12000.0 * kFtToM);
