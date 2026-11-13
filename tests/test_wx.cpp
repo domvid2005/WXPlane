@@ -648,6 +648,16 @@ int main() {
         CHECK(a.clouds[1].baseM == 1180 && a.clouds[1].coverage >= 0.98f);                              // the overcast takes the rain
         NEAR(a.clouds[1].topM, 4038 - 150, 1);                                                         // raised, clear of the layer above
         CHECK(a.clouds[2].baseM == 4038 && a.clouds[2].coverage == 0.32f);
+        // KSMF: heavy steady rain under an overcast of type 1.5 at 2,141 m with a 7.2 km radar top. Sent 5,084 m deep (the cumulus
+        // limit) at type 1.5, X-Plane dropped the layer; the deck now becomes cumulus, and 1.5 has a limit between stratus and cumulus
+        NEAR(xpMaxThicknessM(1.5f), 0.5f * (kXpMaxThickM[1] + kXpMaxThickM[2]), 1);
+        {
+            XpWx k; k.clouds[0].type = 1.5f; k.clouds[0].coverage = 0.97f; k.clouds[0].baseM = 2141; k.clouds[0].topM = 3541; k.cloudCount = 1;
+            RadarCell h = c; h.dbz = h.dbzFine = 35; h.topM = 7225;
+            applyStorm(k, h, cfg, 9.0, 38.7);
+            CHECK(k.clouds[0].type == 2.0f && k.clouds[0].baseM == 2141 && k.clouds[0].topM > 5000);
+            CHECK(k.clouds[0].topM - k.clouds[0].baseM <= xpMaxThicknessM(k.clouds[0].type) + 1.0f);
+        }
         RadarCell cb = c; cb.stratiform = false; cb.dbz = cb.dbzFine = 50;                              // a thunderstorm still builds its own cloud
         XpWx b = w; applyStorm(b, cb, cfg, 50.0, 40.8);
         bool tall = false; for (const auto& k : b.clouds) tall = tall || (k.type >= 2.9f && k.topM > 5000);

@@ -1189,6 +1189,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
             float topM = stormTopM(c, cfg, h.baseM);
             if (c.edge > 0) topM = std::max(h.baseM + 1500.0f, h.baseM + (topM - h.baseM) * (1.0f - 0.45f * c.edge));
             if (!x.modelProfM.empty()) { const float mt = modelCloudTopM(x.modelProfM, h.baseM); if (mt > topM) topM = mt; }
+            // deeper than X-Plane allows for the deck's type: the rain deck becomes cumulus (2.0), as steady-rain clouds were before
+            if (topM - h.baseM > xpMaxThicknessM(h.type) && h.type < 2.0f && topM > h.topM) h.type = 2.0f;
             float ceil = std::min(kXpTopM, h.baseM + xpMaxThicknessM(h.type));
             for (int i = 0; i < 3; ++i)
                 if (i != host && x.clouds[i].coverage > 0 && x.clouds[i].baseM > h.baseM) ceil = std::min(ceil, x.clouds[i].baseM - 150.0f);

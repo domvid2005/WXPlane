@@ -102,7 +102,15 @@ constexpr float kXpMaxTopM = 13716.0f;   // X-Plane's manual weather limits only
 // cirrus 43,200-45,000 ft, stratus 40,080-45,000 ft, cumulus 28,320-45,000 ft; cumulonimbus has no thickness limit, base 0 to top 45,000 ft).
 // A stratus layer in X-Plane's own state dump is exactly 4920 ft thick too. Cloud type is rounded to the nearest of 0..3.
 constexpr float kXpMaxThickM[4] = {1800.0f * 0.3048f, 4920.0f * 0.3048f, 16680.0f * 0.3048f, 1e9f};
-inline float xpMaxThicknessM(float cloudType) { int t = (int)(cloudType + 0.5f); return kXpMaxThickM[t < 0 ? 0 : (t > 3 ? 3 : t)]; }
+// Between two types the limit is taken in between as well (2026-11-13 KSMF: an overcast of type 1.5 sent 5,084 m deep, the cumulus
+// limit, did not show at all; X-Plane's limit for 1.5 lies between stratus and cumulus). From cumulus up it is unlimited.
+inline float xpMaxThicknessM(float cloudType) {
+    const float t = cloudType < 0.0f ? 0.0f : (cloudType > 3.0f ? 3.0f : cloudType);
+    const int lo = (int)t;
+    if (lo >= 2) return t > 2.0f ? kXpMaxThickM[3] : kXpMaxThickM[2];
+    const float f = t - (float)lo;
+    return kXpMaxThickM[lo] + (kXpMaxThickM[lo + 1] - kXpMaxThickM[lo]) * f;
+}
 int validateXp(XpWx& x, bool allowOverlap, std::string* note = nullptr);
 // The top of the cloud a deck based at baseM belongs to, from the model's cloud cover (modelProfM): the levels from the base up with at
 // least 40 % cover, the top halfway to the first level below that. -1 if the model has no cloud at that base (the rules decide then).
