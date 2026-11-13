@@ -437,7 +437,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     }
     // X-Plane holds three cloud layers per record (XPLM_NUM_CLOUD_LAYERS), and two of them for the decks when slot 0 is kept for ground
     // fog. More decks than that are no longer cut off from the top (a METAR can report six; the overcast above was the one lost): the
-    // two decks closest in height are made one, again and again, until they fit. The joined deck starts at the lower base (a ceiling
+    // two decks closest in height (within 3,000 ft) are made one, again and again, until they fit. The joined deck starts at the lower base (a ceiling
     // never rises), reaches the upper top, and takes the heavier cover and its kind of cloud.
     {
         const size_t fixed = (fogSlot && (x.fogLayerApplied || ceilingInsteadOfMist)) || (!fogSlot && x.fogLayerApplied) ? 1u : 0u;   // the ground layer
@@ -450,6 +450,19 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
                 const bool conv = layers[i].type >= 2.25f || layers[i + 1].type >= 2.25f;
                 const float g = layers[i + 1].baseM - layers[i].baseM + (conv ? 1e9f : 0.0f);
                 if (g < gap) { gap = g; best = i; }
+            }
+            // Only decks within 3,000 ft of each other are joined (BKN150 and BKN250 are two skies, not one). With none that close,
+            // the deck that matters least is left out instead: the lightest cover (FEW < SCT < BKN < OVC), and of those the highest;
+            // never a storm.
+            if (gap > 3000.0f * (float)kFtToM) {
+                auto rank = [](float c) { return c < 0.3f ? 0 : (c < 0.6f ? 1 : (c < 0.9f ? 2 : 3)); };
+                size_t drop = layers.size();
+                for (size_t i = fixed; i < layers.size(); ++i) {
+                    if (layers[i].type >= 2.25f) continue;
+                    if (drop == layers.size() || rank(layers[i].coverage) < rank(layers[drop].coverage) ||
+                        (rank(layers[i].coverage) == rank(layers[drop].coverage) && layers[i].baseM > layers[drop].baseM)) drop = i;
+                }
+                if (drop < layers.size()) { layers.erase(layers.begin() + (long)drop); continue; }
             }
             XpCloud& lo = layers[best];
             const XpCloud& hi = layers[best + 1];

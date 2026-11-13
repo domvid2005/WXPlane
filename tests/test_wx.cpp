@@ -230,6 +230,7 @@ int main() {
     parseReport("KDFW 301553Z 18015G30KT 3SM +TSRA BKN020CB OVC040 BKN150 BKN250 24/22 A2985", dfw.report);
     XpWx t = buildXp(dfw, cfg, now);
     CHECK(t.cloudCount == 3 && t.clouds[0].type == 3.0f); // 3 slots, lowest first
+    NEAR(t.clouds[2].baseM, 185 + 15000 * 0.3048, 1);      // BKN150 and BKN250 are not joined: the highest broken deck is the one left out
     // layers never overlap: each top stays below the next layer's base
     CHECK(t.clouds[0].topM < t.clouds[1].baseM && t.clouds[1].topM < t.clouds[2].baseM);
     CHECK(t.clouds[0].topM > t.clouds[0].baseM && t.clouds[1].topM > t.clouds[1].baseM);

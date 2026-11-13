@@ -118,7 +118,7 @@ std::time_t g_fogUntil = 0;
 // every station, and KBOS lost its OVC048).
 struct FogSpot { double lat, lon; std::time_t until; };
 std::map<std::string, FogSpot> g_fogSpots;
-const double kFogSlotNm = 50.0;
+const double kFogSlotNm = 25.0;   // a fog layer lives in its own station's record (about 5 nm) and the blend into the next ones
 bool fogNear(double lat, double lon, std::time_t now) {
     for (const auto& f : g_fogSpots)
         if (f.second.until > now && wx::distNm(lat, lon, f.second.lat, f.second.lon) <= kFogSlotNm) return true;
