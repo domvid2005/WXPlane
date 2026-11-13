@@ -448,6 +448,24 @@ int main(int argc, char** argv) {
         d.cfg = &cfg; d.turbOn = true; d.wsOn = true;
         for (int fr = 0; fr < 10; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
     }
+    // the altitude slider's value box never covers the map: every altitude (the widest labels too), SFC and ALL, at several window widths
+    {
+        extern float g_testMapRight, g_testAltBoxLeft;
+        int overlaps = 0, checks = 0;
+        const float widths[] = {W, 1500, 1100, 900, 700};
+        const float alts[] = {0, 900, 9900, 10000, 17900, 18000, 45000, 60000};
+        for (float ww : widths)
+            for (int m = 0; m < 10; ++m) {
+                d.forceMapMode = m < 8 ? -1 : (m == 8 ? 2 : 3); d.forceMapAltFt = m < 8 ? alts[m] : -1;
+                for (int fr = 0; fr < 30; ++fr) { io.DeltaTime = 1.0f / 30.0f; io.DisplaySize = ImVec2(ww, H); ImGui::NewFrame(); d.forceTab = fr == 0 ? 1 : -1; UiActions act; uiDraw(d, f, ww, H, false, act); ImGui::Render(); ++frames; }
+                ++checks;
+                if (g_testAltBoxLeft < g_testMapRight + 2) { ++overlaps; std::printf("altitude box over the map: width %.0f, case %d (box %.1f, map %.1f)\n", ww, m, g_testAltBoxLeft, g_testMapRight); }
+            }
+        d.forceMapMode = 1; d.forceMapAltFt = -1; io.DisplaySize = ImVec2(W, H);
+        for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+        if (overlaps) { std::printf("UI: %d altitude box overlap(s) of %d\n", overlaps, checks); return 1; }
+        std::printf("altitude box clear of the map in %d cases\n", checks);
+    }
     // duplicate ImGui IDs (ImGui outlines them in red when one is hovered): sweep the mouse over every tab with every map layer on
     {
         d.forceLayers = 7; d.forceAdv = 1; d.forceAloftLayers = 3;
