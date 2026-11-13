@@ -93,6 +93,8 @@ struct UiActions {
     bool maxTurbChanged = false;        // while dragging
     bool maxTurbReleased = false;       // drag ended: save
     double maxTurb = 1.0;
+    bool wsOddsChanged = false, wsOddsReleased = false;   // the windshear odds slider (Turbulence tab)
+    double wsOdds = 1.0;
     bool popOut = false;                // move the window to its own OS window (or back)
     // the settings (the plugin's former menu toggles): flip these
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;

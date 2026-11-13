@@ -367,6 +367,7 @@ void frame() {
     if (act.toggleWindshear) g_cfg.windshear = !g_cfg.windshear;
     if (act.setTurbWs >= 0) g_cfg.realisticTurbulence = g_cfg.windshear = act.setTurbWs == 1;
     if (act.maxTurbChanged || act.maxTurbReleased) { g_cfg.maxTurbulence = std::max(0.0, std::min(1.0, act.maxTurb)); g_lastGridAlt = -1e9; }
+    if (act.wsOddsChanged || act.wsOddsReleased) g_cfg.windshearOdds = std::max(0.0, std::min(1.0, act.wsOdds));
     if (!act.search.empty()) {
         std::string q = act.search;
         for (auto& c : q) c = (char)std::toupper((unsigned char)c);

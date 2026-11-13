@@ -1199,12 +1199,17 @@ void windshearTick() {
         const std::time_t now = std::time(nullptr);
         if (rl != lastRiskLine || now - lastRisk > 600) { wsLog("%s", rl); lastRiskLine = rl; lastRisk = now; }
         g_uiTs.wsSources = (int)src.size(); g_uiTs.wsHigh = hi; g_uiTs.wsMed = md; g_uiTs.wsLow = lo; g_uiTs.wsStrongest = top;
+        {   // the Turbulence tab's windshear odds: the hourly odds of every source scaled (0: none form, like Max turbulence 0)
+            const double odds = std::max(0.0, std::min(1.0, g_cfg.windshearOdds));
+            for (auto& s : src) { s.pHourGustFront *= odds; s.pHourMicroburst *= odds; }
+        }
         for (const auto& l : g_ws.step(simT, src, env)) wsLog("%s", l.c_str());
         sendNow = true;
     }
     // 2) records to X-Plane (incremental, only between WXPlane's own batches)
     if ((sendNow || simT >= nextSend) && g_pendingTodo.empty() && g_pendingGone.empty()) {
         nextSend = simT + 30.0;
+        if (g_cfg.windshearOdds <= 0.001 && !g_ws.fields().empty()) { wsLog("windshear odds 0: %zu field(s) removed", g_ws.fields().size()); g_ws.clear(); }
         std::vector<wx::shear::ShearRecord> want = g_ws.records(simT + g_cfg.windshearLeadS, g_cfg.windshearGain);
         std::vector<wx::shear::ShearRecord> inRange;   // not "near": a macro in the Windows headers
         std::sort(want.begin(), want.end(), [&](const wx::shear::ShearRecord& a, const wx::shear::ShearRecord& b) {
@@ -3090,6 +3095,8 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     uiTurbGridTick(act.mapAltFt);
     if (act.refresh) menuHandler(nullptr, (void*)(intptr_t)kRefresh);
     if (act.maxTurbChanged || act.maxTurbReleased) g_cfg.maxTurbulence = std::max(0.0, std::min(1.0, act.maxTurb));
+    if (act.wsOddsChanged || act.wsOddsReleased) g_cfg.windshearOdds = std::max(0.0, std::min(1.0, act.wsOdds));
+    if (act.wsOddsReleased) wx::saveConfig(g_cfgPath, g_cfg);
     if (act.maxTurbReleased) {
         wx::saveConfig(g_cfgPath, g_cfg);
         if (g_cfg.enabled && g_haveLast) g_reapplyRequested = true;

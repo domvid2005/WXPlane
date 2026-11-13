@@ -208,6 +208,8 @@ TURBULENCE
   * Every nearby pilot report. Click one to open its details below it, and
     click again to close it.
   * Windshear near you.
+  * Windshear odds (0-1.0): how often gust fronts and microbursts form.
+    1.0 is the realistic rate; 0 means none at all (like Max turbulence 0).
   * Another turbulence add-on running (ActiveSky XP, xProTurb,
     XPRealistic ...): WXPlane leaves X-Plane's turbulence to it. A red
     TURBULENCE CONFLICT caution covers this tab and its controls are

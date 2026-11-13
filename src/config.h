@@ -100,6 +100,7 @@ struct Config {
     // Max turbulence (menu, bottom): 0 = no turbulence from WXPlane at all, 1 = full realism. Scales every turbulence
     // WXPlane sends: the real-data (EDR) turbulence, the storm turbulence and the gust turbulence at airports.
     double maxTurbulence = 1.0;
+    double windshearOdds = 1.0;         // 0..1: how often windshear forms (1 = the realistic rate; 0 = none, like Max turbulence 0)
     bool realisticTurbulence = true;
     bool turbReports = true;          // pilot reports raise the turbulence outside GTGN coverage (SIGMETs/AIRMETs are map-only)  // menu: Enable Realistic Turbulence (NOAA GTGN in the US, ECMWF estimate elsewhere)
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
