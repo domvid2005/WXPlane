@@ -1195,6 +1195,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
             for (int i = 0; i < 3; ++i)
                 if (i != host && x.clouds[i].coverage > 0 && x.clouds[i].baseM > h.baseM) ceil = std::min(ceil, x.clouds[i].baseM - 150.0f);
             if (topM > h.topM) h.topM = std::max(h.topM, std::min(topM, ceil));
+            if (cfg.rainDeckMaxTopM > 0 && h.topM > (float)cfg.rainDeckMaxTopM)   // test switch: the rain deck's top capped
+                h.topM = std::max(h.baseM + 300.0f, (float)cfg.rainDeckMaxTopM);
             const float topFt = h.topM / 0.3048f;
             if (x.maxAltFt < topFt) x.maxAltFt = topFt;
             return;   // steady rain: no storm turbulence or gusts

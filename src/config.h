@@ -18,6 +18,7 @@ struct Config {
     // Stratus look for overcast decks (low stratus and mid-level altostratus): between stratus (1) and cumulus (2). 1.0 renders as a smooth
     // sheet with hard vertical edges, so the default is a mix; broken low decks get halfway between this and low_cloud_type.
     double stratusCloudType = 1.5;
+    double rainDeckMaxTopM = 0;       // test switch (2026-11-13 KSMF): > 0 caps the top of a deck that carries steady rain at this height (m MSL); 0 = off
     bool modelTops = true;            // the tops of reported decks (and steady rain) from the global model's cloud cover, where it has cloud at the base
     bool modelClouds = true;          // cloud layers above 12,000 ft AGL from the global model's cloud cover on pressure levels
     bool oceanModelWeather = true;    // no airport within the search radius: the global model's surface weather around the aircraft
