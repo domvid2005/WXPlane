@@ -14,6 +14,7 @@
 #include <cstring>
 #include <sstream>
 #include <map>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <set>
@@ -1448,6 +1449,89 @@ void windshearTick() {
 }
 
 void windshearResend();
+// ---- The frame-time recorder (frame_check). Every frame's time is kept for the last 30 s (a flight loop of its own, called every
+// frame, does nothing else). Around every change WXPlane hands X-Plane (an update, a slice of one, a fade step) it compares the
+// frame rate of the 5 s before with the frame rate while the change goes in and 6 s after, and logs the difference and the longest
+// frame; and it watches X-Plane's clouds at the aircraft once a second until they stop changing, to log how long X-Plane took to
+// build them. It is how a change to the clouds is checked against "no more than 1 fps lost" in the sim (2026-11-13).
+std::deque<double> g_frameT;          // steady-clock seconds of each frame, last 30 s
+XPLMFlightLoopID g_frameLoop = nullptr;
+double steadyS() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
+float frameLoop(float, float, int, void*) {
+    const double t = steadyS();
+    g_frameT.push_back(t);
+    while (!g_frameT.empty() && t - g_frameT.front() > 30.0) g_frameT.pop_front();
+    return -1.0f;   // every frame
+}
+struct FrameWindow {
+    bool open = false;
+    double start = 0, lastSend = 0;
+    size_t records = 0, sends = 0;
+    double altFt = 0;
+    // the clouds at the aircraft, watched until they settle
+    bool watching = false;
+    double watchStart = 0, lastChange = 0, nextPoll = 0;
+    float sig[9] = {};
+    bool haveSig = false;
+} g_fw;
+void frameCheckMark(size_t records) {
+    if (!g_cfg.frameCheck) return;
+    const double t = steadyS();
+    if (!g_fw.open) {
+        g_fw = FrameWindow{};
+        g_fw.open = true; g_fw.start = t;
+        g_fw.altFt = g_drElev ? XPLMGetDatad(g_drElev) / 0.3048 : 0;
+        g_fw.watching = true; g_fw.watchStart = t; g_fw.lastChange = t; g_fw.nextPoll = t;
+    }
+    g_fw.lastSend = t; g_fw.records += records; ++g_fw.sends;
+}
+// the frames between a and b: average frame rate and the longest frame (ms)
+bool frameStats(double a, double b, double& fps, double& worstMs, double& medianMs) {
+    std::vector<double> dt;
+    for (size_t i = 1; i < g_frameT.size(); ++i)
+        if (g_frameT[i] > a && g_frameT[i] <= b) dt.push_back(g_frameT[i] - g_frameT[i - 1]);
+    if (dt.size() < 10) return false;
+    double sum = 0, worst = 0;
+    for (double d : dt) { sum += d; worst = std::max(worst, d); }
+    fps = (double)dt.size() / sum;
+    worstMs = worst * 1000.0;
+    std::nth_element(dt.begin(), dt.begin() + (long)(dt.size() / 2), dt.end());
+    medianMs = dt[dt.size() / 2] * 1000.0;
+    return true;
+}
+void frameCheckTick() {
+    if (!g_cfg.frameCheck) return;
+    const double t = steadyS();
+    if (g_fw.watching && t >= g_fw.nextPoll && g_drLat && g_drLon && g_drElev) {   // X-Plane's clouds at the aircraft, once a second
+        g_fw.nextPoll = t + 1.0;
+        XPLMWeatherInfo_t q;
+        std::memset(&q, 0, sizeof q);
+        q.structSize = sizeof q;
+        XPLMGetWeatherAtLocation(XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), XPLMGetDatad(g_drElev), &q);
+        float sig[9];
+        for (int k = 0; k < 3; ++k) { sig[3 * k] = q.cloud_layers[k].coverage; sig[3 * k + 1] = q.cloud_layers[k].alt_base; sig[3 * k + 2] = q.cloud_layers[k].alt_top; }
+        bool changed = !g_fw.haveSig;
+        for (int k = 0; k < 9 && !changed; ++k) changed = std::fabs(sig[k] - g_fw.sig[k]) > ((k % 3) == 0 ? 0.01f : 5.0f);
+        if (changed) { std::memcpy(g_fw.sig, sig, sizeof sig); if (g_fw.haveSig) g_fw.lastChange = t; g_fw.haveSig = true; }
+        if (t - g_fw.lastChange >= 10.0 || t - g_fw.watchStart > 120.0) {
+            g_fw.watching = false;
+            if (t - g_fw.watchStart > 120.0) logf("frame check: X-Plane's clouds at the aircraft were still changing 2 min after the weather change");
+            else if (g_fw.lastChange - g_fw.watchStart < 0.5) logf("frame check: X-Plane's clouds at the aircraft did not change");
+            else logf("frame check: X-Plane's clouds at the aircraft settled %.0f s after the weather change", g_fw.lastChange - g_fw.watchStart);
+        }
+    }
+    if (!g_fw.open || t - g_fw.lastSend < 6.0) return;
+    g_fw.open = false;
+    double fb, wb, mb, fd, wd, md;
+    if (!frameStats(g_fw.start - 5.0, g_fw.start, fb, wb, mb) || !frameStats(g_fw.start, g_fw.lastSend + 6.0, fd, wd, md)) {
+        logf("frame check: weather change (%zu records in %zu step%s) - too few frames to compare (paused or loading)", g_fw.records, g_fw.sends, g_fw.sends == 1 ? "" : "s");
+        return;
+    }
+    logf("frame check: weather change at %.0f ft (%zu records in %zu step%s over %.1f s): %.1f fps before, %.1f during (%+.1f fps); longest frame %.0f ms (usually %.0f ms)%s",
+         g_fw.altFt, g_fw.records, g_fw.sends, g_fw.sends == 1 ? "" : "s", g_fw.lastSend - g_fw.start, fb, fd, fd - fb, wd, mb,
+         (fb - fd > 1.0 || wd > 2.5 * mb + 10.0) ? "  ** over the 1 fps / hitch limit **" : "");
+}
+
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
     const bool immediateNow = g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup));
@@ -1495,7 +1579,7 @@ void flushPending() {
     if (g_pendingReplace) windshearResend();
     XPLMEndWeatherUpdate(g_pendingReplace ? 0 : 1 /*0: replaces all our previous records*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     if (g_pendingTodo.empty()) g_pendingReplace = false;
-    if (sent || erased) { g_lastSendAt = Clock::now(); g_lastSendImmediate = immediateNow; }
+    if (sent || erased) { g_lastSendAt = Clock::now(); g_lastSendImmediate = immediateNow; frameCheckMark(sent + erased); }
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     const double msSets = std::chrono::duration<double, std::milli>(tSets - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued): %.0f ms setting records, %.0f ms in X-Plane's end of update",
@@ -2962,6 +3046,7 @@ float flightLoop(float, float, int, void*) {
             }
         }
     }
+    frameCheckTick();
     return 0.25f;
 }
 
@@ -3395,6 +3480,7 @@ PLUGIN_API void XPluginStop(void) {
         XPLMDestroyFlightLoop(g_loop);
         g_loop = nullptr;
     }
+    if (g_frameLoop) { XPLMDestroyFlightLoop(g_frameLoop); g_frameLoop = nullptr; }
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
 #ifndef WX_HARNESS
     stopSearch();
@@ -3430,6 +3516,16 @@ PLUGIN_API int XPluginEnable(void) {
         g_loop = XPLMCreateFlightLoop(&p);
     }
     XPLMScheduleFlightLoop(g_loop, 2.0f, 1);
+    if (!g_frameLoop) {   // the frame-time recorder's own loop (every frame, after the flight model: nothing but a time stamp)
+        XPLMCreateFlightLoop_t p;
+        std::memset(&p, 0, sizeof p);
+        p.structSize = sizeof p;
+        p.phase = xplm_FlightLoop_Phase_AfterFlightModel;
+        p.callbackFunc = frameLoop;
+        p.refcon = nullptr;
+        g_frameLoop = XPLMCreateFlightLoop(&p);
+    }
+    if (g_frameLoop) XPLMScheduleFlightLoop(g_frameLoop, g_cfg.frameCheck ? -1.0f : 0.0f, 1);
 
     g_pluginEnabled = true;
     g_everRequested = false;

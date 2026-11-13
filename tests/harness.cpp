@@ -57,7 +57,13 @@ void XPLMAppendMenuSeparator(XPLMMenuID) { g_menuNames.push_back("---"); }
 void XPLMSetMenuItemName(XPLMMenuID, int i, const char* n, int) { g_menuNames[(size_t)i] = n; }
 void XPLMCheckMenuItem(XPLMMenuID, int, XPLMMenuCheck) {}
 void XPLMEnableMenuItem(XPLMMenuID, int, int) {}
-XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t* p) { g_cb = p->callbackFunc; return (void*)3; }
+// The plugin's main loop, and the frame-time recorder's: the harness calls one through g_cb, which runs both (a "frame" per call)
+XPLMFlightLoop_f g_mainCb = nullptr, g_frameCb = nullptr;
+float bothLoops(float a, float b, int c, void* r) { if (g_frameCb) g_frameCb(a, b, c, r); return g_mainCb ? g_mainCb(a, b, c, r) : 0.0f; }
+XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t* p) {
+    if (p->phase == xplm_FlightLoop_Phase_AfterFlightModel) { g_frameCb = p->callbackFunc; return (void*)4; }
+    g_mainCb = p->callbackFunc; g_cb = bothLoops; return (void*)3;
+}
 void XPLMDestroyFlightLoop(XPLMFlightLoopID) {}
 void XPLMScheduleFlightLoop(XPLMFlightLoopID, float, int) {}
 static float g_turbArr[13] = {0}; static int g_turbWrites = 0;
@@ -1182,6 +1188,11 @@ int main() {
                 }
             std::printf("  layer tops standing far above a neighbour's (spires): %d\n", spires);
             CHECK(spires == 0);
+            // the frame-time recorder logged the weather change (the frame rates, or why it could not compare) and X-Plane's clouds
+            for (int i = 0; i < 400 && g_logAll.find("frame check: X-Plane's clouds") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+            const size_t fc = g_logAll.find("frame check: weather change");
+            std::printf("  frame check: %s\n", fc == std::string::npos ? "(none)" : g_logAll.substr(fc, g_logAll.find('\n', fc) - fc).c_str());
+            CHECK(fc != std::string::npos && g_logAll.find("frame check: X-Plane's clouds") != std::string::npos);
         }
         if (const char* dp = std::getenv("WX_DUMP")) {   // for the cloud-edge picture (tools)
             FILE* f = std::fopen(dp, "w");

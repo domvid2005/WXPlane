@@ -299,6 +299,12 @@ SETTINGS
                                        allows X-Plane to fade new weather in
       manual_refresh_immediate  (0)    1 = Refresh applies at once, with
                                        a short pause, instead of fading in
+      frame_check               (1)    the frame-time recorder: after every
+                                       weather change, Log.txt gets a
+                                       "frame check" line (frame rate
+                                       before and during the change, the
+                                       longest frame) and when X-Plane's
+                                       clouds at the aircraft settled
 
   The README in the source repository lists every key. If something goes
   wrong, delete WXPlane.cfg and WXPlane writes a fresh one with the

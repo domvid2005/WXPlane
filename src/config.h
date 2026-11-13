@@ -8,6 +8,7 @@ constexpr int kConfigVersion = 30;   // bumped when defaults change; older confi
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
+    bool frameCheck = true;       // the frame-time recorder: logs the frame rate around every weather change, and when X-Plane's clouds settle
     bool nightDim = true;         // the in-sim window dims with the daylight (X-Plane's auto exposure counts it at night)
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
     // X-Plane cloud type for low/overcast layers: 1 = stratus (smooth sheet, curtain-like edges), 2 = cumulus, 3 = cumulonimbus.

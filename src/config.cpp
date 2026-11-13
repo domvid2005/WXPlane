@@ -34,6 +34,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "enabled") c.enabled = toBool(v);
         else if (k == "use_atis") c.useAtis = toBool(v);
         else if (k == "night_dim") c.nightDim = toBool(v);
+        else if (k == "frame_check") c.frameCheck = toBool(v);
         else if (k == "use_aloft") c.useAloft = toBool(v);
         else if (k == "update_minutes") c.updateMinutes = (int)(d < 1 ? 1 : d);
         else if (k == "search_nm") c.searchNm = d < 20 ? 20 : (d > 400 ? 400 : d);
@@ -197,6 +198,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "enabled = " << (c.enabled ? 1 : 0) << "\n"
       << "use_atis = " << (c.useAtis ? 1 : 0) << "\n"
       << "night_dim = " << (c.nightDim ? 1 : 0) << "\n"
+      << "frame_check = " << (c.frameCheck ? 1 : 0) << "\n"
       << "use_aloft = " << (c.useAloft ? 1 : 0) << "\n"
       << "update_minutes = " << c.updateMinutes << "\n"
       << "search_nm = " << c.searchNm << "\n"
