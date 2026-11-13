@@ -474,6 +474,23 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 outReal[i][k] = true;
             }
         }
+        // A layer the smoothing made in a slot that was empty here (the neighbours' deck in that slot, thinned) must lie in its slot's
+        // order: above the layer in the slot below it and under the one above. A dry record near KSMF took a neighbour's 2,170 m layer
+        // into slot 2, under its own overcast in slot 1 (3,055 m); X-Plane blends slot by slot, and the thin layer above the overcast
+        // (27 % at 5,424 m in the airport's slot 2) did not show. Such a layer is left out.
+        for (size_t i = 0; i < n; ++i)
+            for (int k = 0; k < K; ++k) {
+                if (isReal[i][k] || !outReal[i][k]) continue;
+                const XPLMWeatherInfoClouds_t& o = out[i][k];
+                bool fits = true;
+                for (int m = 0; m < K && fits; ++m) {
+                    if (m == k || !outReal[i][m]) continue;
+                    const XPLMWeatherInfoClouds_t& p = out[i][m];
+                    if (m < k && o.alt_base < p.alt_top + 40.0f) fits = false;
+                    if (m > k && o.alt_top > p.alt_base - 40.0f) fits = false;
+                }
+                if (!fits) { out[i][k].coverage = 0; out[i][k].cloud_type = 0; out[i][k].alt_base = 0; out[i][k].alt_top = 0; outReal[i][k] = false; }
+            }
         for (size_t i = 0; i < n; ++i) {
             for (int k = 0; k < K; ++k) todo[i].rec.info.cloud_layers[k] = out[i][k];
             isReal[i] = outReal[i];

@@ -1189,6 +1189,19 @@ int main() {
                 }
             std::printf("  layer tops standing far above a neighbour's (spires): %d\n", spires);
             CHECK(spires == 0);
+            // slot order: in every record a layer lies above the one in the slot below it (KSMF 2026-11-13: a dry record's slot 2 at
+            // 2,170 m under its overcast in slot 1; X-Plane blends slot by slot and dropped the airport's slot-2 layer). Storm records
+            // may overlap on purpose, so only the order of the bases is checked there.
+            int inverted = 0;
+            for (size_t i = before; i < g_calls.size(); ++i) {
+                const auto& L = g_calls[i].info.cloud_layers;
+                for (int k = 1; k < 3; ++k) {
+                    if (!(L[k].coverage > 0.0f)) continue;
+                    for (int m = 0; m < k; ++m) if (L[m].coverage > 0.0f && L[k].alt_base < L[m].alt_base - 1.0f) { ++inverted; break; }
+                }
+            }
+            std::printf("  layers below the layer in the slot under them: %d\n", inverted);
+            CHECK(inverted == 0);
             // the frame-time recorder logged the weather change (the frame rates, or why it could not compare) and X-Plane's clouds
             for (int i = 0; i < 400 && g_logAll.find("frame check: X-Plane's clouds") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
             const size_t fc = g_logAll.find("frame check: weather change");
