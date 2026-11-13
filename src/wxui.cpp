@@ -1,6 +1,7 @@
 #include "wxui.h"
 
 #include <algorithm>
+#include <map>
 #include <cctype>
 #include <cfloat>
 #include <cmath>
@@ -171,8 +172,11 @@ std::string windShort(const Report& r) {
 // Airports tab has its own, the winds-aloft tables theirs, and the map (popups, pilot reports) its own. The part being drawn
 // sets which (UnitScope); the switches and the clickable boxes change that set only.
 struct Units { bool tempF = false, windMag = false; };
-Units g_unitsHome, g_unitsAir, g_unitsAloft, g_unitsMap;
-Units* g_units = &g_unitsMap;
+// One set of units for every page (2026-11-12: "sync the true / magnetic and temperature toggles on all pages"): the names stay, so
+// each page still says which it uses, but they are the same set
+Units g_unitsAll;
+Units &g_unitsHome = g_unitsAll, &g_unitsAir = g_unitsAll, &g_unitsAloft = g_unitsAll, &g_unitsMap = g_unitsAll;
+Units* g_units = &g_unitsAll;
 struct UnitScope { Units* prev; explicit UnitScope(Units& u) : prev(g_units) { g_units = &u; } ~UnitScope() { g_units = prev; } };
 bool& windMagnetic() { return g_units->windMag; }
 // the airport card's and map popups' wind: true or magnetic, swapped by clicking the small box with the other one
@@ -213,8 +217,8 @@ void windRefSwitch(const char* id, float rightGap = 0.0f, bool withLock = false)
     const float lt = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "TEMP").x, lw = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "WIND").x;
     const float pad = 6, inner = 4, gapG = 12;
     // withLock: a North Lock / Heading Lock switch first, in the same bubble (the wind dial's switch: the arrows turn with it)
-    const char* lockTxt = dialHeadingUp() ? "Heading Lock" : "North Lock";
-    const float lockW = withLock ? std::max(bw("Heading Lock"), bw("North Lock")) + gapG : 0.0f;
+    const float lk = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "LOCK").x;
+    const float lockW = withLock ? lk + inner + bw("North") + 2 + bw("Heading") + gapG : 0.0f;
     const float boxW = pad + lockW + lt + inner + bw("°C") + 2 + bw("°F") + gapG + lw + inner + bw("°T") + 2 + bw("°M") + pad;
     const float boxH = ImGui::GetTextLineHeight() + 4;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - boxW - rightGap));
@@ -231,24 +235,13 @@ void windRefSwitch(const char* id, float rightGap = 0.0f, bool withLock = false)
             const char* t = m ? b : a;
             ImGui::SetCursorScreenPos(ImVec2(x, p0.y + 2));
             ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
-            if (ImGui::SmallButton(t)) { if (which == 0) tempF() = m == 1; else windMagnetic() = m == 1; }
+            if (ImGui::SmallButton(t)) { if (which == 0) tempF() = m == 1; else if (which == 1) windMagnetic() = m == 1; else dialHeadingUp() = m == 1; }
             ImGui::PopStyleColor();
             x += bw(t) + 2;
         }
         x += gapG - 2;
     };
-    if (withLock) {   // drawn like the wind dial's mode box: dark, blue text and outline in Heading Lock (flipped while hovered)
-        const float lwb = std::max(bw("Heading Lock"), bw("North Lock")), lh2 = ImGui::GetTextLineHeight();
-        const ImVec2 b0(x, p0.y + 2), b1(x + lwb, p0.y + 2 + lh2);
-        ImGui::SetCursorScreenPos(b0);
-        if (ImGui::InvisibleButton("lock", ImVec2(lwb, lh2))) dialHeadingUp() = !dialHeadingUp();
-        const bool blue = dialHeadingUp() != ImGui::IsItemHovered();
-        dl->AddRectFilled(b0, b1, cInset, 4.0f);
-        dl->AddRect(b0, b1, blue ? cLockBlue : IM_COL32(58, 62, 70, 255), 4.0f);
-        const ImVec2 ts = ImGui::CalcTextSize(lockTxt);
-        dl->AddText(ImVec2(b0.x + (lwb - ts.x) * 0.5f, b0.y + (lh2 - ts.y) * 0.5f), blue ? cLockBlue : cSoft, lockTxt);
-        x += lwb + gapG;
-    }
+    if (withLock) group("LOCK", lk, "North", "Heading", dialHeadingUp(), 2);   // North / Heading Lock, styled like the units
     group("WIND", lw, "°T", "°M", windMagnetic(), 1);
     group("TEMP", lt, "°C", "°F", tempF(), 0);
     ImGui::SetCursorScreenPos(p0);
@@ -837,6 +830,9 @@ std::string pirepKey(const hz::Pirep& p) { return p.raw + "|" + std::to_string((
 // 2: compact, and a click glides the Map tab's map to the report and opens its window there
 void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, std::vector<std::string>& open, int mode = 0);
 std::string pirepConditions(const hz::Pirep& p);
+// the list's real header height and row step (measured while drawing it; the caller sizes it to whole rows from the last frame's)
+struct RowMetrics { float head = 0, step = 0; int shownFrom = 0, shownTo = 0; };
+RowMetrics& pirepMetrics(const std::string& id) { static std::map<std::string, RowMetrics> m; return m[id]; }
 bool pirepListed(const hz::Pirep& p);   // a report the lists show (it says something)
 std::string advKey(const hz::Advisory& a) { return a.name + "|" + std::to_string((long long)a.from) + "|" + std::to_string(a.pts.size()); }
 
@@ -1595,6 +1591,14 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const std::string t = mapLocalTime() ? clockText(d.now + (std::time_t)off, false) + " " + (est ? "~" : "") + zoneText(tLat, tLon, off, d.now) : clockText(d.now, false) + "Z";
             if (bubble(ImVec2(p.x + 8, p.y + 8), mapLocalTime() ? "LOCAL" : "TIME", t.c_str(), mapLocalTime(), false).first) bubbleHit = 3;
         }
+        {   // the units, as bubbles at the bottom left (lit blue when °M / °F, like LOCAL): a click swaps them on every page
+            const char* wt = windMagnetic() ? "°M" : "°T";
+            const char* tt = tempF() ? "°F" : "°C";
+            const float bh = ImGui::GetTextLineHeight() + 6, y = p.y + size - 8 - bh;
+            const auto wb = bubble(ImVec2(p.x + 8, y), "WIND", wt, windMagnetic(), false);
+            if (wb.first) bubbleHit = 4;
+            if (bubble(ImVec2(p.x + 8 + wb.second + 6, y), "TEMP", tt, tempF(), false).first) bubbleHit = 5;
+        }
         const char* lk = dialHeadingUp() ? "Heading Lock" : "North Lock";
         const char* ce = "Center on aircraft";
         const float wl = ImGui::CalcTextSize(lk).x + 12, wc = ImGui::CalcTextSize(ce).x + 12;
@@ -1640,7 +1644,11 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         } else if (hov && hitKind) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (bubbleHit && hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (ImGui::IsItemDeactivated() && !dragged && hov && bubbleHit) {   // a bubble: re-centre, or switch North / Heading Lock
-            if (bubbleHit == 1) recentering() = true; else if (bubbleHit == 3) mapLocalTime() = !mapLocalTime(); else dialHeadingUp() = !dialHeadingUp();
+            if (bubbleHit == 1) recentering() = true;
+            else if (bubbleHit == 3) mapLocalTime() = !mapLocalTime();
+            else if (bubbleHit == 4) windMagnetic() = !windMagnetic();
+            else if (bubbleHit == 5) tempF() = !tempF();
+            else dialHeadingUp() = !dialHeadingUp();
         } else if (ImGui::IsItemDeactivated() && !dragged && hov) {
             if (hitKind) selOpen(hitKind, hitKey, hitAt);   // another window opens beside the others (as many as fit)
             else mapSel().items.clear();
@@ -1991,9 +1999,9 @@ void toggleButton(const char* label, bool& v) {
 }
 
 void layerButtons(bool lockButton) {
-    toggleButton("Radar", showRadar());
-    wrapBefore("Map", 4);
     toggleButton("Map", showMap());
+    wrapBefore("Radar", 4);
+    toggleButton("Radar", showRadar());
     wrapBefore("Airports", 4);
     toggleButton("Airports", showAirports());
     wrapBefore("Turb", 4);
@@ -2081,10 +2089,14 @@ void altitudeSlider(const UiData& d, float w, float h) {
 void radarPanel(const UiData& d, const UiFonts& f, bool big) {
     const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
     sectionTitle(f, radarHeader(d).c_str());
-    if (big) { UnitScope us(g_unitsAir); windRefSwitch("wrMap", rangeButtonsWidth() + 10); }   // the map's units: the Airports tab's
-    ImGui::SameLine(right - rangeButtonsWidth());
-    rangeButtons();
-    if (big) layerButtons(true);   // the home page's map shows the Map tab's layers, without buttons of its own
+    if (big) {   // the Map tab: the layer buttons, with the range on their line (the units are bubbles on the map itself)
+        layerButtons(true);
+        ImGui::SameLine(right - rangeButtonsWidth());
+        rangeButtons();
+    } else {     // the home page's map shows the Map tab's layers, without buttons of its own
+        ImGui::SameLine(right - rangeButtonsWidth());
+        rangeButtons();
+    }
     mutedWrapped(radarSubtitle(d));
     const float sliderW = big ? 50.0f : 0.0f, gap = big ? 10.0f : 0.0f;
     const float avail = ImGui::GetContentRegionAvail().x - sliderW - gap;
@@ -2125,12 +2137,18 @@ void homePireps(const UiData& d, const UiFonts& f) {
     if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", shown).c_str()); }
     // whole rows only: the list is as tall as its rows (all of them when they fit; otherwise as many whole rows as fit, and it
     // scrolls), so no half-cut row hangs at the bottom of the panel
-    const float rowH = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
+    // the real header height and row step, measured the last time it was drawn (the first frame: an estimate)
+    const RowMetrics& rm = pirepMetrics("homepireps");
+    const float est = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
+    const float rowH = rm.step > 1 ? rm.step : est, headH = rm.head > 1 ? rm.head : est;
     const float avail = ImGui::GetContentRegionAvail().y - 2;
-    const int fitRows = std::max(1, (int)std::floor((avail - rowH) / rowH));   // (the header row first)
-    const float lh = rowH * (1 + std::min<int>(fitRows, (int)shown)) + 2;
+    const int fitRows = std::max(1, (int)std::floor((avail - headH - 1) / rowH));
+    if (d.reports && (int)shown > fitRows) {   // more than fit: which ones are shown (the wheel over the list turns it a row at a time)
+        ImGui::SameLine();
+        muted(fmt("· %d-%d, scroll for more", rm.shownFrom + 1, std::max(rm.shownFrom + 1, rm.shownTo)).c_str());
+    }
     if (!d.reports || shown == 0) mutedWrapped("No pilot reports in the last 90 minutes.");
-    else if (avail > 40) { static std::vector<std::string> open; pirepTable(d, f, "homepireps", ImVec2(0, lh), open, 1); }
+    else if (avail > 40) { static std::vector<std::string> open; pirepTable(d, f, "homepireps", ImVec2(0, -(float)std::min<int>(fitRows, (int)shown)), open, 1); }
 }
 
 
@@ -2169,7 +2187,15 @@ enum PirepSort { kPrDist = 1, kPrLevel, kPrType, kPrCond, kPrAcft, kPrAge };
 // are listed nearest first. A click on a row opens its details under it (another click closes them).
 void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, std::vector<std::string>& open, int mode) {
     const bool compact = mode > 0;
-    const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX |
+    const float tableTop = ImGui::GetCursorScreenPos().y;
+    float row0 = -1;
+    // size.y < 0: a page of -size.y whole rows, no scroll area (a scroll area always showed a cut row at its bottom edge, read as a
+    // blank row on the home page): the mouse wheel over it turns the page a row at a time
+    const int pageRows = size.y < 0 ? (int)std::lround(-size.y) : 0;
+    static std::map<std::string, int> firstOf;
+    int& first = firstOf[id];
+    if (pageRows) size.y = 0;
+    const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | (pageRows ? 0 : ImGuiTableFlags_ScrollY) | ImGuiTableFlags_PadOuterX |
                                ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | ImGuiTableFlags_NoClip;
     const float tableRight = ImGui::GetCursorScreenPos().x + (size.x > 0 ? size.x : ImGui::GetContentRegionAvail().x);
     if (!ImGui::BeginTable(id, 6, fl, size)) return;
@@ -2205,7 +2231,9 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
         if (col != kPrAcft && ka != kb) return desc ? ka > kb : ka < kb;
         return dd(a) < dd(b);   // ties: nearest first
     });
-    for (size_t i = 0; i < v.size() && i < 200; ++i) {
+    if (pageRows) first = std::max(0, std::min(first, (int)v.size() - pageRows));
+    const size_t i0 = pageRows ? (size_t)first : 0, i1 = pageRows ? std::min(v.size(), i0 + (size_t)pageRows) : std::min<size_t>(v.size(), 200);
+    for (size_t i = i0; i < i1; ++i) {
         const hz::Pirep& p = *v[i];
         const std::string k = pirepKey(p);
         const auto it = std::find(open.begin(), open.end(), k);
@@ -2213,6 +2241,11 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
         ImGui::PushID(k.c_str());
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
+        {   // measure: where the first row starts (below the header), and the step to the next
+            const float y = ImGui::GetCursorScreenPos().y + ImGui::GetScrollY();
+            if (i == i0) { row0 = y; pirepMetrics(id).head = y - ImGui::GetStyle().CellPadding.y - tableTop; }
+            else if (i == i0 + 1 && row0 >= 0 && !(std::find(open.begin(), open.end(), pirepKey(*v[i0])) != open.end())) pirepMetrics(id).step = y - row0;
+        }
         if (ImGui::Selectable("##row", mode != 2 && isOpen, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
             if (mode == 2) {   // to the report on the map, and its window
                 if (d.havePos) { panGoal() = ImVec2((float)((p.lon - d.lon) * 60.0 * std::cos(d.lat * kPi / 180.0)), (float)((p.lat - d.lat) * 60.0)); panGliding() = true; recentering() = false; }
@@ -2270,6 +2303,11 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
         ImGui::PopID();
     }
     ImGui::EndTable();
+    if (pageRows && ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f) {   // a row at a time, nearest end first
+        first -= (int)std::lround(ImGui::GetIO().MouseWheel);
+        first = std::max(0, std::min(first, (int)v.size() - pageRows));
+    }
+    pirepMetrics(id).shownFrom = (int)i0; pirepMetrics(id).shownTo = (int)i1;
 }
 
 struct AloftRow { float ft; float dir, kt; float tempC; bool hasT; };
@@ -2626,7 +2664,8 @@ const ImVec2 kTabPad(17, 4);   // the same text, a shorter tab
 float tabWidth(const char* label) {
     ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
     const float fs = tf->FontSize * ImGui::GetIO().FontGlobalScale;   // the atlas is made at the screen's pixel scale
-    return tf->CalcTextSizeA(fs, FLT_MAX, 0.0f, label).x + 2 * kTabPad.x;
+    // the tab bar keeps the frame padding it was begun with (ImGui), so the tabs' side padding is the window's FramePadding.x
+    return tf->CalcTextSizeA(fs, FLT_MAX, 0.0f, label).x + 2 * ImGui::GetStyle().FramePadding.x;
 }
 bool bigTab(const char* label, bool* open, ImGuiTabItemFlags flags) {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, kTabPad);
@@ -2914,6 +2953,19 @@ void tabAloft(const UiData& d, const UiFonts& f) {
     panelEnd();
 }
 
+// The g meter's record: sampled every frame the window is drawn, whichever tab is open, so the trace is there when the Turbulence tab
+// is opened (the last minute)
+struct GSample { double t; float g; };
+std::vector<GSample>& gHistory() { static std::vector<GSample> h; return h; }
+void gSample(const UiData& d) {
+    auto& hist = gHistory();
+    const double now = ImGui::GetTime();
+    if (d.haveG && (hist.empty() || now - hist.back().t > 1.0 / 30.0)) hist.push_back({now, d.gNormal});
+    size_t drop = 0;
+    while (drop < hist.size() && now - hist[drop].t > 60.0) ++drop;
+    if (drop) hist.erase(hist.begin(), hist.begin() + (long)drop);
+}
+
 // The Turbulence tab's live panel: the EDR WXPlane is giving X-Plane at the aircraft now (after Max turbulence), as a bar over the
 // intensity bands, and a g meter of what the aircraft feels (X-Plane's normal load factor): the value, its range over the last
 // minute, and a 30 s trace around 1 g.
@@ -2954,11 +3006,8 @@ void turbLive(const UiData& d, const UiFonts& f) {
     }
     ImGui::Spacing(); ImGui::Spacing();
     // 2) the g meter
-    struct GS { double t; float g; };
-    static std::vector<GS> hist;
+    const auto& hist = gHistory();
     const double now = ImGui::GetTime();
-    if (d.haveG && (hist.empty() || now - hist.back().t > 1.0 / 30.0)) hist.push_back({now, d.gNormal});
-    while (!hist.empty() && now - hist.front().t > 60.0) hist.erase(hist.begin());
     float gMin = 1e9f, gMax = -1e9f;
     for (const auto& q : hist) { gMin = std::min(gMin, q.g); gMax = std::max(gMax, q.g); }
     ImGui::PushFont(f.bold); ImGui::TextUnformatted("Load factor"); ImGui::PopFont();
@@ -2968,27 +3017,43 @@ void turbLive(const UiData& d, const UiFonts& f) {
     const ImU32 gc = dev < 0.15f ? IM_COL32(236, 239, 244, 255) : (dev < 0.35f ? cWarn : cDown);
     ImGui::PushStyleColor(ImGuiCol_Text, v4(gc)); ImGui::Text("%.2f g", d.gNormal); ImGui::PopStyleColor();
     ImGui::SameLine(); muted(fmt("last minute %.2f to %.2f g", gMin, gMax).c_str());
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float gh = std::max(80.0f, ImGui::GetContentRegionAvail().y - 26), gw = W;
+    // the graph: g on the left (labels in their own margin, never over the trace), seconds back along the bottom, newest on the right
+    const float lfs = ImGui::GetFontSize() * 0.75f;
+    const float axisW = f.body->CalcTextSizeA(lfs, FLT_MAX, 0, "2.0 g").x + 8, axisH = lfs + 6;
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float totalH = std::max(90.0f, std::min(ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeightWithSpacing() - 6, 260.0f));
+    const float gh = totalH - axisH, gw = W - axisW;
+    const ImVec2 p(p0.x + axisW, p0.y);
     dl->AddRectFilled(p, ImVec2(p.x + gw, p.y + gh), cInset, 4.0f);
-    // scale: 1 g in the middle, +-1 g at the edges (fixed, so a bump looks as big as it is)
-    auto yOf = [&](float g) { return p.y + gh * 0.5f - (g - 1.0f) * gh * 0.5f; };
+    // 0..2 g, 1 g in the middle (fixed, so a bump looks as big as it is)
+    auto yOf = [&](float g) { return p.y + 4 + (gh - 8) * (1.0f - g / 2.0f); };
     for (float g : {0.0f, 0.5f, 1.0f, 1.5f, 2.0f}) {
         const float y = yOf(g);
         dl->AddLine(ImVec2(p.x, y), ImVec2(p.x + gw, y), g == 1.0f ? IM_COL32(90, 96, 108, 255) : IM_COL32(44, 47, 54, 255), 1.0f);
-        dl->AddText(f.body, ImGui::GetFontSize() * 0.72f, ImVec2(p.x + 4, y - ImGui::GetFontSize() * 0.75f), cMuted, fmt("%.1f g", g).c_str());
+        const std::string t = fmt("%.1f g", g);
+        const ImVec2 ts = f.body->CalcTextSizeA(lfs, FLT_MAX, 0, t.c_str());
+        dl->AddText(f.body, lfs, ImVec2(p0.x + axisW - 6 - ts.x, y - ts.y * 0.5f), cMuted, t.c_str());
     }
-    // the last 30 s, newest on the right
+    for (int sec = 0; sec <= 30; sec += 5) {   // the time axis: how far back the trace goes (30 s)
+        const float x = p.x + gw * (1.0f - sec / 30.0f);
+        if (sec > 0 && sec < 30) dl->AddLine(ImVec2(x, p.y), ImVec2(x, p.y + gh), IM_COL32(38, 41, 47, 255), 1.0f);
+        const std::string t = sec == 0 ? std::string("now") : fmt("-%ds", sec);
+        const ImVec2 ts = f.body->CalcTextSizeA(lfs, FLT_MAX, 0, t.c_str());
+        const float tx = std::max(p.x, std::min(p.x + gw - ts.x, x - ts.x * 0.5f));
+        dl->AddText(f.body, lfs, ImVec2(tx, p.y + gh + 3), cMuted, t.c_str());
+    }
     std::vector<ImVec2> pts;
     for (const auto& q : hist) {
         const double age = now - q.t;
         if (age > 30.0) continue;
         pts.push_back(ImVec2(p.x + gw * (float)(1.0 - age / 30.0), std::max(p.y + 1, std::min(p.y + gh - 1, yOf(q.g)))));
     }
+    dl->PushClipRect(p, ImVec2(p.x + gw, p.y + gh), true);
     if (pts.size() >= 2) dl->AddPolyline(pts.data(), (int)pts.size(), cAccent, ImDrawFlags_None, 1.8f);
     if (!pts.empty()) dl->AddCircleFilled(pts.back(), 3.5f, gc);
-    ImGui::Dummy(ImVec2(gw, gh));
-    muted("30 s · 1 g is level flight; X-Plane's load factor at the aircraft");
+    dl->PopClipRect();
+    ImGui::Dummy(ImVec2(W, totalH));
+    muted("1 g is level flight; X-Plane's load factor at the aircraft, the last 30 s");
 }
 
 // Another add-on controls the turbulence (ActiveSky XP, xProTurb ...): a red caution over the Turbulence tab, whose controls are
@@ -3324,6 +3389,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     if (d.forceRange >= 0) { radarRange() = d.forceRange; mapPan() = ImVec2((float)d.forcePanEastNm, (float)d.forcePanNorthNm); recentering() = false; }
     if (d.forceLocalTime >= 0) mapLocalTime() = d.forceLocalTime == 1;
     updateViewRot(d);
+    gSample(d);   // the Turbulence tab's g meter keeps recording on every tab
     updateShownRange();
     updateMapAlt(d);
     updateWinds(d);
@@ -3449,7 +3515,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
                     ImDrawList* tdl = ImGui::GetWindowDrawList();
                     tdl->PushClipRect(r0, ImVec2(r1.x - 1, r1.y), true);
                     const float fs = tf->FontSize * ImGui::GetIO().FontGlobalScale;
-                    tdl->AddText(tf, fs, ImVec2(r0.x + kTabPad.x, r0.y + (r1.y - r0.y - fs) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), "Turbulence");
+                    tdl->AddText(tf, fs, ImVec2(r0.x + ImGui::GetStyle().FramePadding.x, r0.y + (r1.y - r0.y - fs) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), "Turbulence");   // where the other tabs' labels start
                     tdl->PopClipRect();
                 }
                 if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }

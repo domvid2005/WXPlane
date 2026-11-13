@@ -234,6 +234,12 @@ int main(int argc, char** argv) {
         a.raw = "UA /OV MHT180010/TM 0230/FL070/TP DH8D/IC MOD RIME 060-080"; snap->pireps.push_back(a);
         hz::Pirep b; b.lat = 41.9; b.lon = -70.6; b.altFt = 3000; b.kind = "PIREP"; b.acType = "C172"; b.obsTime = now - 2400; b.sky = "OVC 025"; b.wx = "-RA";
         b.raw = "UA /OV PVC270015/TM 0210/FL030/TP C172/SK OVC025/WX -RA"; snap->pireps.push_back(b);
+        for (int k = 0; k < 9; ++k) {   // more reports than the home page's list can show at once (it scrolls, in whole rows)
+            hz::Pirep q; q.lat = 41.2 + 0.31 * k; q.lon = -73.4 + 0.27 * k; q.altFt = 4000 + 3500 * k; q.kind = "PIREP"; q.acType = k % 2 ? "CRJ9" : "B39M";
+            q.obsTime = now - 300 * (k + 2); q.intensity = k % 3 == 0 ? "LGT" : (k % 3 == 1 ? "NEG" : "LGT-MOD");
+            q.raw = "UA /OV BDL" + std::to_string(100 + k) + "/TM 0220/FL" + std::to_string((int)(q.altFt / 100)) + "/TP " + q.acType + "/TB " + q.intensity;
+            snap->pireps.push_back(q);
+        }
         hz::Pirep c; c.lat = 42.6; c.lon = -72.4; c.altFt = 35000; c.kind = "AIREP"; c.acType = "B763"; c.obsTime = now - 300; c.windDir = 255; c.windKt = 82; c.tempC = -54;
         c.raw = "ARP UAL123 4236N 07224W 0245 F350 MS54 255/082KT"; snap->pireps.push_back(c);
     }

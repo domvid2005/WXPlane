@@ -567,7 +567,8 @@ std::string findTurbConflict() {
         std::string key;   // name, signature and the plugin's folder, lower case letters and digits only
         for (const char* src : {(const char*)name, (const char*)sig, (const char*)path})
             for (const char* c = src; *c; ++c) if (std::isalnum((unsigned char)*c)) key += (char)std::tolower((unsigned char)*c);
-        static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic"};
+        static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic",
+                                             "erjeicas"};   // X-Crafts ERJ: its EICAS plugin drives turbulence too (customer, 2026-11-12)
         for (const char* k : kTurbAddons)
             if (key.find(k) != std::string::npos) return name[0] ? std::string(name) : std::string(sig);
     }
