@@ -12,6 +12,7 @@
 
 #include "geo.h"
 #include "imgui.h"
+#include "imgui_internal.h"   // the map windows: the size an auto-resizing window will have this frame
 #include "opera.h"
 #include "png.h"
 #include "version.h"
@@ -1739,7 +1740,14 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
     if (sel.kind == 4 && showWinds()) for (const auto& q : windPts()) if (q.key == sel.key) wp = &q;
     if (!p && !st && !av && !wp) { sel.kind = 0; return true; }
     const MapSel& ms = mapSel();
-    const ImVec2 mn = ms.mapMin, mx = ms.mapMax, sz = sel.lastSize, a = sel.at;
+    const ImVec2 mn = ms.mapMin, mx = ms.mapMax, a = sel.at;
+    // the size the window will have in THIS frame (ImGui fits an auto-resizing window to last frame's contents in Begin): it is placed
+    // with that size before Begin, because Begin draws the background at once and moving the window after Begin left that background
+    // over the map's edge for a frame ("still sometimes flickers outside the map", 2026-11-12)
+    const std::string winName = "##mapinfo" + std::to_string(sel.kind) + sel.key;
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, mx.x - mn.x - 8), std::max(120.0f, mx.y - mn.y - 8)));
+    ImVec2 sz = sel.lastSize;
+    if (ImGuiWindow* w = ImGui::FindWindowByName(winName.c_str())) { const ImVec2 nx = ImGui::CalcWindowNextAutoFitSize(w); if (nx.x > 1 && nx.y > 1) sz = nx; }
     auto overlapsAny = [&](float cx, float cy) {
         for (const Rect& o : others) if (cx < o.second.x + 4 && cx + sz.x > o.first.x - 4 && cy < o.second.y + 4 && cy + sz.y > o.first.y - 4) return true;
         return false;
@@ -1748,10 +1756,8 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
     if (sel.dragged || sel.fixed) {   // put somewhere by hand, or placed when it opened: it stays there (inside the map, off the others)
         ImVec2 q = keepClear(sel.pos, sz, mn, mx, ImVec2(0, 0), ImVec2(0, 0));   // inside the map always, other windows or not
         for (int pass = 0; pass < 3; ++pass) for (const Rect& o : others) q = keepClear(q, sz, mn, mx, o.first, o.second);
-        if (overlapsAny(q.x, q.y)) return false;
+        if (overlapsAny(q.x, q.y)) { GImGui->NextWindowData.ClearFlags(); return false; }
         sel.pos = q;
-        ImGui::SetNextWindowPos(sel.pos);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, mx.x - mn.x - 8), std::max(120.0f, mx.y - mn.y - 8)));
     } else {   // inside the map, clear of the points and never over another window: tries beside its point, beside each other window,
         // the map's corners, then a scan of the map; the first spot that covers no point wins, else the one that covers them least.
         // No spot clear of the other windows: false (the caller closes the oldest window).
@@ -1779,7 +1785,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
             if (pen < bestPen - 0.5f) { bestPen = pen; x = cx; y = cy; found = true; }
             if (pen <= 0) break;
         }
-        if (!found) return false;
+        if (!found) { GImGui->NextWindowData.ClearFlags(); return false; }
         sel.pos = ImVec2(x, y);
         // shown only once its size has settled (the same for 2 frames running: wrapped text can take a few frames to fit), so it
         // appears at its final place and never jumps inside the map after it was seen ("opens outside, then jumps in", 2026-11-12)
@@ -1787,9 +1793,10 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
         sel.stable = same ? sel.stable + 1 : 0;
         sel.measSize = sel.lastSize;
         if ((++sel.frames >= 3 && sel.stable >= 2) || sel.frames >= 15) sel.fixed = true;
-        ImGui::SetNextWindowPos(ImVec2(x, y));
-        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::max(160.0f, mx.x - mn.x - 8), std::max(120.0f, mx.y - mn.y - 8)));
     }
+    // inside the map with this frame's size (see above), then handed to Begin
+    sel.pos = ImVec2(std::max(mn.x + 4, std::min(sel.pos.x, mx.x - 4 - sz.x)), std::max(mn.y + 4, std::min(sel.pos.y, mx.y - 4 - sz.y)));
+    ImGui::SetNextWindowPos(sel.pos);
     ImGui::SetNextWindowBgAlpha(0.97f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
@@ -1797,7 +1804,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
     ImGui::PushStyleColor(ImGuiCol_WindowBg, v4(IM_COL32(28, 30, 34, 255)));
     const ImGuiWindowFlags fl = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | (measuring ? ImGuiWindowFlags_NoInputs : 0);
-    if (ImGui::Begin(("##mapinfo" + std::to_string(sel.kind) + sel.key).c_str(), nullptr, fl)) {
+    if (ImGui::Begin(winName.c_str(), nullptr, fl)) {
         {   // inside the map in this very frame: its size is known now (it may have grown since the place was chosen), so it is
             // moved in before anything is drawn, never shown over the edge for a frame
             const ImVec2 ws = ImGui::GetWindowSize(), wp = ImGui::GetWindowPos();
@@ -1942,6 +1949,18 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
         sel.size = sel.lastSize;
     }
     ImGui::End();
+    // Clipped to the map, whatever happens in between: every draw command of the window (its background and border included) is
+    // cut at the map's edge, so not one pixel can show outside the map in any frame, even the frame the map or the window changes
+    // size (on load-in the window could still flicker over the edge for a frame, 2026-11-12). While it is being measured nothing
+    // of it is drawn at all (the colours drawn straight to its draw list ignored the zero alpha).
+    if (ImGuiWindow* w = ImGui::FindWindowByName(winName.c_str()))
+        for (ImDrawCmd& c : w->DrawList->CmdBuffer) {
+            if (measuring) { c.ClipRect = ImVec4(mn.x, mn.y, mn.x, mn.y); continue; }
+            c.ClipRect.x = std::max(c.ClipRect.x, mn.x); c.ClipRect.y = std::max(c.ClipRect.y, mn.y);
+            c.ClipRect.z = std::min(c.ClipRect.z, mx.x); c.ClipRect.w = std::min(c.ClipRect.w, mx.y);
+            if (c.ClipRect.z < c.ClipRect.x) c.ClipRect.z = c.ClipRect.x;
+            if (c.ClipRect.w < c.ClipRect.y) c.ClipRect.w = c.ClipRect.y;
+        }
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
     return true;
