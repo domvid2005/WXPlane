@@ -1,0 +1,388 @@
+================================================================================
+  WXPlane 5.1 for X-Plane 12  -  User Manual
+================================================================================
+
+WXPlane replaces X-Plane 12's weather with live, real-world data: airport
+reports (METAR and ATIS), winds and temperatures aloft, clouds, radar storms,
+turbulence and windshear. It refreshes every 5 minutes, and whenever you have
+flown 40 nm, so the weather keeps up with you along your route.
+
+
+--------------------------------------------------------------------------------
+1. REQUIREMENTS
+--------------------------------------------------------------------------------
+
+  * X-Plane 12.3 or newer (Windows, macOS or Linux, 64-bit).
+  * An internet connection. Without one, the last weather WXPlane applied
+    stays in place.
+  * No accounts or API keys are needed. Every data source is free and public.
+
+
+--------------------------------------------------------------------------------
+2. INSTALLATION
+--------------------------------------------------------------------------------
+
+  1. Close X-Plane.
+  2. Copy the whole "WXPlane" folder (the one that contains win_x64,
+     mac_x64 and lin_x64) into:
+
+         X-Plane 12/Resources/plugins/
+
+     You should end up with  X-Plane 12/Resources/plugins/WXPlane/win_x64/
+     WXPlane.xpl  (and the same for the other platforms).
+  3. If you have an older WXPlane, delete its folder first. If you have the
+     old "WeatherFix" plugin, delete that too.
+  4. Start X-Plane.
+  5. IMPORTANT: turn OFF X-Plane's own real-world weather (X-Plane's
+     Weather settings: choose manual weather rather than real weather).
+     If you leave it on, X-Plane keeps downloading its own weather and mixes
+     it with WXPlane's. While it is on, WXPlane's window shows a red warning
+     and every control is locked until you turn it off.
+
+  Updates: WXPlane works with SkunkCrafts Updater. Its folder carries a
+  skunkcrafts_updater.cfg, so the updater app lists WXPlane with your other
+  add-ons and downloads only the files that changed. Your settings
+  (WXPlane.cfg in Output/preferences) are never touched by an update.
+
+  macOS: if macOS blocks the plugin the first time, allow it in
+  System Settings > Privacy & Security, then restart X-Plane.
+
+  Uninstall: delete the WXPlane folder from Resources/plugins. You can also
+  delete WXPlane.cfg from X-Plane 12/Output/preferences.
+
+
+--------------------------------------------------------------------------------
+3. OPENING THE WEATHER WINDOW
+--------------------------------------------------------------------------------
+
+  * Menu: Plugins > WXPlane opens the window. Choose it again (or close the
+    window) to hide it.
+  * Key or joystick button: in X-Plane's Settings > Keyboard (or Joystick),
+    search for "WXPlane" and bind:
+        "WXPlane: open/close the weather window (GUI)"  (wxplane/weather_window)
+        "WXPlane: refresh the weather now"              (wxplane/refresh)
+  * At the top right of the window:
+        Refresh  - downloads fresh data now. X-Plane fades the new weather in
+                   over 1-2 minutes, so the sim does not stutter.
+        Pop out  - moves the window into its own OS window (for a second
+                   monitor), and back again.
+  * The window follows X-Plane's UI scale and also works in VR.
+  * The header shows when the next update is due and when the last one
+    finished (in UTC).
+  * "Loading weather m:ss" (amber, with a turning ring) counts down while
+    the weather is built from scratch: at start-up, when WXPlane is
+    switched back on, and after a jump to a new place (a new flight or a
+    teleport). Until it ends, the sky may not match the reports yet.
+
+
+--------------------------------------------------------------------------------
+4. THE TABS
+--------------------------------------------------------------------------------
+
+OVERVIEW
+  Everything at a glance, without scrolling:
+  * The nearest airport: its raw METAR, decoded wind, visibility, weather,
+    pressure, temperature, ceiling and flight category (VFR, MVFR, IFR,
+    LIFR).
+  * The wind dial. Click it to switch between:
+        North Lock            - north is up.
+        Airplane Heading Lock - your heading is up. The centre then shows
+                                the headwind or tailwind (H/T) and the
+                                crosswind (X, from the left or right).
+    The map turns with the dial, and the turn is smooth. The small box under
+    the dial says which: North Lock or Heading Lock.
+  * Nearby airports. Click a column header to sort (see AIRPORTS below).
+  * A small map that shows the same layers you chose on the Map tab.
+  * Winds and temperatures aloft, with the tropopause.
+  * Turbulence and windshear at your aircraft. The windshear risk is
+    coloured from white (none) to red (high).
+
+MAP
+  A larger map around your aircraft.
+  * Zoom with the mouse wheel or the - / + buttons: 1, 2, 5, 10, 20, 40, 80,
+    160 and 320 nm. The zoom eases smoothly between steps.
+  * Drag to pan. "Center On Aircraft" glides back to you. While the map is
+    moved off the aircraft a small dark + marks its centre, and the LOCAL
+    time bubble shows the local time at the +. In North Lock the top of the +
+    points to north there (true, or magnetic with WIND °M): the map turns a
+    little as you move it, with the magnetic variation under the +.
+  * North Lock / Airplane Heading Lock button (the same as clicking the
+    wind dial).
+  * Layer buttons:
+        Radar     - real radar echoes, coloured by strength (US and Europe).
+        Map       - coastlines, borders, state/province lines and lakes.
+                    The map is built in, so nothing is downloaded for it.
+        Airports  - stations coloured by flight category. Click one to see
+                    its METAR and ATIS.
+        Turb      - turbulence on a 12 nm grid, at the altitude slider's
+                    level.
+        Winds     - wind barbs at the slider's level (NOAA winds aloft
+                    stations in white, GFS model points in blue). Click a
+                    barb to decode it: direction, speed, what each barb
+                    and pennant means, temperature, ISA deviation, and the
+                    headwind and crosswind on your heading.
+        Clouds    - the clouds WXPlane gave X-Plane at the slider's level,
+                    outlined. Thin layers are light grey; the deeper the
+                    layer, the darker the grey.
+        Time Zone - the time zone boundaries as dashed violet lines
+                    (Natural Earth time zones).
+        PIREPs    - pilot reports as triangles: urgent (UUA) red, routine
+                    (UA) orange. Click one for its time, aircraft, level,
+                    turbulence, icing, sky, weather, temperature, wind and
+                    the full text.
+        AIRMET    - US G-AIRMETs, coloured by hazard: IFR purple, mountain
+                    obscuration pink, turbulence yellow, icing light blue,
+                    surface wind green, low-level windshear rose.
+        SIGMET    - SIGMETs worldwide and US convective SIGMETs: convective
+                    red, turbulence orange, icing blue, volcanic ash brown,
+                    tropical cyclone magenta.
+    Click inside an AIRMET or SIGMET area to see its hazard, levels,
+    validity, movement and text. Airports and pilot reports inside an area
+    can still be clicked.
+  * Altitude slider (right of the map): sets the level for Turb, Winds
+    and Clouds, from the surface to FL600. It is greyed out while none of
+    those three layers is on.
+        ACFT - the slider follows your aircraft as it climbs and descends.
+        SFC  - the surface: the slider goes to the bottom ("SFC"), Winds
+               shows the airports' reported winds and Clouds the lowest
+               layer.
+        COMP - composite, all altitudes at once: every cloud layer
+               together (darker where the column holds more cloud), the
+               most turbulent level at each point, and the strongest wind
+               at each point with its flight level (its decode lists every
+               level).
+    Click ACFT, SFC or COMP again to go back to the altitude you chose
+    with the slider. Dragging the slider ends them. The slider clicks into
+    whole thousands of feet when it comes within 300 ft of one, harder
+    into every 5,000 ft and hardest into every 10,000 ft (which light
+    amber when the slider sits on them); the mouse wheel steps 1,000 ft. Max turbulence clicks into
+    tenths the same way.
+  * Radar echoes are drawn as a radar picture: green edges into yellow,
+    orange and red cores.
+  * True and magnetic: winds are given in degrees true (°T) as METARs and
+    winds aloft report them, with the other reference in a small box next
+    to them. On an airport's details (and its map popup), click that box
+    to swap true and magnetic. The °T / °M switch above the airport lists
+    sets the lists (Overview and Airports tab together). ATIS winds are
+    magnetic; METAR winds are true.
+  * Popups can be moved: drag a popup by its background. Two can be open
+    at once and they never touch.
+  * "TIME" (Zulu) is at the top left of the map; "Center On Aircraft" and
+    North Lock / Heading Lock are at its top right.
+  * Click the circle of an airport for its METAR, ATIS and surface wind,
+    and a wind barb's staff or feathers for its decode (the selected barb
+    turns amber). Barbs are blue, deeper the stronger the wind; a calm
+    wind is a white circle.
+  * Zulu and local time: in a box under the airport on the Overview, in
+    every airport's details, and at the top left of the Map tab's map.
+    Local times carry their time zone's name (EST, CDT, GMT, CEST ...) in
+    North America and Europe, and the UTC offset elsewhere; "~" marks a
+    time estimated from the longitude (far from the aircraft).
+  * The Airports tab also shows today's sunrise and sunset at the
+    airport (local time and Zulu).
+  * The map title shows the radar region: "Map - US" (NOAA MRMS) or
+    "Map - Europe" (EUMETNET OPERA). There is no radar elsewhere.
+  * The list next to the map shows the strongest storm cells (strength,
+    rain rate, top, distance and bearing).
+
+AIRPORTS
+  * Search: type any ICAO code in the world (for example EGLL, KJFK, RJTT),
+    or a US field's 3-character FAA code without the K (35D, 1B9, BOS),
+    to see its current METAR and, where one exists, its ATIS. This is for
+    reading only. It does not change the weather in the sim.
+  * Below the search box: every station WXPlane is using, with category,
+    wind, visibility, weather, ceiling and temperature.
+  * Sorting: click a column header once to sort one way, again for the
+    other way, and a third time to go back to nearest-first. Equal values
+    are listed nearest first.
+  * Select a station to see its report, its ATIS, and exactly what WXPlane
+    sent to X-Plane for it.
+
+WINDS & TEMPS
+  The wind and temperature profile above your aircraft, every 1,000 to
+  2,000 ft up to FL600, with the deviation from standard temperature (ISA)
+  and the tropopause.
+
+TURBULENCE
+  * Turbulence (EDR) by altitude at your aircraft, and where it comes from.
+  * Max turbulence - scales all of WXPlane's turbulence from 0 (none) to
+    1.0 (as strong as the data says).
+  * Every nearby pilot report. Click one to open its details below it, and
+    click again to close it.
+  * Windshear near you.
+  * Live at the aircraft: the EDR WXPlane is giving X-Plane right now (after
+    Max turbulence) on a bar over the intensity bands, and a g meter of the
+    load factor the aircraft feels (the last 30 s, and its range over the
+    last minute). Pilot reports are on the Overview and the Map tab.
+  * Windshear odds (0-1.0): how often gust fronts and microbursts form.
+    1.0 is the realistic rate; 0 means none at all (like Max turbulence 0).
+  * Another turbulence add-on running (ActiveSky XP, xProTurb, XPRealistic
+    ...): WXPlane leaves X-Plane's turbulence to it. A red TURBULENCE
+    CONFLICT caution covers this tab and its controls are locked until that
+    add-on is disabled. The switch in Settings still works (to turn
+    WXPlane's turbulence and windshear off altogether). An aircraft's own
+    plugins never count as a conflict; the X-Crafts ERJ's EICAS plugin, which
+    may add turbulence effects of its own, gets a note on this tab.
+
+SERVICES
+  Every data source WXPlane uses, with its state:
+      OK        (green)  working.
+      DEGRADED  (amber)  the last download failed. Older data is in use.
+      DOWN      (red)    not working. It also shows when it last worked.
+      grey               not used in this region, off, or waiting.
+  The tab title shows how many services have a problem, for example
+  "Services (1)". The Radar section below lists both radar sources, NOAA
+  MRMS (US) and EUMETNET OPERA (Europe), and says which one is not used
+  because the aircraft is outside its coverage.
+
+SETTINGS
+  * WXPlane weather on - turns all of WXPlane's weather on or off. When it
+    is off, the weather fades back to X-Plane's own, and the other settings
+    are greyed out.
+  * Use ATIS - merge the digital ATIS (major US airports) over the METAR.
+  (GFS winds and temperatures aloft, clouds above what the airports
+  report and the weather over open water are always on.)
+  * Realistic turbulence - WXPlane sets the turbulence at every altitude
+    from real data (NOAA GTGN in the US, an ECMWF-based estimate
+    elsewhere, and pilot reports), instead of X-Plane's own.
+  * Realistic windshear - gust fronts and microburst outflow near real
+    storms.
+  (Max turbulence, which scales all of WXPlane's turbulence from 0 to 1.0,
+  is on the Turbulence tab.)
+  * Dim at night - the window (in the sim, not popped out) dims as the
+    daylight goes, from sunset to dusk, and brightens again as it comes
+    back, so X-Plane's auto exposure does not darken a night cockpit while
+    it is open. On by default (night_dim in WXPlane.cfg).
+  * Keyboard - how to bind the window to a key (see section 3).
+  * Data & credits.
+
+
+--------------------------------------------------------------------------------
+5. WHAT WXPLANE DOES TO THE WEATHER
+--------------------------------------------------------------------------------
+
+  * Airports: the nearest 40 reports within 120 nm set the surface wind,
+    visibility, fog, mist, clouds, precipitation, temperature and pressure.
+    The weather is blended smoothly between airports, with no gaps.
+  * ATIS: for the two nearest airports within 35 nm, the D-ATIS values
+    replace the METAR's (US only).
+  * Aloft: GFS winds and temperatures from the surface to FL600, and GFS
+    clouds above what the airports can see, such as cirrus.
+  * Open water: away from airports, the GFS model provides the weather.
+  * Radar storms: over the US (NOAA MRMS) and Europe (EUMETNET OPERA), real
+    radar echoes become rain, showers and thunderstorms in the right
+    places, with realistic tops. Updated every 5 minutes.
+  * Turbulence: clear-air and storm turbulence at every altitude from real
+    data and pilot reports.
+  * Windshear: gust fronts and microbursts around real convective storms.
+  * Runways: dry runways when there has been no recent rain.
+  * Updates fade in over 1-2 minutes, so there are no sudden jumps or
+    freezes.
+
+
+--------------------------------------------------------------------------------
+6. ADVANCED SETTINGS (WXPlane.cfg)
+--------------------------------------------------------------------------------
+
+  Advanced settings are in  X-Plane 12/Output/preferences/WXPlane.cfg,
+  which is created on first start. Edit it with X-Plane closed. Useful keys
+  (the default is in brackets):
+
+      update_minutes            (5)    minutes between updates
+      search_nm                 (120)  how far to look for airport reports
+      max_stations              (40)   how many reports to apply
+      refetch_move_nm           (40)   update early after flying this far
+      atis_range_nm             (35)   ATIS search range
+      radar_range_nm            (150)  how far radar storms are built
+      max_turbulence            (1)    the Max turbulence slider
+      load_fade_s               (60)   how long the loading countdown
+                                       allows X-Plane to fade new weather in
+      manual_refresh_immediate  (0)    1 = Refresh applies at once, with
+                                       a short pause, instead of fading in
+
+  The README in the source repository lists every key. If something goes
+  wrong, delete WXPlane.cfg and WXPlane writes a fresh one with the
+  defaults.
+
+
+--------------------------------------------------------------------------------
+7. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+  The window has a red warning and nothing can be clicked
+      X-Plane's own real-world weather is on. Turn it off in X-Plane's
+      Weather settings.
+
+  WXPlane is not in the Plugins menu
+      Check the folder layout in section 2. The .xpl file must be in
+      Resources/plugins/WXPlane/<platform>_x64/. Look in X-Plane 12/Log.txt
+      for lines starting with [WXPlane], or for an error loading the
+      plugin.
+
+  The weather looks old, or there is no radar
+      Open the Services tab. A red or amber service is having problems,
+      and the tab shows when it last worked. The European radar feed
+      (OPERA) sometimes stops for a few hours. WXPlane then tries
+      EUMETNET's backup store as well; if neither has a picture, the
+      Services tab says how old the newest one is. There is no radar outside the US and
+      Europe. There, storms come from the airport reports and the GFS
+      model.
+
+  No ATIS
+      D-ATIS covers major US airports only.
+
+  Reporting a problem
+      Please include X-Plane 12/Log.txt from the flight. Every WXPlane line
+      starts with [WXPlane] and records what was downloaded and what was
+      sent to X-Plane.
+
+
+--------------------------------------------------------------------------------
+8. KNOWN LIMITS
+--------------------------------------------------------------------------------
+
+  * X-Plane's own weather radar instrument draws from the sim's clouds and
+    rain. WXPlane makes those match real radar, but it cannot feed radar
+    images to the instrument directly.
+  * The winds aloft, clouds aloft and open-water weather come from a model
+    forecast (GFS, about 25 km). They are used only where no report covers
+    the spot.
+  * Laminar Research marks X-Plane's weather API as experimental.
+
+
+--------------------------------------------------------------------------------
+9. DATA SOURCES AND CREDITS
+--------------------------------------------------------------------------------
+
+  Weather data
+  * NOAA / National Weather Service - Aviation Weather Center
+    (aviationweather.gov): METARs, pilot reports, G-AIRMETs, SIGMETs,
+    international SIGMETs and convective SIGMETs. Public domain.
+  * NOAA MRMS (Multi-Radar/Multi-Sensor) radar, US. Public domain.
+  * NOAA GTGN turbulence (Graphical Turbulence Guidance, developed by NCAR
+    for the FAA). Public domain.
+  * Open-Meteo.com: NOAA GFS model data (winds, temperatures and clouds
+    aloft, open-water weather). CC BY 4.0.
+  * EUMETNET OPERA radar composite (Open Radar Data), Europe. CC BY 4.0.
+  * ECMWF Open Data (turbulence outside the US). CC BY 4.0.
+  * D-ATIS by clowd.io (datis.clowd.io).
+
+  Map
+  * Natural Earth (naturalearthdata.com). Public domain.
+
+  Software
+  * Dear ImGui (Omar Cornut and contributors). MIT License.
+  * IBM Plex Sans (IBM) and JetBrains Mono (JetBrains). SIL Open Font
+    License 1.1.
+  * libcurl (Daniel Stenberg and contributors), zlib, and OpenSSL (Linux).
+  * OpenJPEG and libaec (GRIB2 decoding).
+  * X-Plane SDK (Laminar Research).
+
+  The full licence texts are in LICENSES.txt next to this file.
+
+  WXPlane is not affiliated with or endorsed by NOAA, the National Weather
+  Service, EUMETNET, ECMWF, Open-Meteo, clowd.io or Laminar Research. The
+  weather is for flight simulation only. Never use it for real-world flight
+  planning.
+
+================================================================================
