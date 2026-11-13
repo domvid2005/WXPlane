@@ -552,7 +552,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             for (int m = k + 1; m < K; ++m) if (isReal[i][m]) { up = m; break; }
             if (up < 0) continue;
             if (L[up].alt_base <= L[k].alt_base) continue;
-            float gap = (L[k].alt_base - (float)todo[i].rec.elev < 100.0f) ? 40.0f : 150.0f, minThick = 120.0f;
+            float gap = (L[k].alt_base - (float)todo[i].rec.elev < 100.0f) ? 40.0f : (float)g_cfg.layerGapM, minThick = 120.0f;
             const float space = L[up].alt_base - L[k].alt_base;   // close decks share the space (as in buildXp): bases never move
             if (gap > 100.0f && space < minThick + gap) { gap = std::max(40.0f, 0.4f * space); minThick = std::max(40.0f, space - gap); }
             const float limit = L[up].alt_base - gap;
@@ -2710,7 +2710,7 @@ void weatherWatch() {
             }
         }
         logf("  X-Plane's clouds here asked at three heights:%s%s", out.c_str(),
-             g_cfg.rainDeckMaxTopM > 0 ? (" (test switch rain_deck_max_top_m = " + std::to_string((int)g_cfg.rainDeckMaxTopM) + " is on)").c_str() : "");
+             g_cfg.layerGapM != 150.0 ? (" (test switch layer_gap_m = " + std::to_string((int)g_cfg.layerGapM) + ")").c_str() : "");
     }
     // The global model's cloud cover by height here (what the cloud tops are taken from, model_tops), and the top it gives each deck
     if (!x.modelProfM.empty()) {

@@ -491,7 +491,7 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         const float kMinThick = 120.0f;
         for (size_t i = 0; i + 1 < layers.size(); ++i) {
             // right at the ground (fog, a 100 ft ceiling) a 150 m gap would lift the next layer far above where it is reported
-            float kGap = (layers[i].baseM - (float)st.elevM < 100.0f) ? 40.0f : 150.0f;
+            float kGap = (layers[i].baseM - (float)st.elevM < 100.0f) ? 40.0f : (float)cfg.layerGapM;
             // Reported bases stay where they are (2026-11-13, KEWR BKN016 BKN020 OVC035: the 2,000 ft deck went out at 2,490 ft, lifted by
             // the 120 m + 150 m this needed). Decks closer than that share the space: the gap shrinks to 40 % of it (at least 40 m) and the
             // lower deck takes the rest (at least 40 m); only bases under 80 m apart still lift the upper one.

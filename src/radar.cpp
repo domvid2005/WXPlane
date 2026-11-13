@@ -1197,10 +1197,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
             if (topM - h.baseM > xpMaxThicknessM(h.type) && h.type < 2.0f && topM > h.topM) h.type = 2.0f;
             float ceil = std::min(kXpTopM, h.baseM + xpMaxThicknessM(h.type));
             for (int i = 0; i < 3; ++i)
-                if (i != host && x.clouds[i].coverage > 0 && x.clouds[i].baseM > h.baseM) ceil = std::min(ceil, x.clouds[i].baseM - 150.0f);
+                if (i != host && x.clouds[i].coverage > 0 && x.clouds[i].baseM > h.baseM) ceil = std::min(ceil, x.clouds[i].baseM - (float)cfg.layerGapM);
             if (topM > h.topM) h.topM = std::max(h.topM, std::min(topM, ceil));
-            if (cfg.rainDeckMaxTopM > 0 && h.topM > (float)cfg.rainDeckMaxTopM)   // test switch: the rain deck's top capped
-                h.topM = std::max(h.baseM + 300.0f, (float)cfg.rainDeckMaxTopM);
             topM = h.topM;   // (a shower's turbulence, below, reaches up to the deck's top)
             hosted = true;
         }
