@@ -249,6 +249,10 @@ SETTINGS
     storms.
   (Max turbulence, which scales all of WXPlane's turbulence from 0 to 1.0,
   is on the Turbulence tab.)
+  * Dim at night - the window (in the sim, not popped out) dims as the
+    daylight goes, from sunset to dusk, and brightens again as it comes
+    back, so X-Plane's auto exposure does not darken a night cockpit while
+    it is open. On by default (night_dim in WXPlane.cfg).
   * Keyboard - how to bind the window to a key (see section 3).
   * Data & credits.
 

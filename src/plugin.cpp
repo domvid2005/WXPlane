@@ -405,6 +405,9 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 XPLMWeatherInfoClouds_t& o = out[i][k];
                 if (cov < 0.05 || a[k].wc <= 0) { o.coverage = 0; o.cloud_type = 0; o.alt_base = 0; o.alt_top = 0; outReal[i][k] = false; continue; }
                 o.coverage = (float)cov;
+                // an overcast stays overcast: a record whose own layer is OVC (95 % or more) keeps at least 95 % in it, however
+                // thin its neighbours are (the smoothing only softens the edges of decks, it never opens a reported overcast)
+                if (isReal[i][k] && L[k].coverage >= 0.95f && L[k].cloud_type >= 0.5f) o.coverage = std::max(o.coverage, 0.95f);
                 o.alt_base = (float)(a[k].cb / a[k].wc);
                 o.alt_top = (float)(a[k].ct / a[k].wc);
                 // the type is blended too, but a real thunderstorm core (type 3) keeps its type, and nothing is made more convective than
@@ -3143,6 +3146,12 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     uiCloudsTick();
     d.clouds = g_uiClouds;
     d.loadingS = g_loadS; d.loadingWhat = g_load.what();
+    // a download running past its usual time: the countdown would sit at its floor, so the window shows the time taken instead
+    d.loadingSlowS = -1;
+    if (g_loadS >= 0 && g_fetchRunning) {
+        const double el = std::chrono::duration<double>(Clock::now() - g_fetchStartAt).count();
+        if (el > g_fetchEstS + 2.0) d.loadingSlowS = el;
+    }
     d.reports = g_mapReports;
     d.wsOn = g_cfg.enabled && g_cfg.windshear;
     d.wsSources = g_uiTs.wsSources; d.wsHigh = g_uiTs.wsHigh; d.wsMed = g_uiTs.wsMed; d.wsLow = g_uiTs.wsLow; d.wsStrongest = g_uiTs.wsStrongest;
@@ -3166,6 +3175,10 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     // the settings (the 3.0 menu's toggles), with the same effects
     if (act.toggleEnabled) menuHandler(nullptr, (void*)(intptr_t)kEnabled);
     if (act.toggleAtis) menuHandler(nullptr, (void*)(intptr_t)kAtis);
+    if (act.toggleNightDim) { g_cfg.nightDim = !g_cfg.nightDim; wx::saveConfig(g_cfgPath, g_cfg); }
+#ifndef WX_HARNESS
+    wx::xpui::setNightDim(g_cfg.nightDim);
+#endif
     if (act.toggleAloft) menuHandler(nullptr, (void*)(intptr_t)kAloft);
     if (act.toggleTurbulence) menuHandler(nullptr, (void*)(intptr_t)kTurbulence);
     if (act.toggleWindshear) menuHandler(nullptr, (void*)(intptr_t)kWindshear);

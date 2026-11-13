@@ -196,8 +196,9 @@ void buildFonts(float scale) {
 // dark as it is, is far brighter than a night cockpit: the whole scene went dark while it was open, and came back when it closed
 // or was popped out (2026-11-13; not in daylight). So in the dark the window's colours are scaled down (alpha kept): from full at
 // sun 0° to 45% below -8° (civil twilight on). A popped-out window is left as it is (not in the main view).
+bool g_nightDimOn = true;
 float nightDim(bool poppedOut) {
-    if (poppedOut) return 1.0f;
+    if (poppedOut || !g_nightDimOn) return 1.0f;
     if (!g_drSun) g_drSun = XPLMFindDataRef("sim/graphics/scenery/sun_pitch_degrees");
     if (!g_drSun) return 1.0f;
     const float sun = XPLMGetDataf(g_drSun);
@@ -425,6 +426,7 @@ void hide() {
 // made by tick(), from the flight loop. Changing a window's positioning mode inside its own draw callback crashed X-Plane on
 // pop-in (a customer's Log.txt, 2026-11-12: the crash came right after X-Plane rebuilt the popped-out window's swapchain).
 bool g_popPending = false;
+void setNightDim(bool on) { g_nightDimOn = on; }
 void togglePopOut() { if (g_win) g_popPending = true; }
 
 void tick() {

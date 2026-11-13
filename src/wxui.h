@@ -66,6 +66,7 @@ struct UiData {
     std::shared_ptr<const UiCloudGrid> clouds;   // clouds around the aircraft (map layer), nullptr: none yet
     // the weather is being (re)built from scratch: start-up, switched back on, a jump to a new place (header countdown)
     double loadingS = -1;               // seconds until it should all be in, -1: not loading
+    double loadingSlowS = -1;           // the download has run past its usual time: seconds it has taken so far (-1: not)
     std::string loadingWhat;            // e.g. "Loading weather", "New location"
     std::shared_ptr<const hz::Snapshot> reports;
     // windshear
@@ -100,6 +101,7 @@ struct UiActions {
     double wsOdds = 1.0;
     bool popOut = false;                // move the window to its own OS window (or back)
     // the settings (the plugin's former menu toggles): flip these
+    bool toggleNightDim = false;
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
     // the one "Realistic turbulence & windshear" switch: set both to this (-1: untouched)
     int setTurbWs = -1;

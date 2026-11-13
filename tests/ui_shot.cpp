@@ -403,6 +403,17 @@ int main(int argc, char** argv) {
         if (!writePng(cv, out + "/ui_loading.png")) return 1;
         std::printf("wrote %s\n", (out + "/ui_loading.png").c_str());
     }
+    {   // before the first weather: the tabs stay (waiting), and a download past its usual time shows the time it has taken
+        const bool had = d.haveData; const auto keepRes = d.res;
+        d.haveData = false; d.res = nullptr; d.loadingS = 66; d.loadingSlowS = 47;
+        d.status1 = "Downloading NOAA weather..."; 
+        for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        if (!writePng(cv, out + "/ui_waiting.png")) return 1;
+        std::printf("wrote %s\n", (out + "/ui_waiting.png").c_str());
+        d.haveData = had; d.res = keepRes; d.loadingSlowS = -1; d.status1.clear();
+    }
     d.loadingS = -1;
     // X-Plane's real weather on: the warning over a locked window; then the weather off: the settings greyed out
     for (int pass = 0; pass < 2; ++pass) {

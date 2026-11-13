@@ -3435,6 +3435,9 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         }
         if (off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
         ImGui::Separator(); ImGui::Spacing();
+        sectionTitle(f, "Window");
+        settingRow("Dim at night", d.cfg->nightDim, "The window dims as the daylight goes (from sunset to dusk), and brightens again as it comes back. At night X-Plane's auto exposure counts the window, and darkens the cockpit while it is open. A popped-out window is never dimmed.", act.toggleNightDim);
+        ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Status");
         mutedWrapped(d.status1 + (d.status2.empty() ? "" : "  ·  " + d.status2));
         mutedWrapped("Advanced settings are in WXPlane.cfg (X-Plane's Output/preferences folder).");
@@ -3740,7 +3743,10 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
         std::string live;
         if (loading) {   // the weather is being built from scratch: count down to when it should all be in
             const int t = (int)std::ceil(d.loadingS);
-            live = (d.loadingWhat.empty() ? std::string("Loading weather") : d.loadingWhat) + fmt(" %d:%02d", t / 60, t % 60);
+            if (d.loadingSlowS >= 0) {   // the download has run past what it usually takes: count the time it has taken, not a frozen estimate
+                const int e = (int)d.loadingSlowS;
+                live = fmt("Still downloading… %d:%02d", e / 60, e % 60);   // (fits the bubble; the time it has taken so far)
+            } else live = (d.loadingWhat.empty() ? std::string("Loading weather") : d.loadingWhat) + fmt(" %d:%02d", t / 60, t % 60);
         } else {
             live = d.busy ? std::string("Downloading…") : (d.nextUpdateS >= 0 ? fmt("Next update %d:%02d", (int)d.nextUpdateS / 60, (int)d.nextUpdateS % 60) : std::string(""));
             if (d.haveData && d.res) live += (live.empty() ? "" : " ") + std::string("(updated ") + hhmm(d.res->fetchedAt) + ")";
@@ -3773,26 +3779,17 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
         }
     }
 
-    if (!d.haveData || !d.res) {
-        {   // no tabs yet: the tab row with only Refresh and Pop out, on the line
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);
-            ImFont* tf = tabFont() ? tabFont() : (tabFontBig() ? tabFontBig() : f.bold);
-            const float h = tf->FontSize * ImGui::GetIO().FontGlobalScale + 2 * kTabPad.y;
-            const ImVec2 q = ImGui::GetCursorScreenPos();
-            const float w = ImGui::GetContentRegionAvail().x;
-            ImFont*& tfr = tabFont(); ImFont* was = tfr; tfr = tf;
-            sideTabs(q.y, q.y + h, q.x + w, q.x, poppedOut, act);
-            tfr = was;
-            ImGui::GetWindowDrawList()->AddLine(ImVec2(q.x, q.y + h + 0.5f), ImVec2(q.x + w, q.y + h + 0.5f), IM_COL32(58, 62, 70, 255), 1.0f);
-            ImGui::Dummy(ImVec2(w, h));
-        }
+    // Before the first weather is in, the tabs are there all the same: the ones built from the weather say what they are waiting for
+    // (Settings and Services work as always), instead of the window swapping them all for the settings page.
+    const bool noData = !d.haveData || !d.res;
+    auto waiting = [&]() {
         ImGui::Spacing();
+        panelBegin("waitwx", ImVec2(0, std::max(120.0f, ImGui::GetContentRegionAvail().y - 4)));
+        sectionTitle(f, "Waiting for weather");
         mutedWrapped(d.status1.empty() ? std::string("No weather downloaded yet.") : d.status1 + (d.status2.empty() ? "" : "  ·  " + d.status2));
-        ImGui::Spacing();
-        tabSettings(d, f, act);
-        finish();
-        return;
-    }
+        if (d.loadingS >= 0) mutedWrapped("This page fills in as soon as the first weather download is in.");
+        panelEnd();
+    };
     int bad = 0;
     for (const auto& s : allServices(d)) if (s.state == SvcState::Down || s.state == SvcState::Degraded) ++bad;
     tabFont() = tabFontBig() ? tabFontBig() : f.bold;
@@ -3824,10 +3821,10 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
             const float x1 = ImGui::GetCurrentWindow()->WorkRect.Max.x;
             ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, bar.Max.y + 0.5f), ImVec2(x1, bar.Max.y + 0.5f), IM_COL32(58, 62, 70, 255), 1.0f);
         }
-        if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
-        if (bigTab("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
-        if (bigTab("Airports###air", nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
-        if (bigTab("Winds & Temps", nullptr, d.forceTab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAloft(d, f); ImGui::EndTabItem(); }
+        if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { if (noData) waiting(); else { ImGui::Spacing(); tabOverview(d, f, act); } ImGui::EndTabItem(); }
+        if (bigTab("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { if (noData) waiting(); else { ImGui::Spacing(); tabRadar(d, f); } ImGui::EndTabItem(); }
+        if (bigTab("Airports###air", nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { if (noData) waiting(); else { ImGui::Spacing(); tabAirports(d, f, act); } ImGui::EndTabItem(); }
+        if (bigTab("Winds & Temps", nullptr, d.forceTab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) { if (noData) waiting(); else { ImGui::Spacing(); tabAloft(d, f); } ImGui::EndTabItem(); }
         {   // the Turbulence tab only while turbulence & windshear are on; it fades out (and back in) instead of vanishing
             static float vis = -1;
             const bool want = !d.cfg || d.cfg->realisticTurbulence || d.cfg->windshear;
@@ -3850,7 +3847,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
                     tdl->AddText(tf, fs, ImVec2(r0.x + ImGui::GetStyle().FramePadding.x, r0.y + (r1.y - r0.y - fs) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), "Turbulence");   // where the other tabs' labels start
                     tdl->PopClipRect();
                 }
-                if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
+                if (open) { if (noData) waiting(); else { ImGui::Spacing(); tabTurbulence(d, f, act); } ImGui::EndTabItem(); }
             }
         }
         if (bigTab("Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }

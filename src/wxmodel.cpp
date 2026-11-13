@@ -14,7 +14,7 @@ float coverageFor(int cover) {
         case CloudGroup::FEW: return 0.20f;
         case CloudGroup::SCT: return 0.40f;
         case CloudGroup::BKN: return 0.70f;
-        default: return 0.94f;   // a fully closed sheet renders as a dense, dark-topped slab; a little texture lets the sun light the top
+        default: return 0.97f;   // OVC: 95-100 % (0.94 read as broken in X-Plane: KJFK OVC027 2026-11-13; still a little texture for the sun on the top)
     }
 }
 

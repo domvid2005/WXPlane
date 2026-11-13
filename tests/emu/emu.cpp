@@ -367,6 +367,7 @@ void frame() {
     if (act.refresh) { g_refreshAt = g_t + 3; g_res.fetchedAt = kStart + (std::time_t)g_t; }
     if (act.toggleEnabled) { g_cfg.enabled = !g_cfg.enabled; if (g_cfg.enabled) g_loadUntil = g_t + 40; }
     if (act.toggleAtis) g_cfg.useAtis = !g_cfg.useAtis;
+    if (act.toggleNightDim) g_cfg.nightDim = !g_cfg.nightDim;
     if (act.toggleAloft) g_cfg.useAloft = !g_cfg.useAloft;
     if (act.toggleTurbulence) g_cfg.realisticTurbulence = !g_cfg.realisticTurbulence;
     if (act.toggleWindshear) g_cfg.windshear = !g_cfg.windshear;

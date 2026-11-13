@@ -8,6 +8,7 @@ constexpr int kConfigVersion = 30;   // bumped when defaults change; older confi
 struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
+    bool nightDim = true;         // the in-sim window dims with the daylight (X-Plane's auto exposure counts it at night)
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface
     // X-Plane cloud type for low/overcast layers: 1 = stratus (smooth sheet, curtain-like edges), 2 = cumulus, 3 = cumulonimbus.
     // 2 since 2026-11-04: X-Plane flies 3 as a thunderstorm cloud, with strong up- and downdrafts, so with every deck at 3 an aircraft
