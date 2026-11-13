@@ -373,7 +373,8 @@ int main() {
         NEAR(buildXp(v, cfg, now).visM, 4 * kSmToM, 1);
     }
 
-    // --- cloud layers never overlap vertically: every top is at least 150 m below the next base
+    // --- cloud layers never overlap vertically: every top is at least 150 m below the next base (at least 40 m between decks
+    //     reported closer than that: they share the space and keep their bases)
     {
         const char* raws[] = {"KTST 301553Z 18008KT 10SM SCT020 BKN022 OVC024 20/10 A3002",
                               "KTST 301553Z 18008KT 10SM FEW030 SCT032 BKN035 20/10 A3002",
@@ -385,7 +386,7 @@ int main() {
             bool ok = a.cloudCount >= 2;
             for (int i = 0; i + 1 < 3; ++i)
                 if (a.clouds[i].coverage > 0 && a.clouds[i + 1].coverage > 0)
-                    ok = ok && a.clouds[i].topM + (a.clouds[i].baseM - 100.0f < 100.0f ? 39.0f : 149.0f) <= a.clouds[i + 1].baseM && a.clouds[i].topM > a.clouds[i].baseM;
+                    ok = ok && a.clouds[i].topM + (a.clouds[i].baseM - 100.0f < 100.0f || a.clouds[i + 1].baseM - a.clouds[i].baseM < 270.0f ? 39.0f : 149.0f) <= a.clouds[i + 1].baseM && a.clouds[i].topM > a.clouds[i].baseM;
             CHECK(ok);
         }
     }
@@ -632,6 +633,17 @@ int main() {
         XpWx s2 = s; applyStorm(s2, c, cfg, 0.0, 40.0, 800.0f);
         float t2 = 0; for (const auto& k : s2.clouds) t2 = std::max(t2, k.topM);
         NEAR(t2, 2500, 1);
+    }
+    // --- close decks keep their reported bases (KEWR BKN016 BKN020 OVC035: BKN020 went out at 2,490 ft); they share the space between
+    {
+        Station st; st.elevM = 3;
+        parseReport("KEWR 131951Z 35012G20KT 10SM -RA BKN016 BKN020 OVC035 06/03 A2965", st.report);
+        const XpWx a = buildXp(st, cfg, now);
+        NEAR(a.clouds[0].baseM, 3 + 1600 * 0.3048, 1);
+        NEAR(a.clouds[1].baseM, 3 + 2000 * 0.3048, 1);
+        NEAR(a.clouds[2].baseM, 3 + 3500 * 0.3048, 1);
+        CHECK(a.clouds[0].topM <= a.clouds[1].baseM - 40.0f && a.clouds[0].topM >= a.clouds[0].baseM + 40.0f);
+        CHECK(a.clouds[1].topM <= a.clouds[2].baseM - 40.0f);
     }
     // --- mist (BR) is shown by the visibility alone: no ground layer, no fog slot, and the deck keeps slot 0
     {

@@ -491,9 +491,15 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         const float kMinThick = 120.0f;
         for (size_t i = 0; i + 1 < layers.size(); ++i) {
             // right at the ground (fog, a 100 ft ceiling) a 150 m gap would lift the next layer far above where it is reported
-            const float kGap = (layers[i].baseM - (float)st.elevM < 100.0f) ? 40.0f : 150.0f;
+            float kGap = (layers[i].baseM - (float)st.elevM < 100.0f) ? 40.0f : 150.0f;
+            // Reported bases stay where they are (2026-11-13, KEWR BKN016 BKN020 OVC035: the 2,000 ft deck went out at 2,490 ft, lifted by
+            // the 120 m + 150 m this needed). Decks closer than that share the space: the gap shrinks to 40 % of it (at least 40 m) and the
+            // lower deck takes the rest (at least 40 m); only bases under 80 m apart still lift the upper one.
+            const float space = layers[i + 1].baseM - layers[i].baseM;
+            float minThick = kMinThick;
+            if (kGap > 100.0f && space < kMinThick + kGap) { kGap = std::max(40.0f, 0.4f * space); minThick = std::max(40.0f, space - kGap); }   // (ground fog keeps its depth)
             float limit = layers[i + 1].baseM - kGap;
-            if (layers[i].topM > limit) layers[i].topM = std::max(layers[i].baseM + kMinThick, limit);
+            if (layers[i].topM > limit) layers[i].topM = std::max(layers[i].baseM + minThick, limit);
             float need = layers[i].topM + kGap;
             if (layers[i + 1].baseM < need) {
                 float thick = layers[i + 1].topM - layers[i + 1].baseM;

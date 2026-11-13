@@ -520,6 +520,28 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 if (!changed) break;
             }
     }
+    // 2b3) Clear gaps again (2026-11-13 KEWR): the smoothing averages each layer's top with the neighbours'. A neighbour with only one of
+    // the decks has it as deep as the model's cloud (12,000 ft and more), so next to the airport the averaged tops reached into the
+    // deck above (490-790 m under 754-1307 m under 1068 m), and X-Plane merged the overlapping layers: a reported deck went missing.
+    // Each top now stays 150 m under the next layer's base in its record (40 m right at the ground, less between close decks), as
+    // buildXp keeps them; the bases are never moved.
+    // Rain records keep their layers: a storm grows up through the station's decks on purpose (validateXp allows them to overlap).
+    for (size_t i = 0; i < n; ++i) {
+        if (isBump(i) || (todo[i].key.compare(0, 6, "radar:") == 0 && todo[i].rec.info.precip_rate > 0.0f)) continue;
+        XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
+        for (int k = 0; k < K; ++k) {
+            if (!isReal[i][k] || L[k].cloud_type >= 2.25f) continue;   // TCU and CB keep their tops
+            int up = -1;
+            for (int m = k + 1; m < K; ++m) if (isReal[i][m]) { up = m; break; }
+            if (up < 0) continue;
+            if (L[up].alt_base <= L[k].alt_base) continue;
+            float gap = (L[k].alt_base - (float)todo[i].rec.elev < 100.0f) ? 40.0f : 150.0f, minThick = 120.0f;
+            const float space = L[up].alt_base - L[k].alt_base;   // close decks share the space (as in buildXp): bases never move
+            if (gap > 100.0f && space < minThick + gap) { gap = std::max(40.0f, 0.4f * space); minThick = std::max(40.0f, space - gap); }
+            const float limit = L[up].alt_base - gap;
+            if (L[k].alt_top > limit) L[k].alt_top = std::max(L[k].alt_base + minThick, limit);
+        }
+    }
     // 2c) No spires (2026-11-12, an upward cone over KJFK): X-Plane blends a layer's top between records, so one record whose top stands
     // far above its neighbours' (an airport's CB with an estimated 10 km top in 6 km storm records around it) grew a smooth cone up out
     // of the deck. A top now rises at most 650 m per nm above the tops of the records around it (1,200 m for cumulonimbus), the same
