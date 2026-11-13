@@ -566,6 +566,27 @@ int main() {
                                     mk("KLGA", 40.78, -73.87, "KLGA 131251Z 27010KT 10SM OVC250 10/05 A3000")};
         CHECK(buildXp(bkn, cfg, now, nullptr, false, &distant).clouds[0].coverage < alone);   // KLGA is clear at 3000 ft: lighter
     }
+    // --- more decks than X-Plane's three slots: the closest two are joined (lowest base kept, heavier cover), never one cut off
+    {
+        Station st; st.icao = "KBOS"; st.lat = 42.36; st.lon = -71.01; st.elevM = 6;
+        parseReport("KBOS 131654Z 36008KT 10SM FEW018 SCT030 OVC048 04/01 A2959", st.report);
+        XpWx a = buildXp(st, cfg, now, nullptr, false);   // three decks, three slots
+        CHECK(a.cloudCount == 3 && a.clouds[2].coverage >= 0.97f);
+        XpWx b = buildXp(st, cfg, now, nullptr, true);    // slot 0 kept for fog nearby: two slots, FEW018 and SCT030 joined
+        CHECK(b.cloudCount == 2 && b.clouds[0].coverage == 0.0f);
+        NEAR(b.clouds[1].baseM, 6 + 1800 * 0.3048, 1);    // the lowest base stays
+        CHECK(b.clouds[1].coverage >= 0.35f && b.clouds[1].coverage <= 0.50f);   // SCT, the heavier of the two
+        CHECK(b.clouds[2].coverage >= 0.97f);               // the overcast is there
+        NEAR(b.clouds[2].baseM, 6 + 4800 * 0.3048, 1);
+        Station many; many.icao = "KXYZ"; many.elevM = 0;
+        parseReport("KXYZ 131654Z 36008KT 10SM FEW010 SCT020 BKN035 BKN050 OVC080 04/01 A2959", many.report);
+        XpWx m = buildXp(many, cfg, now, nullptr, false);
+        CHECK(m.cloudCount == 3);
+        NEAR(m.clouds[0].baseM, 1000 * 0.3048, 1);
+        CHECK(m.clouds[2].coverage >= 0.97f);               // OVC080 is still the top deck
+        float prevTop = 0;
+        for (int k = 0; k < 3; ++k) { CHECK(m.clouds[k].baseM >= prevTop); prevTop = m.clouds[k].topM; }   // in order, not overlapping
+    }
     // --- mist with a low ceiling: the ceiling stays where it is reported and all three decks are kept
     {
         Station st; st.elevM = 132;

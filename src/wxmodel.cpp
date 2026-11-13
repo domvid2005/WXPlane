@@ -435,6 +435,31 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
             if (ci.topM <= kXpMaxTopM) { layers.push_back(ci); x.modelCirrus = true; }
         }
     }
+    // X-Plane holds three cloud layers per record (XPLM_NUM_CLOUD_LAYERS), and two of them for the decks when slot 0 is kept for ground
+    // fog. More decks than that are no longer cut off from the top (a METAR can report six; the overcast above was the one lost): the
+    // two decks closest in height are made one, again and again, until they fit. The joined deck starts at the lower base (a ceiling
+    // never rises), reaches the upper top, and takes the heavier cover and its kind of cloud.
+    {
+        const size_t fixed = (fogSlot && (x.fogLayerApplied || ceilingInsteadOfMist)) || (!fogSlot && x.fogLayerApplied) ? 1u : 0u;   // the ground layer
+        const size_t room = fogSlot ? 2u : (3u - fixed);   // slots left for the decks above it
+        while (layers.size() > fixed + room && layers.size() >= fixed + 2) {
+            // (a towering cumulus or cumulonimbus is joined with another deck only when nothing else can be: it is the storm)
+            size_t best = fixed;
+            float gap = 1e18f;
+            for (size_t i = fixed; i + 1 < layers.size(); ++i) {
+                const bool conv = layers[i].type >= 2.25f || layers[i + 1].type >= 2.25f;
+                const float g = layers[i + 1].baseM - layers[i].baseM + (conv ? 1e9f : 0.0f);
+                if (g < gap) { gap = g; best = i; }
+            }
+            XpCloud& lo = layers[best];
+            const XpCloud& hi = layers[best + 1];
+            const float conv = std::max(lo.type, hi.type);
+            if (hi.coverage > lo.coverage) { lo.coverage = hi.coverage; lo.type = hi.type; }
+            if (conv >= 2.25f) lo.type = conv;   // a storm in it stays a storm
+            lo.topM = std::min(std::max(lo.topM, hi.topM), lo.baseM + xpMaxThicknessM(lo.type));
+            layers.erase(layers.begin() + (long)(best + 1));
+        }
+    }
     // Layers must never overlap vertically: a lower layer whose top reaches into the one above it is shaded by it and renders
     // dark. Keep a clear gap between every top and the next base. The lower layer is trimmed first (never thinner than
     // kMinThick); if the two bases are so close that even that is not enough, the upper layer is lifted just far enough.
@@ -461,16 +486,8 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
             x.clouds[0] = layers[0];
             first = 1;
         }
-        // two slots for the decks: with three, the two that cover the most sky are kept (in height order), not the two lowest
-        // (KBOS FEW018 SCT030 OVC048, 2026-11-13: fog nearby took slot 0, and the overcast was the deck left out)
-        std::vector<size_t> pick;
-        for (size_t i = first; i < layers.size(); ++i) pick.push_back(i);
-        if (pick.size() > 2) {
-            std::stable_sort(pick.begin(), pick.end(), [&](size_t a, size_t b) { return layers[a].coverage > layers[b].coverage + 1e-4f; });
-            pick.resize(2);
-            std::sort(pick.begin(), pick.end());
-        }
-        for (size_t i = 0; i < pick.size(); ++i) x.clouds[1 + i] = layers[pick[i]];
+        // (the decks were joined above to fit the two slots: KBOS FEW018 SCT030 OVC048 with fog nearby lost its overcast, 2026-11-13)
+        for (size_t i = 0; i < 2 && first + i < layers.size(); ++i) x.clouds[1 + i] = layers[first + i];
     } else {
         for (size_t i = 0; i < 3 && i < layers.size(); ++i) x.clouds[i] = layers[i];
     }
