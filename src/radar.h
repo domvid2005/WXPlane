@@ -136,7 +136,8 @@ std::string mrmsUrl(const std::string& region, const std::string& product);
 // `conv` (optional, same grid as refl): 1 where the precipitation is convective, 0 where it is stratiform rain or snow; cells with no
 // convective pixel in their footprint are marked stratiform.
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
-                            const std::set<std::string>* prev = nullptr, const GribField* conv = nullptr);
+                            const std::set<std::string>* prev = nullptr, const GribField* conv = nullptr,
+                            const std::vector<Station>* stations = nullptr);   // airports: natural squares over them are split to 6 nm
 // Convection reported at an airport (TS, SH, GR, GS, SQ in the weather; CB, TCU or LTG anywhere in the report). GFS points never count.
 bool convectionReported(const Station& st);
 // Caps steady rain/snow pixels of `refl` at capDbz and returns a mask on its grid (1 = convective). With `flag` (MRMS PrecipFlag),

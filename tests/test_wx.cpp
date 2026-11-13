@@ -690,6 +690,17 @@ int main() {
             CHECK(wmin < 20.0f && wmx >= 45.0f);   // split near the aircraft, and the core keeps its strength
             CHECK((int)(w.cells.size() + w.dryCells.size()) <= wc.radarNaturalMax);
         }
+        {   // uniform rain with an airport under it: the square over the airport is split down to 6 nm (one record, one airport's decks)
+            GribField flat = refl;
+            flat.ni = flat.nj = 200; flat.lat0 = 39.0; flat.lon0 = -99.5; flat.v.assign(40000, 25.0f);
+            Config fc; fc.radarRangeNm = 60; fc.radarMinDbz = 20;
+            std::vector<Station> ap(1);
+            ap[0].icao = "KTST"; ap[0].lat = 38.25; ap[0].lon = -98.65;
+            RadarResult f0 = buildRadarCells(flat, nullptr, 38.0, -98.5, fc), f1 = buildRadarCells(flat, nullptr, 38.0, -98.5, fc, nullptr, nullptr, &ap);
+            const RadarCell *a0 = naturalCellAt(f0, ap[0].lat, ap[0].lon), *a1 = naturalCellAt(f1, ap[0].lat, ap[0].lon);
+            std::printf("  airport under uniform rain: square %.0f nm without the airport, %.0f nm with it\n", a0 ? a0->sizeNm : -1.0f, a1 ? a1->sizeNm : -1.0f);
+            CHECK(a0 && a1 && a0->sizeNm > 6.5f && a1->sizeNm <= 6.01f);
+        }
         {   // natural picture (the default): fine records along the edges, dry ones around, stable between runs
             Config nc; nc.radarRangeNm = 100; nc.radarMinDbz = 20;
             RadarResult n1 = buildRadarCells(refl, &tops, 38.0, -98.0, nc), n2 = buildRadarCells(refl, &tops, 38.0, -98.0, nc);

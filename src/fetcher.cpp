@@ -369,7 +369,7 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
                 typeNote = b;
             }
         }
-        out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr);
+        out = buildRadarCells(refl, haveTops ? &tops : nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr, stations);
         radarPrev_.clear();
         for (const auto& c : out.cells) radarPrev_.insert(c.key);
         out.source = "NOAA MRMS (" + name + ")";
@@ -479,7 +479,7 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
             std::snprintf(b, sizeof b, "convection only within 60 nm of an airport reporting it; %d pixel(s) capped at %.0f dBZ", capped, cfg.radarStratiformMaxDbz);
             typeNote = b;
         }
-        out = buildRadarCells(refl, nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr);
+        out = buildRadarCells(refl, nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr, stations);
         radarPrev_.clear();
         for (const auto& c : out.cells) radarPrev_.insert(c.key);
         out.source = store == 1 ? "EUMETNET OPERA (Europe, backup store)" : "EUMETNET OPERA (Europe)";

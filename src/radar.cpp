@@ -686,7 +686,8 @@ double fbm(double X, double Y, double scaleNm, int salt) {   // smooth noise -1.
 }
 }   // namespace
 
-static void buildNaturalCells(const GribField& refl, const GribField* tops, double acLat, double acLon, const Config& cfg, RadarResult& res) {
+static void buildNaturalCells(const GribField& refl, const GribField* tops, double acLat, double acLon, const Config& cfg, RadarResult& res,
+                              const std::vector<Station>* stations) {
     res.natural = true;
     const double R = std::max(30.0, cfg.radarRangeNm);
     const double cosRef = std::max(0.2, std::cos(std::round(acLat) * kPi / 180.0));   // fixed per whole degree, so the grid stays put
@@ -816,7 +817,17 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
     }
     // 3) split the squares, the most useful split first: a square whose picture is mixed (more than one intensity class) is split into
     // four; priority is its size, weighted down with distance (an edge close to the aircraft matters most), until the budget is used.
-    struct Leaf { double X, Y, s; double z; int c; float frac; bool mixed; };
+    // An airport inside a square: one record can only carry one airport's cloud decks, and a 24 nm square of uniform rain reached over
+    // several of them (2026-11-13 KAPC: the overcast at 1377 m read back at 605 m, the deck of another airport under the same square).
+    // A square with an airport in it (or within 2 nm of its edge) is split down to 6 nm, so the record over each airport is its own.
+    std::vector<std::pair<double, double>> stnXY;
+    if (stations) for (const auto& st : *stations) stnXY.push_back({toX(st.lon), toY(st.lat)});
+    auto hasStation = [&](double X, double Y, double s) {
+        for (const auto& q : stnXY) if (q.first >= X - 2.0 && q.first <= X + s + 2.0 && q.second >= Y - 2.0 && q.second <= Y + s + 2.0) return true;
+        return false;
+    };
+    const double kStationSquareNm = 6.0;
+    struct Leaf { double X, Y, s; double z; int c; float frac; bool mixed; bool stn; };
     auto measure = [&](double X, double Y, double s) {
         const double cx = X + s / 2, cy = Y + s / 2;
         const int n = std::max(4, std::min(16, (int)std::lround(s / 1.0)));
@@ -837,11 +848,12 @@ static void buildNaturalCells(const GribField& refl, const GribField* tops, doub
             zc = Zn(cx, cy);
             for (int c = 4; c > 0; --c) if (cc[c] > 0) { if (cc[c] * 3 >= cnt) zc = std::max(zc, cs[c] / cc[c]); break; }
         }
-        return Leaf{cx, cy, s, zc, cls(zc), (float)wetN / (float)cnt, mixed};
+        return Leaf{cx, cy, s, zc, cls(zc), (float)wetN / (float)cnt, mixed, hasStation(X, Y, s)};
     };
     const double fine = std::max(1.5, cfg.radarNaturalFineNm);
     auto prio = [&](const Leaf& L) {
-        if (!L.mixed || L.s / 2 < fine - 1e-6) return -1.0;
+        const bool stnSplit = L.stn && L.s / 2 >= kStationSquareNm - 1e-6;
+        if ((!L.mixed || L.s / 2 < fine - 1e-6) && !stnSplit) return -1.0;
         const double d = distNm(acLat, acLon, toLat(L.Y), toLon(L.X));
         return L.s / (1.0 + std::pow(d / 40.0, 1.5));   // (40 nm: the rim further out is split finer too, so it shows no big squares)
     };
@@ -1008,7 +1020,7 @@ void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double
 }
 
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
-                            const std::set<std::string>* prev, const GribField* conv) {
+                            const std::set<std::string>* prev, const GribField* conv, const std::vector<Station>* stations) {
     RadarResult res;
     res.attempted = true;
     if (!refl.valid()) { res.note = "no reflectivity grid"; return res; }
@@ -1081,7 +1093,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     }
     res.echoBlocks = (int)all.size();
     if (cfg.radarNatural) {
-        buildNaturalCells(refl, tops, lat, lon, cfg, res);
+        buildNaturalCells(refl, tops, lat, lon, cfg, res, stations);
         if (conv) markStratiform(res.cells, *conv, cfg.radarCellNm);
         res.ok = true;
         res.topsFromRadar = tops != nullptr;
