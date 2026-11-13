@@ -303,6 +303,12 @@ double noise2(double X, double Y, double scale, int salt) {
 // The kinds of cloud that may blend into each other between records: cirrus (type 0), stratus (1), and the cumulus family (2 cumulus,
 // 2.5 towering cumulus, 3 cumulonimbus). X-Plane's type is a gradient; a blended value in between belongs to the nearer kind.
 int cloudFamily(float type) { return type < 0.5f ? 0 : (type < 1.5f ? 1 : 2); }
+// Two records' layers are one deck (and may blend) when they overlap, are the same kind of cloud, and start at the same height:
+// bases within 300 ft (91 m).
+bool sameDeck(const XPLMWeatherInfoClouds_t& x, const XPLMWeatherInfoClouds_t& y) {
+    return x.alt_base <= y.alt_top + 100.0f && y.alt_base <= x.alt_top + 100.0f && cloudFamily(x.cloud_type) == cloudFamily(y.cloud_type) &&
+           std::fabs(x.alt_base - y.alt_base) <= 300.0f * 0.3048f;
+}
 
 void matchEmptyLayers(std::vector<Todo>& todo) {
     const int K = XPLM_NUM_CLOUD_LAYERS;
@@ -402,8 +408,10 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             }
             // ... and only clouds of one kind: cirrus with cirrus, stratus with stratus, cumulus with cumulus, towering cumulus
             // and cumulonimbus (cumulus and cumulonimbus may blend with each other)
+            // ... and only layers that start at the same height (bases within 300 ft: one deck reported 100-200 ft apart by
+            // neighbouring stations): a broken layer at 900 ft never blends with one at 1,500 ft, even where they overlap
             auto touches = [](const XPLMWeatherInfoClouds_t& x, const XPLMWeatherInfoClouds_t& y) {
-                return x.alt_base <= y.alt_top + 100.0f && y.alt_base <= x.alt_top + 100.0f && cloudFamily(x.cloud_type) == cloudFamily(y.cloud_type);
+                return sameDeck(x, y);
             };
             for (size_t j = 0; j < n; ++j) {
                 if (isBump(j)) continue;   // a bump is its deck again (see above): it would count the deck twice
@@ -477,7 +485,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                         const size_t j = nj.first;
                         if (!isReal[j][k]) continue;
                         const XPLMWeatherInfoClouds_t& o = todo[j].rec.info.cloud_layers[k];
-                        if (!(o.alt_base <= c.alt_top + 100.0f && c.alt_base <= o.alt_top + 100.0f) || cloudFamily(o.cloud_type) != cloudFamily(c.cloud_type)) continue;   // not the same deck
+                        if (!sameDeck(o, c)) continue;   // not the same deck
                         const float m = (float)(S * nj.second + 60.0);
                         lo = std::max(lo, o.alt_base - m); hi = std::min(hi, o.alt_base + m);
                     }

@@ -461,7 +461,16 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
             x.clouds[0] = layers[0];
             first = 1;
         }
-        for (size_t i = 0; i < 2 && first + i < layers.size(); ++i) x.clouds[1 + i] = layers[first + i];
+        // two slots for the decks: with three, the two that cover the most sky are kept (in height order), not the two lowest
+        // (KBOS FEW018 SCT030 OVC048, 2026-11-13: fog nearby took slot 0, and the overcast was the deck left out)
+        std::vector<size_t> pick;
+        for (size_t i = first; i < layers.size(); ++i) pick.push_back(i);
+        if (pick.size() > 2) {
+            std::stable_sort(pick.begin(), pick.end(), [&](size_t a, size_t b) { return layers[a].coverage > layers[b].coverage + 1e-4f; });
+            pick.resize(2);
+            std::sort(pick.begin(), pick.end());
+        }
+        for (size_t i = 0; i < pick.size(); ++i) x.clouds[1 + i] = layers[pick[i]];
     } else {
         for (size_t i = 0; i < 3 && i < layers.size(); ++i) x.clouds[i] = layers[i];
     }
