@@ -67,7 +67,8 @@ XPLMPluginID XPLMGetNthPlugin(int i) { return i; }
 void XPLMGetPluginInfo(XPLMPluginID id, char* n, char* p, char* s, char* d) {
     const std::string nm = id == 0 ? std::string("WXPlane") : g_otherPlugin;
     if (n) std::strcpy(n, nm.c_str());
-    if (p) std::strcpy(p, id == 0 ? "Resources/plugins/WXPlane/win_x64/WXPlane.xpl" : "Resources/plugins/other/win_x64/other.xpl");
+    if (p) std::strcpy(p, id == 0 ? "Resources/plugins/WXPlane/win_x64/WXPlane.xpl" :
+                          (g_otherPlugin.rfind("ERJ", 0) == 0 ? "E:\\X-Plane 12\\Aircraft\\X-Crafts\\ERJ\\plugins\\ERJ_EICAS\\win_x64\\ERJ_EICAS.xpl" : "Resources/plugins/other/win_x64/other.xpl"));
     if (s) std::strcpy(s, id == 0 ? "com.wxplane.xp12.noaa" : "com.example.other");
     if (d) d[0] = 0;
 }
@@ -860,6 +861,11 @@ static int runTurb() {
     g_otherPlugin.clear();
     CHECK(pumpUntil("no other turbulence add-on running any more", 30));
     { const int w1 = g_turbWrites; for (int i = 0; i < 400 && g_turbWrites == w1; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); } CHECK(g_turbWrites > w1); }   // writing again
+    std::printf("[turb] 2c) an aircraft's own plugin (the X-Crafts ERJ's EICAS): a note, WXPlane's turbulence stays on\n");
+    g_otherPlugin = "ERJ_EICAS";
+    CHECK(pumpUntil("may add turbulence effects of its own; WXPlane's turbulence stays on", 30));
+    { const int w2 = g_turbWrites; for (int i = 0; i < 400 && g_turbWrites == w2; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); } CHECK(g_turbWrites > w2); }
+    g_otherPlugin.clear();
     std::printf("[turb] 3) the menu toggle puts X-Plane's values back\n");
     g_menuHandler(nullptr, (void*)(intptr_t)10 /*kTurbulence*/);
     CHECK(pumpUntil("realistic turbulence off: X-Plane's region turbulence put back", 5));

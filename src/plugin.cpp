@@ -556,9 +556,13 @@ std::string utcHM(std::time_t t) {
 // it (the window says so and locks its turbulence controls). Checked when enabled and every 15 s: the name of the first such
 // enabled plugin, "" when none.
 std::string g_turbConflict;
-std::string findTurbConflict() {
+std::string g_turbNote;   // an aircraft's own plugin that may add turbulence effects: shown, nothing is turned off
+// Plugins that live in an aircraft's folder (Aircraft/...) never count as a conflict (2026-11-12: the X-Crafts ERJ's EICAS plugin
+// must not turn WXPlane's turbulence off); the known ones that add their own turbulence effects get a note on the Turbulence tab.
+std::string findTurbConflict(std::string* note) {
     const XPLMPluginID me = XPLMGetMyID();
     const int n = XPLMCountPlugins();
+    if (note) note->clear();
     for (int i = 0; i < n; ++i) {
         const XPLMPluginID id = XPLMGetNthPlugin(i);
         if (id == me || id < 0 || !XPLMIsPluginEnabled(id)) continue;
@@ -567,8 +571,14 @@ std::string findTurbConflict() {
         std::string key;   // name, signature and the plugin's folder, lower case letters and digits only
         for (const char* src : {(const char*)name, (const char*)sig, (const char*)path})
             for (const char* c = src; *c; ++c) if (std::isalnum((unsigned char)*c)) key += (char)std::tolower((unsigned char)*c);
-        static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic",
-                                             "erjeicas"};   // X-Crafts ERJ: its EICAS plugin drives turbulence too (customer, 2026-11-12)
+        std::string lp(path);
+        for (char& c : lp) c = (char)std::tolower((unsigned char)(c == '\\' ? '/' : c));
+        const bool aircraft = lp.find("/aircraft/") != std::string::npos;
+        if (aircraft) {
+            if (note && note->empty() && key.find("erjeicas") != std::string::npos) *note = name[0] ? std::string(name) : std::string("ERJ EICAS");
+            continue;
+        }
+        static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic"};
         for (const char* k : kTurbAddons)
             if (key.find(k) != std::string::npos) return name[0] ? std::string(name) : std::string(sig);
     }
@@ -579,7 +589,12 @@ void turbConflictCheck(bool force) {
     const auto now = Clock::now();
     if (!force && now < next) return;
     next = now + std::chrono::seconds(15);
-    const std::string c = findTurbConflict();
+    std::string note;
+    const std::string c = findTurbConflict(&note);
+    if (note != g_turbNote) {
+        g_turbNote = note;
+        if (!note.empty()) logf("turbulence: the aircraft's plugin %s may add turbulence effects of its own; WXPlane's turbulence stays on", note.c_str());
+    }
     if (c == g_turbConflict) return;
     g_turbConflict = c;
     if (!c.empty()) logf("turbulence: %s is running and does the turbulence - WXPlane leaves X-Plane's turbulence to it", c.c_str());
@@ -3068,6 +3083,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.xpRealWeather = g_xpRealWx;
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence && g_turbConflict.empty();
     d.turbConflict = g_turbConflict;
+    d.turbNote = g_turbNote;
     d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
     d.turbGridAltFt = g_uiTs.gridAltFt; d.turbGridSeq = g_uiTs.gridSeq;
     d.magVarAt = magVarEastAt;

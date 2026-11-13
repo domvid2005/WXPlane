@@ -218,7 +218,7 @@ void windRefSwitch(const char* id, float rightGap = 0.0f, bool withLock = false)
     const float pad = 6, inner = 4, gapG = 12;
     // withLock: a North Lock / Heading Lock switch first, in the same bubble (the wind dial's switch: the arrows turn with it)
     const float lk = font->CalcTextSizeA(lblFs, FLT_MAX, 0.0f, "LOCK").x;
-    const float lockW = withLock ? lk + inner + bw("North") + 2 + bw("Heading") + gapG : 0.0f;
+    const float lockW = withLock ? lk + inner + bw("Heading") + gapG : 0.0f;   // one button, always as wide as "Heading"
     const float boxW = pad + lockW + lt + inner + bw("°C") + 2 + bw("°F") + gapG + lw + inner + bw("°T") + 2 + bw("°M") + pad;
     const float boxH = ImGui::GetTextLineHeight() + 4;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - boxW - rightGap));
@@ -241,7 +241,18 @@ void windRefSwitch(const char* id, float rightGap = 0.0f, bool withLock = false)
         }
         x += gapG - 2;
     };
-    if (withLock) group("LOCK", lk, "North", "Heading", dialHeadingUp(), 2);   // North / Heading Lock, styled like the units
+    if (withLock) {   // LOCK: one button, the units' style, that reads North or Heading (lit blue in Heading Lock); its size never changes
+        dl->AddText(font, lblFs, ImVec2(x, p0.y + (boxH - lblFs) * 0.5f), cIdle, "LOCK");
+        x += lk + inner;
+        const bool on = dialHeadingUp();
+        ImGui::SetCursorScreenPos(ImVec2(x, p0.y + 2));
+        ImGui::PushStyleColor(ImGuiCol_Button, v4(on ? IM_COL32(43, 69, 102, 255) : IM_COL32(40, 43, 49, 255)));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(st.FramePadding.x, 0.0f));
+        if (ImGui::Button(on ? "Heading###lock" : "North###lock", ImVec2(bw("Heading"), ImGui::GetTextLineHeight()))) dialHeadingUp() = !on;
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        x += bw("Heading") + gapG;
+    }
     group("WIND", lw, "°T", "°M", windMagnetic(), 1);
     group("TEMP", lt, "°C", "°F", tempF(), 0);
     ImGui::SetCursorScreenPos(p0);
@@ -430,6 +441,11 @@ void updateViewRot(const UiData& d) {
 
 // With winds in degrees magnetic and North Lock, the dial and the winds-aloft arrows are drawn with magnetic north up (turned by the
 // variation), so an arrow points where its °M number says; eased like the lock turn. Heading Lock is the same either way (relative).
+// "Heading Lock 233°M": the aircraft's heading, true or magnetic as the wind switch says
+std::string headingText(const UiData& d) {
+    const int t = (int)std::lround(std::fmod(d.headingDeg + 360.0, 360.0)), h = windMagnetic() ? toMagnetic(d.headingDeg, magVar(d, d.lat, d.lon)) : (t == 0 ? 360 : t);
+    return fmt("Heading Lock %03d°%s", h, windMagnetic() ? "M" : "T");
+}
 float magTurn(int which, bool on, float varEast) {
     static float cur[4] = {0, 0, 0, 0};
     const float target = on ? varEast : 0.0f;
@@ -453,7 +469,10 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
     const bool hovered = ImGui::IsItemHovered() || ImGui::IsMouseHoveringRect(boxMin, ImVec2(p.x + size, boxMin.y + boxH));
     const bool up = dialHeadingUp() && d.havePos;
     // screen-up direction, degrees true (animated); magnetic north up with °M in North Lock
-    const double rot = viewRot() + magTurn(0, windMagnetic() && !dialHeadingUp(), (float)magVar(d, d.lat, d.lon));
+    // °M: the compass letters mark magnetic north (in both locks), and North Lock turns the dial so magnetic north is up; the wind
+    // (a true bearing) is drawn against the same screen-up, so it points where its °M number says in either lock
+    const float magN = magTurn(0, windMagnetic(), (float)magVar(d, d.lat, d.lon));
+    const double rot = viewRot() + magN * (1.0f - headingUpness());
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float R = size * 0.5f - 2;
     const float hub = 33.0f;   // the middle circle: the same size in both modes, big enough for the components with their gusts
@@ -471,7 +490,7 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
     const char* nesw[] = {"N", "E", "S", "W"};
     for (int k = 0; k < 4; ++k) {
         const ImVec2 ts = ImGui::CalcTextSize(nesw[k]);
-        const ImVec2 q = onDial(k * 90.0, (R + mid) * 0.5f);   // in the outer band
+        const ImVec2 q = onDial(k * 90.0 + magN, (R + mid) * 0.5f);   // in the outer band (magnetic north with °M)
         dl->AddText(ImVec2(q.x - ts.x * 0.5f, q.y - ts.y * 0.5f), k == 0 ? cSoft : cMuted, nesw[k]);
     }
     if (headingUpness() > 0.02f) {   // the aircraft's nose at the top of the dial (fades in and out with the mode)
@@ -523,7 +542,9 @@ void windDial(const UiData& d, const UiFonts& f, const Report& r, float size) {
         else centred(f.body, fs * 0.75f, "kt", c.y + fs * 0.75f, cMuted);
     }
     {   // which way the dial (and the map) is turned: a small box under the dial, its text changing with a click on the dial
-        const char* mode = dialHeadingUp() ? "Heading Lock" : "North Lock";
+        // in Heading Lock with the aircraft's heading, in the chosen reference (°T / °M)
+        const std::string modeS = dialHeadingUp() && d.havePos ? headingText(d) : std::string(dialHeadingUp() ? "Heading Lock" : "North Lock");
+        const char* mode = modeS.c_str();
         const float sfs = fs * 0.8f;
         const ImVec2 ts = f.body->CalcTextSizeA(sfs, FLT_MAX, 0.0f, mode);
         const ImVec2 q = ImGui::GetCursorScreenPos();
@@ -1599,7 +1620,8 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             if (wb.first) bubbleHit = 4;
             if (bubble(ImVec2(p.x + 8 + wb.second + 6, y), "TEMP", tt, tempF(), false).first) bubbleHit = 5;
         }
-        const char* lk = dialHeadingUp() ? "Heading Lock" : "North Lock";
+        const std::string lkS = dialHeadingUp() && d.havePos ? headingText(d) : std::string(dialHeadingUp() ? "Heading Lock" : "North Lock");
+        const char* lk = lkS.c_str();
         const char* ce = "Center on aircraft";
         const float wl = ImGui::CalcTextSize(lk).x + 12, wc = ImGui::CalcTextSize(ce).x + 12;
         const bool panned = std::fabs(mapPan().x) > 0.01f || std::fabs(mapPan().y) > 0.01f;
@@ -1761,6 +1783,12 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
     const ImGuiWindowFlags fl = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | (measuring ? ImGuiWindowFlags_NoInputs : 0);
     if (ImGui::Begin(("##mapinfo" + std::to_string(sel.kind) + sel.key).c_str(), nullptr, fl)) {
+        {   // inside the map in this very frame: its size is known now (it may have grown since the place was chosen), so it is
+            // moved in before anything is drawn, never shown over the edge for a frame
+            const ImVec2 ws = ImGui::GetWindowSize(), wp = ImGui::GetWindowPos();
+            const ImVec2 q(std::max(mn.x + 4, std::min(wp.x, mx.x - 4 - ws.x)), std::max(mn.y + 4, std::min(wp.y, mx.y - 4 - ws.y)));
+            if (std::fabs(q.x - wp.x) > 0.5f || std::fabs(q.y - wp.y) > 0.5f) { ImGui::SetWindowPos(q); sel.pos = q; }
+        }
         // dragged by its background (not by its buttons): it follows the mouse, and keeps that place afterwards
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) sel.dragging = true;
         if (sel.dragging) {
@@ -2134,19 +2162,15 @@ void homePireps(const UiData& d, const UiFonts& f) {
     sectionTitle(f, "Pilot reports");
     size_t shown = 0;   // the ones the list shows (a report that says nothing is not listed)
     if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) ++shown;
-    if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", shown).c_str()); }
-    // whole rows only: the list is as tall as its rows (all of them when they fit; otherwise as many whole rows as fit, and it
-    // scrolls), so no half-cut row hangs at the bottom of the panel
+    if (d.reports) muted(shown == 1 ? "1 Pirep Reported" : fmt("%zu Pireps Reported", shown).c_str());   // under the title, as on the Map tab
+    // whole rows only: the list is as tall as its rows (all of them when they fit; otherwise as many whole rows as fit, with a
+    // scroll bar beside them), so no half-cut row hangs at the bottom of the panel
     // the real header height and row step, measured the last time it was drawn (the first frame: an estimate)
     const RowMetrics& rm = pirepMetrics("homepireps");
     const float est = ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().CellPadding.y;
     const float rowH = rm.step > 1 ? rm.step : est, headH = rm.head > 1 ? rm.head : est;
     const float avail = ImGui::GetContentRegionAvail().y - 2;
     const int fitRows = std::max(1, (int)std::floor((avail - headH - 1) / rowH));
-    if (d.reports && (int)shown > fitRows) {   // more than fit: which ones are shown (the wheel over the list turns it a row at a time)
-        ImGui::SameLine();
-        muted(fmt("· %d-%d, scroll for more", rm.shownFrom + 1, std::max(rm.shownFrom + 1, rm.shownTo)).c_str());
-    }
     if (!d.reports || shown == 0) mutedWrapped("No pilot reports in the last 90 minutes.");
     else if (avail > 40) { static std::vector<std::string> open; pirepTable(d, f, "homepireps", ImVec2(0, -(float)std::min<int>(fitRows, (int)shown)), open, 1); }
 }
@@ -2195,6 +2219,11 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
     static std::map<std::string, int> firstOf;
     int& first = firstOf[id];
     if (pageRows) size.y = 0;
+    size_t total = 0;   // (the list's length, for the page's scroll bar)
+    if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) ++total;
+    const bool pageBar = pageRows > 0 && (int)total > pageRows;
+    const float sbW = ImGui::GetStyle().ScrollbarSize;
+    if (pageBar) size.x = ImGui::GetContentRegionAvail().x - sbW - 2;   // room for the scroll bar on the right, like the airport list's
     const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | (pageRows ? 0 : ImGuiTableFlags_ScrollY) | ImGuiTableFlags_PadOuterX |
                                ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | ImGuiTableFlags_NoClip;
     const float tableRight = ImGui::GetCursorScreenPos().x + (size.x > 0 ? size.x : ImGui::GetContentRegionAvail().x);
@@ -2303,10 +2332,29 @@ void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, 
         ImGui::PopID();
     }
     ImGui::EndTable();
-    if (pageRows && ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f) {   // a row at a time, nearest end first
-        first -= (int)std::lround(ImGui::GetIO().MouseWheel);
-        first = std::max(0, std::min(first, (int)v.size() - pageRows));
+    const ImVec2 tMin = ImGui::GetItemRectMin(), tMax = ImGui::GetItemRectMax();
+    const bool overList = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(tMin, tMax);
+    if (pageBar) {   // the scroll bar: a track beside the rows and a thumb as long as the page; drag it, click the track, or wheel
+        const float head = pirepMetrics(id).head > 1 ? pirepMetrics(id).head : ImGui::GetTextLineHeight() + 4;
+        const ImVec2 a(tMax.x + 2, tMin.y + head), b(tMax.x + 2 + sbW, tMax.y);
+        const int n = (int)v.size(), maxFirst = std::max(1, n - pageRows);
+        const float trackH = b.y - a.y, thumbH = std::max(18.0f, trackH * (float)pageRows / (float)n);
+        const float ty = a.y + (trackH - thumbH) * (float)first / (float)maxFirst;
+        ImGui::SetCursorScreenPos(a);
+        ImGui::InvisibleButton("##pagebar", ImVec2(sbW, std::max(1.0f, trackH)));
+        const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+        if (act) {
+            const float my = ImGui::GetIO().MousePos.y - a.y - thumbH * 0.5f;
+            first = (int)std::lround(std::max(0.0f, std::min(1.0f, my / std::max(1.0f, trackH - thumbH))) * maxFirst);
+        }
+        ImDrawList* sd = ImGui::GetWindowDrawList();
+        sd->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_ScrollbarBg), sbW * 0.5f);
+        sd->AddRectFilled(ImVec2(a.x + 2, ty + 2), ImVec2(b.x - 2, ty + thumbH - 2),
+                          ImGui::GetColorU32(act ? ImGuiCol_ScrollbarGrabActive : (hov ? ImGuiCol_ScrollbarGrabHovered : ImGuiCol_ScrollbarGrab)), sbW * 0.5f);
+        if (hov && ImGui::GetIO().MouseWheel != 0.0f) first -= (int)std::lround(ImGui::GetIO().MouseWheel);
     }
+    if (pageRows && overList && ImGui::GetIO().MouseWheel != 0.0f) first -= (int)std::lround(ImGui::GetIO().MouseWheel);   // a row at a time
+    if (pageRows) first = std::max(0, std::min(first, (int)v.size() - pageRows));
     pirepMetrics(id).shownFrom = (int)i0; pirepMetrics(id).shownTo = (int)i1;
 }
 
@@ -2384,7 +2432,7 @@ void aloftTable(const UiData& d, const UiFonts& f, const std::vector<float>& lev
     plainHeaders();
     ImGui::PopStyleColor();
     bool tropoDone = tropoFt < 0;
-    const float aloftMagRot = magTurn(1, aloftMag && !dialHeadingUp(), (float)magVar(d, d.lat, d.lon));
+    const float aloftMagRot = magTurn(1, aloftMag, (float)magVar(d, d.lat, d.lon)) * (1.0f - headingUpness());
     for (int i = (int)rows.size() - 1; i >= 0; --i) {   // highest first, like a sounding
         const AloftRow& r = rows[(size_t)i];
         if (!tropoDone && r.ft < tropoFt) {
@@ -2476,6 +2524,12 @@ void turbulenceCard(const UiData& d, const UiFonts& f, UiActions& act, bool slid
         return;
     }
     if (!d.turbData.empty()) { ImGui::SameLine(); muted(d.turbData.c_str()); }
+    if (slider && !d.turbNote.empty()) {   // an aircraft's own plugin: a note only, WXPlane's turbulence stays on
+        ImGui::SameLine(0, 16);
+        ImGui::PushStyleColor(ImGuiCol_Text, v4(cWarn));
+        ImGui::TextUnformatted(fmt("Note: %s (the aircraft's plugin) may add turbulence effects of its own", d.turbNote.c_str()).c_str());
+        ImGui::PopStyleColor();
+    }
     if (!slider) {   // the home page: three rows
         int withTurb = 0, total = 0;
         if (d.reports) for (const auto& p : d.reports->pireps) { if (!pirepListed(p)) continue; ++total; if (hz::edrForIntensity(p.intensity, p.acType) > 0) ++withTurb; }
@@ -2667,7 +2721,10 @@ float tabWidth(const char* label) {
     // the tab bar keeps the frame padding it was begun with (ImGui), so the tabs' side padding is the window's FramePadding.x
     return tf->CalcTextSizeA(fs, FLT_MAX, 0.0f, label).x + 2 * ImGui::GetStyle().FramePadding.x;
 }
-bool bigTab(const char* label, bool* open, ImGuiTabItemFlags flags) {
+// Every tab the same width (the widest label, "Winds & Temps", plus padding), its label on the left (2026-11-12: one style)
+float uniformTabWidth() { return tabWidth("Winds & Temps") + 10.0f; }
+bool bigTab(const char* label, bool* open, ImGuiTabItemFlags flags, float width = -1.0f) {
+    ImGui::SetNextItemWidth(width >= 0 ? width : uniformTabWidth());
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, kTabPad);
     if (tabFont()) ImGui::PushFont(tabFont());
     const bool r = ImGui::BeginTabItem(label, open, flags);
@@ -2790,7 +2847,7 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
         ImGui::Spacing();
         sectionTitle(f, fmt("Airports in use (%zu)", d.res->stations.size()).c_str());
         windRefSwitch("wrAir", 0.0f, true);   // with North / Heading Lock in the same bubble (the arrows turn with it)
-        const float airMagRot = magTurn(2, windMagnetic() && !dialHeadingUp(), (float)magVar(d, d.lat, d.lon));
+        const float airMagRot = magTurn(2, windMagnetic(), (float)magVar(d, d.lat, d.lon)) * (1.0f - headingUpness());
         const ImGuiTableFlags fl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
         if (ImGui::BeginTable("all", 9, fl)) {
             ImGui::TableSetupColumn("ICAO", ImGuiTableColumnFlags_WidthFixed, textColW("WWWW"), kSortIcao);
@@ -3493,7 +3550,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     if (tabBarOpen) {
         if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
         if (bigTab("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
-        if (bigTab(fmt("Airports (%zu)###air", d.res->stations.size()).c_str(), nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
+        if (bigTab("Airports###air", nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
         if (bigTab("Winds & Temps", nullptr, d.forceTab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAloft(d, f); ImGui::EndTabItem(); }
         {   // the Turbulence tab only while turbulence & windshear are on; it fades out (and back in) instead of vanishing
             static float vis = -1;
@@ -3505,10 +3562,9 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
                 // the tab narrows (and widens as it comes back) at exactly the pace the tabs after it slide over: it is not faded
                 // separately, its label is simply cut off by its edge as it closes (drawn here, clipped to the tab, so ImGui's "..."
                 // never shows); eased at both ends (smootherstep)
-                const float full = tabWidth("Turbulence");
+                const float full = uniformTabWidth();
                 const float e = vis * vis * vis * (vis * (vis * 6 - 15) + 10);
-                ImGui::SetNextItemWidth(std::max(1.0f, full * e));   // always: its label is drawn here, so ImGui would size it empty
-                const bool open = bigTab("###turbtab", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0);
+                const bool open = bigTab("###turbtab", nullptr, d.forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0, std::max(1.0f, full * e));
                 {
                     const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
                     ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
@@ -3521,7 +3577,7 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
                 if (open) { ImGui::Spacing(); tabTurbulence(d, f, act); ImGui::EndTabItem(); }
             }
         }
-        if (bigTab(bad ? fmt("Services (%d)###svc", bad).c_str() : "Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }
+        if (bigTab("Services###svc", nullptr, d.forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabServices(d, f); ImGui::EndTabItem(); }
         if (bigTab("Settings", nullptr, d.forceTab == 6 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabSettings(d, f, act); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }

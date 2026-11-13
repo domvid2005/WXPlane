@@ -214,12 +214,13 @@ TURBULENCE
     last minute). Pilot reports are on the Overview and the Map tab.
   * Windshear odds (0-1.0): how often gust fronts and microbursts form.
     1.0 is the realistic rate; 0 means none at all (like Max turbulence 0).
-  * Another turbulence add-on running (ActiveSky XP, xProTurb, the X-Crafts
-    ERJ's EICAS plugin,
-    XPRealistic ...): WXPlane leaves X-Plane's turbulence to it. A red
-    TURBULENCE CONFLICT caution covers this tab and its controls are
-    locked until that add-on is disabled. The switch in Settings still
-    works (to turn WXPlane's turbulence and windshear off altogether).
+  * Another turbulence add-on running (ActiveSky XP, xProTurb, XPRealistic
+    ...): WXPlane leaves X-Plane's turbulence to it. A red TURBULENCE
+    CONFLICT caution covers this tab and its controls are locked until that
+    add-on is disabled. The switch in Settings still works (to turn
+    WXPlane's turbulence and windshear off altogether). An aircraft's own
+    plugins never count as a conflict; the X-Crafts ERJ's EICAS plugin, which
+    may add turbulence effects of its own, gets a note on this tab.
 
 SERVICES
   Every data source WXPlane uses, with its state:
