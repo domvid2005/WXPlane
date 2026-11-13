@@ -31,9 +31,7 @@ extern const unsigned char wx_font_tzones[]; extern const unsigned int wx_font_t
 extern const unsigned char wx_font_logo[]; extern const unsigned int wx_font_logo_size;
 }
 
-#ifdef WX_UI_PNG
-float g_testMapRight = 0, g_testAltBoxLeft = 0;   // the UI test: the Map tab's map's right edge and the altitude value box's left edge
-#endif
+float g_testMapRight = 0, g_testAltBoxLeft = 0;   // for the UI test: the Map tab's map's right edge and the altitude value box's left edge
 namespace wx {
 namespace {
 
@@ -981,9 +979,7 @@ float altSnap(float v) {
 
 // snapStep / snapRadius: values within snapRadius of a multiple of snapStep are pulled onto it (the knob "clicks" into whole thousands
 // of feet, or tenths), and the mouse wheel steps from one multiple to the next. snapFn, when given, decides the pull instead.
-#ifdef WX_UI_PNG
-static float s_lastValueBoxLeft = 0;
-#endif
+float s_lastValueBoxLeft = 0;   // the last vertical slider's value box, left edge (for the UI test)
 bool smoothSlider(const char* id, float& shown, float& target, float vmin, float vmax, ImVec2 size, bool vertical, const std::string& label, bool& released,
                   bool disabled = false, float snapStep = 0.0f, float snapRadius = 0.0f, float (*snapFn)(float) = nullptr, ImU32 knobColour = 0) {
     released = false;
@@ -1037,9 +1033,7 @@ bool smoothSlider(const char* id, float& shown, float& target, float vmin, float
         if (vertical) {
             const ImVec2 b0(kc.x - knobR - 6 - ts.x - 8, kc.y - ts.y * 0.5f - 3), b1(kc.x - knobR - 6, kc.y + ts.y * 0.5f + 3);
             dl->AddRectFilled(b0, b1, IM_COL32(28, 30, 34, 235), 4);
-#ifdef WX_UI_PNG
             s_lastValueBoxLeft = b0.x;
-#endif
             dl->AddText(ImVec2(b0.x + 4, b0.y + 3), disabled ? cIdle : cText, label.c_str());
         } else {
             dl->AddText(ImVec2(p.x + (size.x - ts.x) * 0.5f, p.y + (size.y - ts.y) * 0.5f - ts.y * 0.9f), disabled ? cIdle : cSoft, label.c_str());
@@ -2122,9 +2116,7 @@ void altitudeSlider(const UiData& d, float w, float h) {
     // dragging (or the wheel) chooses an altitude: ACFT / SFC end there
     const bool on10k = !off && a.mode != AltMode::Comp && a.shown > 50.0f && std::fabs(a.shown - std::round(a.shown / 10000.0f) * 10000.0f) < 50.0f;   // a 10,000 ft level: amber
     if (smoothSlider("##mapalt", a.shown, tgt, 0.0f, kMapAltMax, ImVec2(w, sh), true, label, released, off, 1000.0f, 300.0f, altSnap, on10k ? cWarn : 0) || released) { a.mode = AltMode::Chosen; a.chosen = tgt; a.target = tgt; }
-#ifdef WX_UI_PNG
     g_testAltBoxLeft = s_lastValueBoxLeft;
-#endif
     (void)d;
     ImGui::EndGroup();
     if (off) ImGui::EndDisabled();
@@ -2150,9 +2142,7 @@ void radarPanel(const UiData& d, const UiFonts& f, bool big) {
     const float hLeft = ImGui::GetContentRegionAvail().y - (big ? 40 : 84);   // (home: the legend and the three storm figures under it)
     const float size = std::max(120.0f, std::min(avail, hLeft));
     if (size < avail) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - size) * 0.5f);
-#ifdef WX_UI_PNG
     if (big) g_testMapRight = ImGui::GetCursorScreenPos().x + size;
-#endif
     radarCanvas(d, f, size, rangeNmOf(radarRange()), big);
     if (big) {   // the altitude slider beside the map, as tall as the map
         ImGui::SameLine(0, gap);
