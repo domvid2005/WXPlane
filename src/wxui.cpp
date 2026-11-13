@@ -447,11 +447,11 @@ std::string headingText(const UiData& d) {
     return fmt("Heading Lock %03d°%s", h, windMagnetic() ? "M" : "T");
 }
 float magTurn(int which, bool on, float varEast) {
-    static float cur[4] = {0, 0, 0, 0};
+    static float cur[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     const float target = on ? varEast : 0.0f;
     const float dt = std::max(0.0f, std::min(0.25f, ImGui::GetIO().DeltaTime));
     const float k = 1.0f - std::exp(-dt * 7.0f);
-    float& c = cur[which & 3];
+    float& c = cur[which & 7];
     c = std::fabs(target - c) < 0.05f ? target : c + (target - c) * k;
     return c;
 }
@@ -1204,7 +1204,9 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     (void)rangeNm;
     rangeNm = shownRange();   // eased zoom
     const float px = (float)(R / rangeNm);   // pixels per nm
-    const double rot = viewRot() * kPi / 180.0;
+    // the map turns like the wind wheel: heading up in Heading Lock; in North Lock true north up, or magnetic north up with °M
+    const float mapRotDeg = viewRot() + magTurn(interactive ? 3 : 4, windMagnetic(), (float)magVar(d, aLat, aLon)) * (1.0f - headingUpness());
+    const double rot = mapRotDeg * kPi / 180.0;
     const float cr = (float)std::cos(rot), sr = (float)std::sin(rot);
     auto at = [&](double lat, double lon) {
         double dlon = lon - cLon;
@@ -1530,13 +1532,13 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const ImU32 blue = IM_COL32((int)(175 - 145 * sf), (int)(215 - 135 * sf), (int)(255 - 25 * sf), al);
             const ImU32 col = sel ? IM_COL32(255, 196, 70, std::max(al, 200)) : (kt < 2.5f ? IM_COL32(255, 255, 255, al) : blue);
             if (sel) selAt(4, w.key, q);
-            drawBarb(dl, q, dir, kt, viewRot(), col, sel ? 1.12f : 1.0f);
+            drawBarb(dl, q, dir, kt, mapRotDeg, col, sel ? 1.12f : 1.0f);
             if (composite() && w.levelFt > 0) {   // which level that strongest wind is at
                 const std::string lv = fmt("%03.0f", w.levelFt / 100.0f);
                 dl->AddText(f.body, ImGui::GetFontSize() * 0.72f, ImVec2(q.x + 5, q.y + 2), IM_COL32(170, 180, 195, (int)(220 * w.show)), lv.c_str());
             }
             // clicked on its staff and feathers (not on the point itself, which belongs to the airport there, if any)
-            const double ang = (dir - viewRot()) * kPi / 180.0;
+            const double ang = (dir - mapRotDeg) * kPi / 180.0;
             const ImVec2 sv((float)std::sin(ang), -(float)std::cos(ang));
             const ImVec2 s0(q.x + sv.x * 7, q.y + sv.y * 7), s1(q.x + sv.x * 30, q.y + sv.y * 30);
             // the barb: its staff and feathers (from 7 px out); the circle at its foot is the airport's (its METAR, ATIS, surface wind)
@@ -1577,7 +1579,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             if (interactive && (dm < bestPt || (dm <= 7.5f && hitKind == 4))) { bestPt = dm; hitKind = 2; hitKey = st.icao; hitAt = q; }
         }
     // the aircraft: its true heading (not the ground track, which swings around when slow or stopped)
-    const double a = (d.headingDeg - viewRot()) * kPi / 180.0;
+    const double a = (d.headingDeg - mapRotDeg) * kPi / 180.0;
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
     dl->AddTriangleFilled(ImVec2(ac.x + dir.x * 10, ac.y + dir.y * 10), ImVec2(ac.x - dir.x * 7 + n.x * 6, ac.y - dir.y * 7 + n.y * 6),
                           ImVec2(ac.x - dir.x * 7 - n.x * 6, ac.y - dir.y * 7 - n.y * 6), IM_COL32(255, 255, 255, 255));
@@ -1612,13 +1614,15 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const std::string t = mapLocalTime() ? clockText(d.now + (std::time_t)off, false) + " " + (est ? "~" : "") + zoneText(tLat, tLon, off, d.now) : clockText(d.now, false) + "Z";
             if (bubble(ImVec2(p.x + 8, p.y + 8), mapLocalTime() ? "LOCAL" : "TIME", t.c_str(), mapLocalTime(), false).first) bubbleHit = 3;
         }
-        {   // the units, as bubbles at the bottom left (lit blue when °M / °F, like LOCAL): a click swaps them on every page
+        {   // the units, as bubbles at the bottom right (lit blue when °M / °F, like LOCAL): a click swaps them on every page
             const char* wt = windMagnetic() ? "°M" : "°T";
             const char* tt = tempF() ? "°F" : "°C";
             const float bh = ImGui::GetTextLineHeight() + 6, y = p.y + size - 8 - bh;
-            const auto wb = bubble(ImVec2(p.x + 8, y), "WIND", wt, windMagnetic(), false);
-            if (wb.first) bubbleHit = 4;
-            if (bubble(ImVec2(p.x + 8 + wb.second + 6, y), "TEMP", tt, tempF(), false).first) bubbleHit = 5;
+            // the widths, as bubble() makes them (label at 82 %, the value, padding)
+            auto bwOf = [&](const char* l, const char* t) { return ImGui::CalcTextSize(l).x * 0.82f + 6 + ImGui::CalcTextSize(t).x + 12; };
+            const float wT = bwOf("TEMP", "°F"), wW = bwOf("WIND", "°M");   // the wider value of each, so they do not shift when switched
+            if (bubble(ImVec2(p.x + size - 8 - wT, y), "TEMP", tt, tempF(), false).first) bubbleHit = 5;
+            if (bubble(ImVec2(p.x + size - 8 - wT - 6 - wW, y), "WIND", wt, windMagnetic(), false).first) bubbleHit = 4;
         }
         const std::string lkS = dialHeadingUp() && d.havePos ? headingText(d) : std::string(dialHeadingUp() ? "Heading Lock" : "North Lock");
         const char* lk = lkS.c_str();
@@ -2162,7 +2166,7 @@ void homePireps(const UiData& d, const UiFonts& f) {
     sectionTitle(f, "Pilot reports");
     size_t shown = 0;   // the ones the list shows (a report that says nothing is not listed)
     if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) ++shown;
-    if (d.reports) muted(shown == 1 ? "1 Pirep Reported" : fmt("%zu Pireps Reported", shown).c_str());   // under the title, as on the Map tab
+    if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", shown).c_str()); }   // how many, beside the title
     // whole rows only: the list is as tall as its rows (all of them when they fit; otherwise as many whole rows as fit, with a
     // scroll bar beside them), so no half-cut row hangs at the bottom of the panel
     // the real header height and row step, measured the last time it was drawn (the first frame: an estimate)
@@ -2782,7 +2786,15 @@ void tabOverview(const UiData& d, const UiFonts& f, UiActions& act) {
     if (panelBegin("time", ImVec2(colW, timeH), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) timeBox(d, f);
     panelEnd();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + gap);   // exactly `gap` between stacked panels, so every column ends level
-    if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { sectionTitle(f, "Nearby airports"); nearbyTable(d, st, 0, true); }
+    if (panelBegin("near", ImVec2(colW, bodyH - cardH - timeH - 2 * gap), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
+        sectionTitle(f, "Nearby airports");
+        if (d.res) {   // how many, beside the title (the list's own count: the airports in use, without the nearest one shown above)
+            size_t n = 0;
+            for (const auto& s2 : d.res->stations) if (&s2 != st && s2.icao.compare(0, 3, "GFS") != 0) ++n;
+            ImGui::SameLine(); muted(fmt("%zu", n).c_str());
+        }
+        nearbyTable(d, st, 0, true);
+    }
     panelEnd();
     ImGui::EndGroup();
     ImGui::SameLine(0, gap);
@@ -2935,20 +2947,48 @@ void tabRadar(const UiData& d, const UiFonts& f) {
         if (!r.ok) mutedWrapped(radarSubtitle(d));
         else {
             muted(r.topsFromRadar ? "Storm tops from radar echo tops" : "Storm tops estimated from reflectivity");
-            std::vector<const RadarCell*> cs;
-            for (const auto& k : r.cells) if (!k.synthetic) cs.push_back(&k);
-            std::sort(cs.begin(), cs.end(), [](const RadarCell* a, const RadarCell* b) { return a->dbz > b->dbz; });
-            if (ImGui::BeginTable("cells", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX)) {
-                ImGui::TableSetupColumn("dBZ", ImGuiTableColumnFlags_WidthFixed, textColW("dBZ"));
-                ImGui::TableSetupColumn("Rain", ImGuiTableColumnFlags_WidthFixed, textColW("000 mm/h"));
-                ImGui::TableSetupColumn("Top", ImGuiTableColumnFlags_WidthFixed, textColW("FL000 est"));
-                ImGui::TableSetupColumn("Where", ImGuiTableColumnFlags_WidthStretch);
+            // cells within 3 nm of a stronger one are merged into it: one row per storm, with the highest of each value (reflectivity,
+            // rain, top) and the strongest one's place
+            struct Cell { double lat, lon; float dbz, rate, topM; bool topKnown; double dist, brg; };
+            std::vector<const RadarCell*> raw;
+            for (const auto& k : r.cells) if (!k.synthetic) raw.push_back(&k);
+            std::sort(raw.begin(), raw.end(), [](const RadarCell* a, const RadarCell* b) { return a->dbz > b->dbz; });
+            std::vector<Cell> cs;
+            for (const RadarCell* k : raw) {
+                Cell* into = nullptr;
+                for (auto& c : cs) if (distNm(c.lat, c.lon, k->lat, k->lon) <= 3.0) { into = &c; break; }
+                if (into) {
+                    into->rate = std::max(into->rate, k->rateMmH);
+                    if (k->topM > into->topM) { into->topM = k->topM; into->topKnown = k->topKnown; }
+                    continue;
+                }
+                Cell c{k->lat, k->lon, k->dbz, k->rateMmH, k->topM, k->topKnown, d.havePos ? distNm(d.lat, d.lon, k->lat, k->lon) : k->distNm, 0};
+                if (d.havePos) { const double dy = k->lat - d.lat, dx = (k->lon - d.lon) * std::cos(d.lat * kPi / 180.0); c.brg = std::fmod(std::atan2(dx, dy) * 180.0 / kPi + 360.0, 360.0); }
+                cs.push_back(c);
+            }
+            enum { kCDbz = 1, kCRain, kCTop, kCWhere };
+            if (ImGui::BeginTable("cells", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX |
+                                              ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate)) {
+                // sortable like the pilot reports: a click on a header (again: the other way, a third time: back to strongest first)
+                ImGui::TableSetupColumn("dBZ", ImGuiTableColumnFlags_WidthFixed, textColW("dBZ") + 8, kCDbz);
+                ImGui::TableSetupColumn("Rain", ImGuiTableColumnFlags_WidthFixed, textColW("000 mm/h") + 8, kCRain);
+                ImGui::TableSetupColumn("Top", ImGuiTableColumnFlags_WidthFixed, textColW("FL000 est") + 8, kCTop);
+                ImGui::TableSetupColumn("Where", ImGuiTableColumnFlags_WidthStretch, 1.0f, kCWhere);
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::PushStyleColor(ImGuiCol_Text, v4(cMuted));
-                plainHeaders();
+                ImGui::TableHeadersRow();
                 ImGui::PopStyleColor();
-                for (size_t i = 0; i < cs.size() && i < 60; ++i) {
-                    const RadarCell& k = *cs[i];
+                int col = kCDbz; bool desc = true;
+                if (ImGuiTableSortSpecs* sp = ImGui::TableGetSortSpecs())
+                    if (sp->SpecsCount > 0) { col = (int)sp->Specs[0].ColumnUserID; desc = sp->Specs[0].SortDirection == ImGuiSortDirection_Descending; }
+                auto key = [&](const Cell& c) -> double { return col == kCRain ? c.rate : (col == kCTop ? c.topM : (col == kCWhere ? c.dist : c.dbz)); };
+                std::stable_sort(cs.begin(), cs.end(), [&](const Cell& a, const Cell& b) {
+                    const double ka = key(a), kb = key(b);
+                    if (ka != kb) return desc ? ka > kb : ka < kb;
+                    return a.dist < b.dist;   // ties: nearest first
+                });
+                for (size_t i = 0; i < cs.size() && i < 80; ++i) {
+                    const Cell& k = cs[i];
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
                     // a click on a row: the map glides there (its + over the cell)
@@ -2961,13 +3001,10 @@ void tabRadar(const UiData& d, const UiFonts& f) {
                     ImGui::PopID();
                     ImGui::SameLine(0, 0);
                     ImGui::PushStyleColor(ImGuiCol_Text, v4(dbzColor(k.dbz, 255))); ImGui::Text("%.0f", k.dbz); ImGui::PopStyleColor();
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f mm/h", k.rateMmH);
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f mm/h", k.rate);
                     ImGui::TableSetColumnIndex(2); if (k.topM > 0) ImGui::Text("FL%03.0f%s", k.topM / 0.3048 / 100.0, k.topKnown ? "" : " est"); else muted("—");
                     ImGui::TableSetColumnIndex(3);
-                    const double dd = d.havePos ? distNm(d.lat, d.lon, k.lat, k.lon) : k.distNm;
-                    double brg = 0;
-                    if (d.havePos) { const double dy = k.lat - d.lat, dx = (k.lon - d.lon) * std::cos(d.lat * kPi / 180.0); brg = std::fmod(std::atan2(dx, dy) * 180.0 / kPi + 360.0, 360.0); }
-                    ImGui::Text("%.0f nm  %03.0f°", dd, brg);
+                    ImGui::Text("%.0f nm  %03.0f°", k.dist, k.brg);
                 }
                 ImGui::EndTable();
             }
@@ -2979,7 +3016,7 @@ void tabRadar(const UiData& d, const UiFonts& f) {
         sectionTitle(f, "Pilot reports");
         size_t shown = 0;
         if (d.reports) for (const auto& q : d.reports->pireps) if (pirepListed(q)) ++shown;
-        if (d.reports) muted(shown == 1 ? "1 Pirep Reported" : fmt("%zu Pireps Reported", shown).c_str());   // under the title, like the cells
+        if (d.reports) { ImGui::SameLine(); muted(fmt("%zu", shown).c_str()); }   // how many, beside the title (as on the home page)
         if (!d.reports || shown == 0) mutedWrapped("No pilot reports in the last 90 minutes.");
         else { static std::vector<std::string> open; pirepTable(d, f, "mappireps", ImVec2(0, ImGui::GetContentRegionAvail().y - 2), open, 2); }
     }
