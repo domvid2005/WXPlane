@@ -2046,7 +2046,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     int stormCount = 0;
     if (g_cfg.radar && res.radar.ok && !res.stations.empty()) {
         // Pass 1: each cell's station weather and the base its own station deck would give it.
-        struct StormPre { wx::XpWx x; const wx::Station* nearest; double nd; float base; };
+        struct StormPre { wx::XpWx x; const wx::Station* nearest; double nd; float base; bool anchored; };
         std::vector<StormPre> pre;
         pre.reserve(res.radar.cells.size());
         for (const auto& c : res.radar.cells) {
@@ -2055,6 +2055,23 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             for (const auto& s : res.stations) {
                 double d = wx::distNm(c.lat, c.lon, s.lat, s.lon);
                 if (d < nd) { nd = d; nearest = &s; }
+            }
+            // A rain record whose circle overlaps a station's record is blended by X-Plane into that station's weather. It takes that
+            // station's layers and keeps its deck base as reported (2026-11-13 KAPC: the overcast at 1377 m read back at 757-993 m,
+            // because the rain records around the airport had their base averaged with cells further out that grew from lower decks).
+            const double rc = c.natural ? std::max(1.2, c.sizeNm * 0.9)
+                                        : std::max(4.0, std::max(6.0, g_cfg.radarCellNm * g_cfg.stormRadiusFactor) * c.radiusScale);
+            bool anchored = false;
+            {
+                double bestIn = 1e9;
+                for (const auto& s : res.stations) {
+                    auto rit = stationRadius.find(s.icao);
+                    if (rit == stationRadius.end()) continue;
+                    const double d = wx::distNm(c.lat, c.lon, s.lat, s.lon);
+                    if (d > rit->second + rc) continue;
+                    const double in = d - rit->second;   // the station whose record reaches furthest over this cell
+                    if (in < bestIn) { bestIn = in; nearest = &s; nd = d; anchored = true; }
+                }
             }
             wx::XpWx x = baseWx[nearest->icao];
             // A station's ground fog and low visibility are local; do not project them onto storms far from it.
@@ -2067,7 +2084,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             const bool overlapsStation = srit != stationRadius.end() && nd <= srit->second + std::max(6.0, g_cfg.radarCellNm * 0.9);
             if (nd > 60.0 || (x.visM < 5000.0f && !(overlapsStation && x.visM >= 1000.0f))) x.visM = (float)g_cfg.clearVisM;
             if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK);
-            pre.push_back({x, nearest, nd, wx::stormBaseFor(x, c, nearest->elevM)});
+            pre.push_back({x, nearest, nd, wx::stormBaseFor(x, c, nearest->elevM), anchored});
         }
         // Neighbouring cells take their base from different stations' decks (1051 m next to 1987 m in a log), which X-Plane blends into
         // a stepped underside and walls. Cells within 1.7 cell widths therefore share a distance-weighted mean base.
@@ -2075,6 +2092,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         if (g_cfg.stormBaseSmooth) {
             const double reach = g_cfg.radarCellNm * 1.7;
             for (size_t i = 0; i < pre.size(); ++i) {
+                if (pre[i].anchored) continue;   // keeps its station's base (the cells around still smooth towards it)
                 double sw = 0, sb = 0;
                 for (size_t j = 0; j < pre.size(); ++j) {
                     const double d = wx::distNm(res.radar.cells[i].lat, res.radar.cells[i].lon, res.radar.cells[j].lat, res.radar.cells[j].lon);
@@ -2598,6 +2616,20 @@ void weatherWatch() {
     logf("weather watch (nearest %s, %.0f nm): X-Plane wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m | we want wind %.0f/%.1f m/s vis %.0f m cloud %.2f@%.0f m%s",
          nearSt ? nearSt->icao.c_str() : "?", nearSt ? nearD : 0.0, info.wind_layers[0].direction, info.wind_layers[0].speed, info.visibility,
          cov, base, x.windDir, x.windMs, x.visM, xcov, xbase, det ? "" : " (no detailed data)");
+    // Rain: what X-Plane holds at the aircraft against the heaviest rain of the records we sent that cover it, and (X-Plane 12) the
+    // rain actually falling on the aircraft, so a log shows whether rain that was sent also arrived.
+    {
+        float sent = -1.0f; int over = 0;
+        for (const auto& kv : g_recs) {
+            if (wx::distNm(lat, lon, kv.second.lat, kv.second.lon) > kv.second.info.radius_nm) continue;
+            ++over; sent = std::max(sent, kv.second.info.precip_rate);
+        }
+        static XPLMDataRef drOnAc = XPLMFindDataRef("sim/weather/aircraft/precipitation_on_aircraft_ratio");
+        char onAc[64] = "";
+        if (drOnAc) std::snprintf(onAc, sizeof onAc, ", falling on the aircraft %.2f", XPLMGetDataf(drOnAc));
+        logf("  rain: X-Plane %.2f at the aircraft%s | we sent %.2f (heaviest of %d record(s) covering it, report %.2f)",
+             info.precip_rate, onAc, sent < 0 ? 0.0f : sent, over, x.precip);
+    }
     // pressure_alt in a weather read-back is the QNH-style value X-Plane holds for the spot (it read 1008-1045 hPa at FL350), not the air
     // pressure at the aircraft; the real static pressure is in the altitude watch ("outside pressure").
     logf("  pressure: report QNH %.1f hPa | X-Plane's read-back for this spot: QNH-style value %.1f hPa, sea level %.1f hPa (aircraft at %.0f ft; outside pressure is in the altitude watch)",
