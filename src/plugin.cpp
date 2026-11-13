@@ -3070,7 +3070,7 @@ void showWindow() {
 
 void menuHandler(void*, void* item);
 #ifndef WX_HARNESS
-XPLMCommandRef g_cmdWindow = nullptr, g_cmdRefresh = nullptr;
+XPLMCommandRef g_cmdWindow = nullptr, g_cmdRefresh = nullptr, g_cmdMenu = nullptr;
 int g_pluginsItem = -1;
 void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut);
 int cmdHandler(XPLMCommandRef, XPLMCommandPhase phase, void* ref) {
@@ -3256,7 +3256,11 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     g_cmdRefresh = XPLMCreateCommand("wxplane/refresh", "WXPlane: refresh the weather now");
     if (g_cmdWindow) XPLMRegisterCommandHandler(g_cmdWindow, cmdHandler, 1, (void*)(intptr_t)1);
     if (g_cmdRefresh) XPLMRegisterCommandHandler(g_cmdRefresh, cmdHandler, 1, (void*)(intptr_t)2);
-    g_pluginsItem = g_cmdWindow ? XPLMAppendMenuItemWithCommand(XPLMFindPluginsMenu(), "WXPlane", g_cmdWindow) : -1;
+    // The menu item runs a command of its own that nobody binds a key to: X-Plane writes a command's key binding next to its menu
+    // item, so with the window command bound to a key the item read "WXPlane   m". The bindable command does the same thing.
+    g_cmdMenu = XPLMCreateCommand("wxplane/menu_weather_window", "WXPlane: the Plugins menu item (bind wxplane/weather_window instead)");
+    if (g_cmdMenu) XPLMRegisterCommandHandler(g_cmdMenu, cmdHandler, 1, (void*)(intptr_t)1);
+    g_pluginsItem = g_cmdMenu ? XPLMAppendMenuItemWithCommand(XPLMFindPluginsMenu(), "WXPlane", g_cmdMenu) : -1;
     return 1;
 #endif
     int sub = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "WXPlane", nullptr, 0);
@@ -3290,6 +3294,7 @@ PLUGIN_API void XPluginStop(void) {
     stopSearch();
     wx::xpui::destroy();
     if (g_cmdWindow) XPLMUnregisterCommandHandler(g_cmdWindow, cmdHandler, 1, (void*)(intptr_t)1);
+    if (g_cmdMenu) XPLMUnregisterCommandHandler(g_cmdMenu, cmdHandler, 1, (void*)(intptr_t)1);
     if (g_cmdRefresh) XPLMUnregisterCommandHandler(g_cmdRefresh, cmdHandler, 1, (void*)(intptr_t)2);
     if (g_pluginsItem >= 0) { XPLMRemoveMenuItem(XPLMFindPluginsMenu(), g_pluginsItem); g_pluginsItem = -1; }
 #endif
