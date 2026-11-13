@@ -612,19 +612,40 @@ std::string findTurbConflict(std::string* note) {
         if (id == me || id < 0 || !XPLMIsPluginEnabled(id)) continue;
         char name[512] = {0}, path[1024] = {0}, sig[512] = {0}, desc[1024] = {0};
         XPLMGetPluginInfo(id, name, path, sig, desc);
-        std::string key;   // name, signature and the plugin's folder, lower case letters and digits only
-        for (const char* src : {(const char*)name, (const char*)sig, (const char*)path})
-            for (const char* c = src; *c; ++c) if (std::isalnum((unsigned char)*c)) key += (char)std::tolower((unsigned char)*c);
-        std::string lp(path);
-        for (char& c : lp) c = (char)std::tolower((unsigned char)(c == '\\' ? '/' : c));
-        const bool aircraft = lp.find("/aircraft/") != std::string::npos;
+        // The words to look in, each on its own: the name, the signature, and each folder / file name of the path (without its
+        // extension), lower case letters and digits only. All run together, "ERJ_EICAS.xpl" read "...erjeicasxpl" and held "asxp"
+        // (ActiveSky XP's key): the X-Crafts ERJ's EICAS was taken for a turbulence add-on (a customer, 2026-11-13).
+        std::vector<std::string> words;
+        auto add = [&](const std::string& w) {
+            std::string k;
+            for (char c : w) if (std::isalnum((unsigned char)c)) k += (char)std::tolower((unsigned char)c);
+            if (!k.empty()) words.push_back(k);
+        };
+        add(name); add(sig);
+        // the path's parts: '/' and '\\' and, on a Mac, ':' (X-Plane gives plugins HFS paths, "Macintosh HD:Users:...:Aircraft:...",
+        // unless they ask for native paths: so the aircraft folder was never seen there either)
+        bool aircraft = false;
+        {
+            std::string part;
+            auto endPart = [&]() {
+                std::string lo;
+                for (char c : part) lo += (char)std::tolower((unsigned char)c);
+                if (lo == "aircraft") aircraft = true;
+                const size_t dot = part.rfind('.');
+                add(dot != std::string::npos && dot > 0 ? part.substr(0, dot) : part);
+                part.clear();
+            };
+            for (const char* c = path; *c; ++c) { if (*c == '/' || *c == '\\' || *c == ':') endPart(); else part += *c; }
+            endPart();
+        }
+        auto has = [&](const char* k) { for (const auto& w : words) if (w.find(k) != std::string::npos) return true; return false; };
         if (aircraft) {
-            if (note && note->empty() && key.find("erjeicas") != std::string::npos) *note = name[0] ? std::string(name) : std::string("ERJ EICAS");
+            if (note && note->empty() && has("erjeicas")) *note = name[0] ? std::string(name) : std::string("ERJ EICAS");
             continue;
         }
         static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic"};
         for (const char* k : kTurbAddons)
-            if (key.find(k) != std::string::npos) return name[0] ? std::string(name) : std::string(sig);
+            if (has(k)) return name[0] ? std::string(name) : std::string(sig);
     }
     return "";
 }

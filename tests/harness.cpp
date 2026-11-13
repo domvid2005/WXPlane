@@ -64,11 +64,13 @@ static float g_turbArr[13] = {0}; static int g_turbWrites = 0;
 // the plugin list: WXPlane itself (id 0) and, when set, another add-on (id 1) for the turbulence-conflict check
 static std::string g_otherPlugin;
 XPLMPluginID XPLMGetMyID() { return 0; }
+std::string g_otherPath;   // the other plugin's path, when a test sets one
 int XPLMCountPlugins() { return g_otherPlugin.empty() ? 1 : 2; }
 XPLMPluginID XPLMGetNthPlugin(int i) { return i; }
 void XPLMGetPluginInfo(XPLMPluginID id, char* n, char* p, char* s, char* d) {
     const std::string nm = id == 0 ? std::string("WXPlane") : g_otherPlugin;
     if (n) std::strcpy(n, nm.c_str());
+    if (p && id != 0 && !g_otherPath.empty()) { std::strcpy(p, g_otherPath.c_str()); p = nullptr; }
     if (p) std::strcpy(p, id == 0 ? "Resources/plugins/WXPlane/win_x64/WXPlane.xpl" :
                           (g_otherPlugin.rfind("ERJ", 0) == 0 ? "E:\\X-Plane 12\\Aircraft\\X-Crafts\\ERJ\\plugins\\ERJ_EICAS\\win_x64\\ERJ_EICAS.xpl" : "Resources/plugins/other/win_x64/other.xpl"));
     if (s) std::strcpy(s, id == 0 ? "com.wxplane.xp12.noaa" : "com.example.other");
@@ -892,6 +894,20 @@ static int runTurb() {
     g_otherPlugin = "ERJ_EICAS";
     CHECK(pumpUntil("may add turbulence effects of its own; WXPlane's turbulence stays on", 30));
     { const int w2 = g_turbWrites; for (int i = 0; i < 400 && g_turbWrites == w2; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); } CHECK(g_turbWrites > w2); }
+    g_otherPlugin.clear();
+    // 2d) the same on a Mac, as a customer had it (2026-11-13): X-Plane hands out an HFS path there, and "ERJ_EICAS.xpl" run
+    // together with the rest read "...eicasxpl", which held ActiveSky XP's "asxp"
+    std::printf("[turb] 2d) the ERJ's EICAS on a Mac (HFS path, name \"ERJ EICAS\"): still no conflict\n");
+    g_logAll.clear();
+    g_otherPlugin = "ERJ EICAS";
+    g_otherPath = "Macintosh HD:Users:someone:Desktop:X-Plane 12:Aircraft:X-Crafts:Embraer ERJ Family:plugins:ERJ_EICAS:mac_x64:ERJ_EICAS.xpl";
+    for (int i = 0; i < 400; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+    CHECK(g_logAll.find("is running and does the turbulence") == std::string::npos);
+    // and in the plugins folder (not an aircraft's): EICAS.xpl is no ActiveSky either
+    g_otherPath = "Macintosh HD:Users:someone:X-Plane 12:Resources:plugins:ERJ_EICAS:mac_x64:ERJ_EICAS.xpl";
+    for (int i = 0; i < 400; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+    CHECK(g_logAll.find("is running and does the turbulence") == std::string::npos);
+    g_otherPath.clear();
     g_otherPlugin.clear();
     std::printf("[turb] 3) the menu toggle puts X-Plane's values back\n");
     g_menuHandler(nullptr, (void*)(intptr_t)10 /*kTurbulence*/);
