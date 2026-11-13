@@ -634,6 +634,25 @@ int main() {
         float t2 = 0; for (const auto& k : s2.clouds) t2 = std::max(t2, k.topM);
         NEAR(t2, 2500, 1);
     }
+    // --- steady rain goes into the station's broken/overcast deck: no layer of its own, every deck keeps its slot and base (KCDW)
+    {
+        XpWx w;
+        w.clouds[0].type = 2.0f; w.clouds[0].coverage = 0.80f; w.clouds[0].baseM = 662; w.clouds[0].topM = 1030;
+        w.clouds[1].type = 1.5f; w.clouds[1].coverage = 0.98f; w.clouds[1].baseM = 1180; w.clouds[1].topM = 2478;
+        w.clouds[2].type = 1.5f; w.clouds[2].coverage = 0.32f; w.clouds[2].baseM = 4038; w.clouds[2].topM = 4438;
+        w.cloudCount = 3;
+        RadarCell c; c.dbz = 25; c.dbzFine = 25; c.rateMmH = 1; c.stratiform = true; c.topM = 6000; c.topKnown = true; c.lat = 40.8;
+        XpWx a = w; applyStorm(a, c, cfg, 50.0, 40.8);
+        CHECK(a.cloudCount == 3 && a.precip > 0);
+        CHECK(a.clouds[0].baseM == 662 && a.clouds[0].topM == 1030 && a.clouds[0].coverage == 0.80f);   // the broken deck as it was
+        CHECK(a.clouds[1].baseM == 1180 && a.clouds[1].coverage >= 0.98f);                              // the overcast takes the rain
+        NEAR(a.clouds[1].topM, 4038 - 150, 1);                                                         // raised, clear of the layer above
+        CHECK(a.clouds[2].baseM == 4038 && a.clouds[2].coverage == 0.32f);
+        RadarCell cb = c; cb.stratiform = false; cb.dbz = cb.dbzFine = 50;                              // a thunderstorm still builds its own cloud
+        XpWx b = w; applyStorm(b, cb, cfg, 50.0, 40.8);
+        bool tall = false; for (const auto& k : b.clouds) tall = tall || (k.type >= 2.9f && k.topM > 5000);
+        CHECK(tall);
+    }
     // --- close decks keep their reported bases (KEWR BKN016 BKN020 OVC035: BKN020 went out at 2,490 ft); they share the space between
     {
         Station st; st.elevM = 3;

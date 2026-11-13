@@ -1167,6 +1167,37 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     else if (dbz >= 35) cap = 4000; else if (dbz >= 30) cap = 6000; else if (dbz >= 25) cap = 8000;
     x.visM = std::min(x.visM, cap);
 
+    // Steady rain (MRMS PrecipFlag, under 40 dBZ) falls out of the station's broken or overcast deck (nimbostratus); it is not a cloud of
+    // its own (2026-11-13 near KCDW: a rain layer from the lowest base, 652 m, took slot 0 in the rain records and pushed the station's
+    // decks a slot up; X-Plane blends slot by slot, so the overcast vanished there and the cloud top dropped from 12,300 to 6,000 ft).
+    // The rain goes into that deck instead: its coverage at least what the radar calls for, its top raised to the radar's (or the
+    // model's) where that is higher, within the depth X-Plane allows and clear of the deck above. Base, slot and type stay the
+    // station's. Without such a deck the rain still builds its own cloud, below.
+    if (c.stratiform && dbz < 40.0f) {
+        int host = -1;
+        for (int i = 0; i < 3; ++i) {
+            const XpCloud& k = x.clouds[i];
+            if (k.coverage < 0.6f || k.type < 0.5f || k.type >= 2.25f || (i == 0 && x.fogLayerApplied)) continue;
+            if (host < 0 || k.coverage > x.clouds[host].coverage + 0.05f ||
+                (k.coverage > x.clouds[host].coverage - 0.05f && k.topM - k.baseM > x.clouds[host].topM - x.clouds[host].baseM)) host = i;
+        }
+        if (host >= 0) {
+            XpCloud& h = x.clouds[host];
+            float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
+            float cov = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac) * c.coverScale * (1.0f - 0.25f * c.edge);
+            h.coverage = std::min(1.0f, std::max(h.coverage, cov));
+            float topM = stormTopM(c, cfg, h.baseM);
+            if (c.edge > 0) topM = std::max(h.baseM + 1500.0f, h.baseM + (topM - h.baseM) * (1.0f - 0.45f * c.edge));
+            if (!x.modelProfM.empty()) { const float mt = modelCloudTopM(x.modelProfM, h.baseM); if (mt > topM) topM = mt; }
+            float ceil = std::min(kXpTopM, h.baseM + xpMaxThicknessM(h.type));
+            for (int i = 0; i < 3; ++i)
+                if (i != host && x.clouds[i].coverage > 0 && x.clouds[i].baseM > h.baseM) ceil = std::min(ceil, x.clouds[i].baseM - 150.0f);
+            if (topM > h.topM) h.topM = std::max(h.topM, std::min(topM, ceil));
+            const float topFt = h.topM / 0.3048f;
+            if (x.maxAltFt < topFt) x.maxAltFt = topFt;
+            return;   // steady rain: no storm turbulence or gusts
+        }
+    }
     // Slot choice: the station's own layers must survive. Use the top slot if it is free, else the middle one; only when all
     // are taken does the storm replace the highest of them (slot 0 may hold ground fog and is never used).
     const int slot = stormSlot(x);
