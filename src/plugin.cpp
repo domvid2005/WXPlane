@@ -2651,6 +2651,27 @@ void weatherWatch() {
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].type, x.clouds[i].coverage, x.clouds[i].baseM, x.clouds[i].topM, el);
+    // The global model's cloud cover by height here (what the cloud tops are taken from, model_tops), and the top it gives each deck
+    if (!x.modelProfM.empty()) {
+        std::string line;
+        char b[48];
+        for (const auto& p : x.modelProfM) {
+            if (p.first > 12500.0f) break;
+            std::snprintf(b, sizeof b, "%s%.0fft %.0f%%", line.empty() ? "" : " ", p.first / 0.3048f, p.second * 100.0f);
+            line += b;
+        }
+        std::string tops;
+        for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
+            if (!(x.clouds[i].coverage > 0.05f) || x.clouds[i].type < 0.5f) continue;
+            const float mt = wx::modelCloudTopM(x.modelProfM, x.clouds[i].baseM);
+            if (mt > 0) std::snprintf(b, sizeof b, " | layer %d: top %.0f ft", i, mt / 0.3048f);
+            else std::snprintf(b, sizeof b, " | layer %d: no model cloud at its base", i);
+            tops += b;
+        }
+        logf("  model cloud cover here: %s%s", line.c_str(), tops.c_str());
+    } else if (g_cfg.modelTops) {
+        logf("  model cloud cover here: none (no model cloud data near the aircraft yet)");
+    }
     logWindProfile(x, info, "the aircraft", lat, lon);
     logCoveringRecords(lat, lon, "the aircraft");
 }
