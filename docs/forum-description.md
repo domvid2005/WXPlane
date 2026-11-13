@@ -32,7 +32,7 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
   - The map's unit switches sit at the bottom right, and the tabs are all one size.
   - The logo is sharp at every size.
 - **Dim at night** (Settings, on by default): the window dims as the daylight goes and brightens again at dawn, so a night cockpit no longer goes dark while the window is open. A popped-out window is never dimmed.
-- **Solid overcast:** OVC is sent at 97% coverage, and never thins below 95% where WXPlane blends it with the weather around it.
+- **Fuller cloud decks:** OVC is sent at 97% coverage and never thins below 95% where WXPlane blends it with the weather around it; BKN is 75–80% (was 70%), varying from station to station.
 - **Map:** popups keep clear of the map's buttons and can't be dragged onto each other. With the map moved off the aircraft in North Lock, north is the north at the + (with °M the map turns with the local magnetic variation).
 - **Smoother start:** all tabs stay up while the first weather downloads, and a slow download counts the time it has taken ("Still downloading… 0:47") instead of freezing.
 - **Refresh and Pop out** are tabs at the right of the tab row, with the update status in a bubble above them.

@@ -12,6 +12,7 @@
 - Aircraft plugins (e.g. ERJ EICAS) no longer lock turbulence settings
 - Dim at night (Settings, on by default): the window dims with the daylight so the night cockpit no longer darkens while it is open
 - Overcast (OVC) at 97% coverage, never thinned below 95% where it blends with its neighbours
+- Broken (BKN) at 75–80% coverage (was 70%), varying from station to station
 - Refresh and Pop out as tabs, with the status in a bubble above them
 - All tabs stay up during the first download; a slow download shows "Still downloading… 0:47" instead of a frozen countdown
 - Map popups keep off the map's buttons and can't be dragged onto each other ("max popups" fixed)

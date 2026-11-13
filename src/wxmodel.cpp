@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "wxmodel.h"
 
 #include "geo.h"
@@ -13,7 +14,7 @@ float coverageFor(int cover) {
     switch (cover) {
         case CloudGroup::FEW: return 0.20f;
         case CloudGroup::SCT: return 0.40f;
-        case CloudGroup::BKN: return 0.70f;
+        case CloudGroup::BKN: return 0.775f;   // (a station's own broken layers vary 75-80 %: see buildXp)
         default: return 0.97f;   // OVC: 95-100 % (0.94 read as broken in X-Plane: KJFK OVC027 2026-11-13; still a little texture for the sun on the top)
     }
 }
@@ -297,6 +298,12 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
     for (const auto& g : cl) {
         XpCloud c;
         c.coverage = coverageFor(g.cover);
+        if (g.cover == CloudGroup::BKN) {   // broken (5-7/8): 75-80 %, varying from station to station and layer to layer (steady between updates)
+            uint32_t h = 2166136261u;
+            for (char ch : st.icao) { h ^= (uint8_t)ch; h *= 16777619u; }
+            h ^= (uint32_t)g.baseFtAgl * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+            c.coverage = 0.75f + 0.05f * (float)(h % 1001u) / 1000.0f;
+        }
         c.baseM = (float)(st.elevM + g.baseFtAgl * kFtToM);
         double thick;
         if (g.kind == 1) { c.type = 3.0f; thick = 6000; }
