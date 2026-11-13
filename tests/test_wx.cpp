@@ -562,9 +562,9 @@ int main() {
         const float l = buildXp(bkn, cfg, now, nullptr, false, &light).clouds[0].coverage;
         CHECK(h > alone && l < alone && h >= 0.80f && l <= 0.75f && h <= 0.85f && l >= 0.70f);
         // overcast elsewhere (far away, or at another height) does not count
-        std::vector<Station> far = {bkn, mk("KBOS", 42.36, -71.01, "KBOS 131251Z 27010KT 10SM OVC030 10/05 A3000"),
+        std::vector<Station> distant = {bkn, mk("KBOS", 42.36, -71.01, "KBOS 131251Z 27010KT 10SM OVC030 10/05 A3000"),
                                     mk("KLGA", 40.78, -73.87, "KLGA 131251Z 27010KT 10SM OVC250 10/05 A3000")};
-        CHECK(buildXp(bkn, cfg, now, nullptr, false, &far).clouds[0].coverage < alone);   // KLGA is clear at 3000 ft: lighter
+        CHECK(buildXp(bkn, cfg, now, nullptr, false, &distant).clouds[0].coverage < alone);   // KLGA is clear at 3000 ft: lighter
     }
     // --- mist with a low ceiling: the ceiling stays where it is reported and all three decks are kept
     {

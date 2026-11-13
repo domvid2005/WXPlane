@@ -456,13 +456,13 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
     // bases (the others follow them), and the top moves with the base so the layer keeps its depth.
     if (g_cfg.cloudSmoothNm > 0.0) {
         const double S = 40.0, reachNm = 3.0 * g_cfg.cloudSmoothNm + 15.0;
-        std::vector<std::vector<std::pair<size_t, float>>> near(n);   // each record's neighbours within reach (and the distance), once
+        std::vector<std::vector<std::pair<size_t, float>>> nbrs(n);   // each record's neighbours within reach (and the distance), once
         for (size_t i = 0; i < n; ++i) {
             if (todo[i].rec.airport || isBump(i)) continue;
             for (size_t j = 0; j < n; ++j) {
                 if (j == i || isBump(j)) continue;
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
-                if (d <= reachNm) near[i].push_back({j, (float)d});
+                if (d <= reachNm) nbrs[i].push_back({j, (float)d});
             }
         }
         for (int k = 0; k < K; ++k)
@@ -473,7 +473,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                     XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
                     if (c.alt_base < todo[i].rec.elev + 250.0) continue;   // ground fog stays as it is
                     float lo = -1e9f, hi = 1e9f;
-                    for (const auto& nj : near[i]) {
+                    for (const auto& nj : nbrs[i]) {
                         const size_t j = nj.first;
                         if (!isReal[j][k]) continue;
                         const XPLMWeatherInfoClouds_t& o = todo[j].rec.info.cloud_layers[k];
