@@ -2966,6 +2966,44 @@ void tabAirports(const UiData& d, const UiFonts& f, UiActions& act) {
     panelEnd();
 }
 
+// The Map tab's strongest cells: cells within 3 nm of a stronger one merged into it (one row per storm, the highest of each value,
+// the strongest one's place). Made once per radar picture (it compares the cells with each other), on a 3 nm grid.
+struct StormCell { double lat, lon; float dbz, rate, topM; bool topKnown; double dist, brg; };
+const std::vector<StormCell>& mergedStormCells(const RadarResult& r) {
+    static std::vector<StormCell> merged;
+    static const void* mergedOf = nullptr;
+    static size_t mergedN = (size_t)-1;
+    static double mergedSig = 0;
+    const double sig = r.cells.empty() ? 0.0 : r.cells.front().lat + r.cells.back().lon * 7.0 + r.cells.back().dbz;
+    if (mergedOf != (const void*)r.cells.data() || mergedN != r.cells.size() || mergedSig != sig) {
+        mergedOf = r.cells.data(); mergedN = r.cells.size(); mergedSig = sig;
+        merged.clear();
+        std::vector<const RadarCell*> raw;
+        for (const auto& k : r.cells) if (!k.synthetic) raw.push_back(&k);
+        std::stable_sort(raw.begin(), raw.end(), [](const RadarCell* a, const RadarCell* b) { return a->dbz > b->dbz; });
+        std::map<std::pair<int, int>, std::vector<size_t>> grid;   // 3 nm squares -> the storms in them
+        auto sq = [](double lat, double lon) { return std::make_pair((int)std::floor(lat * 20.0), (int)std::floor(lon * 60.0 * std::cos(lat * kPi / 180.0) / 3.0)); };
+        for (const RadarCell* k : raw) {
+            const auto c0 = sq(k->lat, k->lon);
+            StormCell* into = nullptr;
+            for (int dy = -1; dy <= 1 && !into; ++dy)
+                for (int dx = -1; dx <= 1 && !into; ++dx) {
+                    const auto it = grid.find({c0.first + dy, c0.second + dx});
+                    if (it == grid.end()) continue;
+                    for (size_t m : it->second) if (distNm(merged[m].lat, merged[m].lon, k->lat, k->lon) <= 3.0) { into = &merged[m]; break; }
+                }
+            if (into) {
+                into->rate = std::max(into->rate, k->rateMmH);
+                if (k->topM > into->topM) { into->topM = k->topM; into->topKnown = k->topKnown; }
+                continue;
+            }
+            grid[c0].push_back(merged.size());
+            merged.push_back(StormCell{k->lat, k->lon, k->dbz, k->rateMmH, k->topM, k->topKnown, k->distNm, -1});
+        }
+    }
+    return merged;
+}
+
 void tabRadar(const UiData& d, const UiFonts& f) {
     const float W = ImGui::GetContentRegionAvail().x, H = ImGui::GetContentRegionAvail().y;
     const float mapW = std::min(W * 0.62f, H + 40);
@@ -2979,45 +3017,14 @@ void tabRadar(const UiData& d, const UiFonts& f) {
     if (panelBegin("rcells", ImVec2(0, cellsH)) && d.res) {
         const RadarResult& r = d.res->radar;
         sectionTitle(f, "Strongest cells");
+        if (r.ok) { ImGui::SameLine(); muted(fmt("%zu", mergedStormCells(r).size()).c_str()); }   // how many, beside the title (as for the pilot reports)
         if (!r.ok) mutedWrapped(radarSubtitle(d));
         else {
             muted(r.topsFromRadar ? "Storm tops from radar echo tops" : "Storm tops estimated from reflectivity");
             // cells within 3 nm of a stronger one are merged into it: one row per storm, with the highest of each value (reflectivity,
             // rain, top) and the strongest one's place. The merge is made once per radar picture (not every frame: it compares the
             // cells with each other), on a 3 nm grid so each cell only looks at the storms in the squares around it.
-            struct Cell { double lat, lon; float dbz, rate, topM; bool topKnown; double dist, brg; };
-            static std::vector<Cell> merged;
-            static const void* mergedOf = nullptr;
-            static size_t mergedN = (size_t)-1;
-            static double mergedSig = 0;
-            const double sig = r.cells.empty() ? 0.0 : r.cells.front().lat + r.cells.back().lon * 7.0 + r.cells.back().dbz;
-            if (mergedOf != (const void*)r.cells.data() || mergedN != r.cells.size() || mergedSig != sig) {
-                mergedOf = r.cells.data(); mergedN = r.cells.size(); mergedSig = sig;
-                merged.clear();
-                std::vector<const RadarCell*> raw;
-                for (const auto& k : r.cells) if (!k.synthetic) raw.push_back(&k);
-                std::stable_sort(raw.begin(), raw.end(), [](const RadarCell* a, const RadarCell* b) { return a->dbz > b->dbz; });
-                std::map<std::pair<int, int>, std::vector<size_t>> grid;   // 3 nm squares -> the storms in them
-                auto sq = [](double lat, double lon) { return std::make_pair((int)std::floor(lat * 20.0), (int)std::floor(lon * 60.0 * std::cos(lat * kPi / 180.0) / 3.0)); };
-                for (const RadarCell* k : raw) {
-                    const auto c0 = sq(k->lat, k->lon);
-                    Cell* into = nullptr;
-                    for (int dy = -1; dy <= 1 && !into; ++dy)
-                        for (int dx = -1; dx <= 1 && !into; ++dx) {
-                            const auto it = grid.find({c0.first + dy, c0.second + dx});
-                            if (it == grid.end()) continue;
-                            for (size_t m : it->second) if (distNm(merged[m].lat, merged[m].lon, k->lat, k->lon) <= 3.0) { into = &merged[m]; break; }
-                        }
-                    if (into) {
-                        into->rate = std::max(into->rate, k->rateMmH);
-                        if (k->topM > into->topM) { into->topM = k->topM; into->topKnown = k->topKnown; }
-                        continue;
-                    }
-                    grid[c0].push_back(merged.size());
-                    merged.push_back(Cell{k->lat, k->lon, k->dbz, k->rateMmH, k->topM, k->topKnown, k->distNm, -1});
-                }
-            }
-            std::vector<Cell> cs = merged;
+            std::vector<StormCell> cs = mergedStormCells(r);
             // where from the aircraft, now (the bearing in the units chosen: °T, or °M with the variation at the aircraft)
             const bool magB = windMagnetic();
             const double varA = d.havePos ? magVar(d, d.lat, d.lon) : 0.0;
@@ -3052,8 +3059,8 @@ void tabRadar(const UiData& d, const UiFonts& f) {
                 int col = kCDbz; bool desc = true;
                 if (ImGuiTableSortSpecs* sp = ImGui::TableGetSortSpecs())
                     if (sp->SpecsCount > 0) { col = (int)sp->Specs[0].ColumnUserID; desc = sp->Specs[0].SortDirection == ImGuiSortDirection_Descending; }
-                auto key = [&](const Cell& c) -> double { return col == kCRain ? c.rate : (col == kCTop ? c.topM : (col == kCWhere ? c.dist : c.dbz)); };
-                std::stable_sort(cs.begin(), cs.end(), [&](const Cell& a, const Cell& b) {
+                auto key = [&](const StormCell& c) -> double { return col == kCRain ? c.rate : (col == kCTop ? c.topM : (col == kCWhere ? c.dist : c.dbz)); };
+                std::stable_sort(cs.begin(), cs.end(), [&](const StormCell& a, const StormCell& b) {
                     const double ka = key(a), kb = key(b);
                     if (ka != kb) return desc ? ka > kb : ka < kb;
                     return a.dist < b.dist;   // ties: nearest first
@@ -3062,7 +3069,7 @@ void tabRadar(const UiData& d, const UiFonts& f) {
                 const size_t r0 = (size_t)cFirst, r1 = std::min(cs.size(), r0 + (size_t)pageRows);
                 float y0 = -1;
                 for (size_t i = r0; i < r1; ++i) {
-                    const Cell& k = cs[i];
+                    const StormCell& k = cs[i];
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
                     {   // measure the header and the row step (for the page size next frame)
@@ -3684,17 +3691,17 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     int bad = 0;
     for (const auto& s : allServices(d)) if (s.state == SvcState::Down || s.state == SvcState::Degraded) ++bad;
     tabFont() = tabFontBig() ? tabFontBig() : f.bold;
-    {   // the line across the window sits between the logo row and the tops of the tabs (not behind the tabs)
-        ImGui::Dummy(ImVec2(0, 1));
-        const ImVec2 q = ImGui::GetCursorScreenPos();
-        const float w = ImGui::GetContentRegionAvail().x;
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(q.x, q.y), ImVec2(q.x + w, q.y), IM_COL32(58, 62, 70, 255), 1.0f);
-        ImGui::Dummy(ImVec2(0, 2));
-    }
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);   // the gap between the logo row and the tabs as between the tabs and the panels
     ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0.0f);
     const bool tabBarOpen = ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_None);
     ImGui::PopStyleVar();
     if (tabBarOpen) {
+        {   // the line across the window runs right along the bottom of the tabs (the tabs stand on it)
+            const ImRect bar = GImGui->CurrentTabBar->BarRect;
+            const float x0 = ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x;
+            const float x1 = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x;
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, bar.Max.y + 0.5f), ImVec2(x1, bar.Max.y + 0.5f), IM_COL32(58, 62, 70, 255), 1.0f);
+        }
         if (bigTab("Overview", nullptr, d.forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabOverview(d, f, act); ImGui::EndTabItem(); }
         if (bigTab("Map", nullptr, d.forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabRadar(d, f); ImGui::EndTabItem(); }
         if (bigTab("Airports###air", nullptr, d.forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) { ImGui::Spacing(); tabAirports(d, f, act); ImGui::EndTabItem(); }
