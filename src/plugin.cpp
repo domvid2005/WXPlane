@@ -114,16 +114,24 @@ bool g_lastSendImmediate = false;
 double g_fetchEstS = 25;            // how long full downloads take (learned)
 double g_loadS = -1;                // seconds left on the countdown, -1: none
 std::time_t g_fogUntil = 0;
-// Ground fog keeps a cloud slot free for it (X-Plane has three) only near the fog: within kFogSlotNm of a station that reported fog in
-// the last 30 minutes. Everywhere else all three slots go to the cloud decks (2026-11-13: one fog report anywhere took a slot from
-// every station, and KBOS lost its OVC048).
-struct FogSpot { double lat, lon; std::time_t until; };
+// Ground fog keeps a cloud slot free for it (X-Plane has three) only where it can reach: in the foggy station's own record and in the
+// records that touch it (X-Plane blends a record only with the ones it overlaps; WXPlane's own cloud smoothing leaves ground fog out).
+// A record "touches" when the distance is no more than the two radii (plus 1 nm). Everywhere else all three slots go to the cloud decks
+// (2026-11-13: one fog report anywhere took a slot from every station, and KBOS lost its OVC048; a fixed 50 / 25 nm then still took
+// it from stations two or three away in busy areas, and could miss a touching record in sparse ones). Kept 30 minutes per report.
+struct FogSpot { double lat, lon, radiusNm; std::time_t until; };
 std::map<std::string, FogSpot> g_fogSpots;
-const double kFogSlotNm = 25.0;   // a fog layer lives in its own station's record (about 5 nm) and the blend into the next ones
-bool fogNear(double lat, double lon, std::time_t now) {
+bool fogNear(double lat, double lon, double radiusNm, std::time_t now) {
     for (const auto& f : g_fogSpots)
-        if (f.second.until > now && wx::distNm(lat, lon, f.second.lat, f.second.lon) <= kFogSlotNm) return true;
+        if (f.second.until > now && wx::distNm(lat, lon, f.second.lat, f.second.lon) <= f.second.radiusNm + radiusNm + 1.0) return true;
     return false;
+}
+// a station record's radius, as the update gives it (each station's circle reaches 49 % of the way to its nearest other station)
+double stationRadiusNm(const wx::Station& s, const std::vector<wx::Station>& all) {
+    if (!g_cfg.stationRadiusAuto) return g_cfg.radiusNm;
+    double nn = 1e9;
+    for (const auto& o : all) if (&o != &s) nn = std::min(nn, wx::distNm(s.lat, s.lon, o.lat, o.lon));
+    return std::min(g_cfg.radiusNm, std::max(0.5, nn * g_cfg.stationRadiusFactor));
 }
 bool g_haveCenter = false;
 double g_centerLat = 0, g_centerLon = 0;
@@ -1813,7 +1821,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // to a different slot, and X-Plane rebuilds all of them (a visible reload).
     bool fogNow = false;
     for (const auto& s : res.stations)
-        if (wx::stationHasFog(s, g_cfg)) { fogNow = true; g_fogSpots[s.icao] = FogSpot{s.lat, s.lon, now + 1800}; }
+        if (wx::stationHasFog(s, g_cfg)) { fogNow = true; g_fogSpots[s.icao] = FogSpot{s.lat, s.lon, stationRadiusNm(s, res.stations), now + 1800}; }
     for (auto it = g_fogSpots.begin(); it != g_fogSpots.end();) { if (it->second.until <= now) it = g_fogSpots.erase(it); else ++it; }
     if (fogNow) g_fogUntil = now + 1800;
     const bool anyFog = now < g_fogUntil;   // fog somewhere in range (each record asks fogNear for its own place)
@@ -1880,7 +1888,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         }
     };
     for (const auto& s : res.stations) {
-        wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog && fogNear(s.lat, s.lon, now), &res.stations);
+        wx::XpWx x = wx::buildXp(s, g_cfg, now, &res.aloft, anyFog && fogNear(s.lat, s.lon, stationRadiusNm(s, res.stations), now), &res.stations);
         valFixes += wx::validateXp(x, false, &valNote);
         baseWx[s.icao] = x;
         // A station inside the storm area takes the radar's rain (if that is more than it reports). The station circle (about 11 nm) is
@@ -2000,7 +2008,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                         if (under) { ++fillUnderStorm; continue; }
                     }
                     wx::Station syn = wx::blendAt(res.stations, latc, lonc);
-                    wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog && fogNear(syn.lat, syn.lon, now));
+                    wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog && fogNear(syn.lat, syn.lon, cellNm * g_cfg.fillRadiusFactor, now));
                     if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
                     valFixes += wx::validateXp(x, false, &valNote);
                     if (g_cfg.radar && res.radar.ok && res.radar.natural)
@@ -2116,7 +2124,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             auto rit = stationRadius.find(nearest->icao);
             if (rit != stationRadius.end() && nd <= rit->second * 0.5 && c.sizeNm <= 6.0f) continue;   // a small square right at a station: the station record covers it
             wx::Station syn = wx::blendAt(res.stations, c.lat, c.lon);
-            wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog && fogNear(syn.lat, syn.lon, now));
+            wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog && fogNear(syn.lat, syn.lon, std::max(1.2, c.sizeNm * 0.9), now));
             if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
             x.precip = 0.0f;   // the radar shows no rain here
             valFixes += wx::validateXp(x, false, &valNote);
@@ -2176,7 +2184,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
             for (const auto& k : newlyGone) {
                 const Rec& old = g_recs[k];
                 wx::Station syn = wx::blendAt(res.stations, old.lat, old.lon);
-                wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog && fogNear(syn.lat, syn.lon, now));
+                wx::XpWx x = wx::buildXp(syn, g_cfg, now, &res.aloft, anyFog && fogNear(syn.lat, syn.lon, old.info.radius_nm, now));
                 if (x.fogLayerApplied) { x.clouds[0] = wx::XpCloud(); x.fogLayerApplied = false; }
                 wx::validateXp(x, false, nullptr);
                 XPLMWeatherInfo_t info;
@@ -2561,7 +2569,7 @@ void regionTick() {
     if (!g_cfg.enabled || !g_cfg.regionWinds || !g_haveLast || g_lastRes.stations.empty()) return;
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon);
     wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
-    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, fogNear(b.lat, b.lon, std::time(nullptr)));
+    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, fogNear(b.lat, b.lon, 5.0, std::time(nullptr)));
     pushRegionWinds(x);
 }
 
@@ -2570,7 +2578,7 @@ void weatherWatch() {
     if (!g_haveLast || g_lastRes.stations.empty() || !g_drElev) return;
     const double lat = XPLMGetDatad(g_drLat), lon = XPLMGetDatad(g_drLon), el = XPLMGetDatad(g_drElev);
     wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
-    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, fogNear(b.lat, b.lon, std::time(nullptr)));
+    wx::XpWx x = wx::buildXp(b, g_cfg, std::time(nullptr), &g_lastRes.aloft, fogNear(b.lat, b.lon, 5.0, std::time(nullptr)));
     pushRegionWinds(x);
     XPLMWeatherInfo_t info;
     std::memset(&info, 0, sizeof info);
@@ -2624,7 +2632,7 @@ void visibilityCheck() {
     }
     g_loggedNoNearStation = false;
     g_checkedIcao = best->icao;
-    wx::XpWx x = wx::buildXp(*best, g_cfg, std::time(nullptr), &g_lastRes.aloft, fogNear(best->lat, best->lon, std::time(nullptr)));
+    wx::XpWx x = wx::buildXp(*best, g_cfg, std::time(nullptr), &g_lastRes.aloft, fogNear(best->lat, best->lon, stationRadiusNm(*best, g_lastRes.stations), std::time(nullptr)));
     XPLMWeatherInfo_t info;
     std::memset(&info, 0, sizeof info);
     info.structSize = sizeof info;
