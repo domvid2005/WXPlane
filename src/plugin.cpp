@@ -379,6 +379,26 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             if (todo[i].rec.airport || isBump(i)) continue;
             Acc a[3];
             const double sig = sigOf(i), reach = 3.0 * sig;
+            // Only layers that touch are blended (2026-11-13: decks at different heights were averaged into one in between, and
+            // hung down in waves under the cloud). The layer a neighbour's is held against: this record's own, or (an empty slot
+            // here) the neighbours' heaviest one in that slot.
+            XPLMWeatherInfoClouds_t ref[3];
+            bool haveRef[3] = {false, false, false};
+            for (int k = 0; k < K; ++k) {
+                if (isReal[i][k] && !isFog(i, k)) { ref[k] = L[k]; haveRef[k] = true; continue; }
+                double best = 0;
+                for (size_t j = 0; j < n; ++j) {
+                    if (isBump(j) || !isReal[j][k] || isFog(j, k)) continue;
+                    const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
+                    if (d > reach) continue;
+                    const double r = std::max(1.0, (double)todo[j].rec.info.radius_nm);
+                    const double w = std::exp(-d * d / (2.0 * sig * sig)) * r * r * todo[j].rec.info.cloud_layers[k].coverage;
+                    if (w > best) { best = w; ref[k] = todo[j].rec.info.cloud_layers[k]; haveRef[k] = true; }
+                }
+            }
+            auto touches = [](const XPLMWeatherInfoClouds_t& x, const XPLMWeatherInfoClouds_t& y) {
+                return x.alt_base <= y.alt_top + 100.0f && y.alt_base <= x.alt_top + 100.0f;
+            };
             for (size_t j = 0; j < n; ++j) {
                 if (isBump(j)) continue;   // a bump is its deck again (see above): it would count the deck twice
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
@@ -389,7 +409,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                     if (isFog(j, k)) continue;
                     const XPLMWeatherInfoClouds_t& c = todo[j].rec.info.cloud_layers[k];
                     a[k].w += w;
-                    if (!isReal[j][k]) continue;
+                    if (!isReal[j][k] || !haveRef[k] || !touches(c, ref[k])) continue;   // another deck (or none) there: clear sky for this one
                     a[k].wc += w * c.coverage; a[k].cb += w * c.coverage * c.alt_base; a[k].ct += w * c.coverage * c.alt_top; a[k].cy += w * c.coverage * c.cloud_type;
                 }
             }
@@ -423,6 +443,47 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             for (int k = 0; k < K; ++k) todo[i].rec.info.cloud_layers[k] = out[i][k];
             isReal[i] = outReal[i];
         }
+    }
+    // 2b2) A level underside. X-Plane blends a layer's base between records, so bases that step from record to record (METAR bases
+    // 100 ft apart, a smoothed base next to an airport's own) hung the cloud down in waves (2026-11-13). A base now changes at most
+    // 40 m per nm (plus 60 m) against the records around it with a touching layer in the same slot; airports keep their reported
+    // bases (the others follow them), and the top moves with the base so the layer keeps its depth.
+    if (g_cfg.cloudSmoothNm > 0.0) {
+        const double S = 40.0, reachNm = 3.0 * g_cfg.cloudSmoothNm + 15.0;
+        std::vector<std::vector<std::pair<size_t, float>>> near(n);   // each record's neighbours within reach (and the distance), once
+        for (size_t i = 0; i < n; ++i) {
+            if (todo[i].rec.airport || isBump(i)) continue;
+            for (size_t j = 0; j < n; ++j) {
+                if (j == i || isBump(j)) continue;
+                const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
+                if (d <= reachNm) near[i].push_back({j, (float)d});
+            }
+        }
+        for (int k = 0; k < K; ++k)
+            for (int pass = 0; pass < 4; ++pass) {
+                bool changed = false;
+                for (size_t i = 0; i < n; ++i) {
+                    if (!isReal[i][k] || todo[i].rec.airport || isBump(i)) continue;
+                    XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
+                    if (c.alt_base < todo[i].rec.elev + 250.0) continue;   // ground fog stays as it is
+                    float lo = -1e9f, hi = 1e9f;
+                    for (const auto& nj : near[i]) {
+                        const size_t j = nj.first;
+                        if (!isReal[j][k]) continue;
+                        const XPLMWeatherInfoClouds_t& o = todo[j].rec.info.cloud_layers[k];
+                        if (!(o.alt_base <= c.alt_top + 100.0f && c.alt_base <= o.alt_top + 100.0f)) continue;   // not the same deck
+                        const float m = (float)(S * nj.second + 60.0);
+                        lo = std::max(lo, o.alt_base - m); hi = std::min(hi, o.alt_base + m);
+                    }
+                    if (lo > hi) continue;   // pulled both ways: left as it is
+                    const float nb = std::min(hi, std::max(lo, c.alt_base));
+                    if (std::fabs(nb - c.alt_base) < 1.0f) continue;
+                    const float depth = c.alt_top - c.alt_base;
+                    c.alt_base = nb; c.alt_top = std::min(nb + depth, wx::kXpTopM);
+                    changed = true;
+                }
+                if (!changed) break;
+            }
     }
     // 2c) No spires (2026-11-12, an upward cone over KJFK): X-Plane blends a layer's top between records, so one record whose top stands
     // far above its neighbours' (an airport's CB with an estimated 10 km top in 6 km storm records around it) grew a smooth cone up out
