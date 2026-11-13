@@ -97,6 +97,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "model_cirrus") c.modelCirrus = toBool(v);
         else if (k == "model_clouds") c.modelClouds = toBool(v);
         else if (k == "model_tops") c.modelTops = toBool(v);
+        else if (k == "test_no_rain") c.testNoRain = toBool(v);
         else if (k == "layer_gap_m") c.layerGapM = std::max(40.0, std::atof(v.c_str()));
         else if (k == "ocean_model_weather") c.oceanModelWeather = toBool(v);
         else if (k == "low_cloud_type") c.lowCloudType = d < 1.0 ? 1.0 : (d > 3.0 ? 3.0 : d);
@@ -263,6 +264,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "model_clouds = " << (c.modelClouds ? 1 : 0) << "\n"
       << "model_tops = " << (c.modelTops ? 1 : 0) << "\n"
       << "layer_gap_m = " << c.layerGapM << "\n"
+      << "test_no_rain = " << (c.testNoRain ? 1 : 0) << "\n"
       << "ocean_model_weather = " << (c.oceanModelWeather ? 1 : 0) << "\n"
       << "cloud_smooth_nm = " << c.cloudSmoothNm << "\n"
       << "empty_layer_coverage = " << c.emptyLayerCoverage << "\n"
