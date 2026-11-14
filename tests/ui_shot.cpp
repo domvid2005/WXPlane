@@ -130,6 +130,8 @@ Station mk(const char* id, double lat, double lon, double elevM, const char* raw
 
 } // namespace
 
+namespace wx { double uiLocalOffsetForTest(const UiData& d, double lat, double lon); }
+
 int main(int argc, char** argv) {
     const std::string out = argc > 1 ? argv[1] : ".";
     const float scale = argc > 2 ? (float)std::atof(argv[2]) : 1.0f;
@@ -485,6 +487,16 @@ int main(int argc, char** argv) {
         for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
         if (overlaps) { std::printf("UI: %d altitude box overlap(s) of %d\n", overlaps, checks); return 1; }
         std::printf("altitude box clear of the map in %d cases\n", checks);
+    }
+    // local time on the map (2026-11-14): a point across a time zone line near the aircraft shows its own zone, not the aircraft's
+    {
+        UiData z = d;
+        z.havePos = true; z.lat = 41.79; z.lon = -87.75;   // Chicago Midway, Central time
+        z.haveLocalOffset = true; z.localOffsetS = -6 * 3600.0;   // X-Plane's time there (CST)
+        z.now = 1794680000;   // 2026-11-14: standard time
+        const double chi = wx::uiLocalOffsetForTest(z, 41.9, -87.6), ind = wx::uiLocalOffsetForTest(z, 39.77, -86.16);
+        std::printf("local time on the map: Chicago %+.1f h, Indianapolis (140 nm away, Eastern) %+.1f h\n", chi / 3600.0, ind / 3600.0);
+        if (chi != -6 * 3600.0 || ind != -5 * 3600.0) { std::printf("UI: local time on the map: wrong zone across the line\n"); return 1; }
     }
     // map windows: never on one of the map's buttons, and dragging one onto another (or onto a button) only slides it up to them,
     // it never overlaps them, and no window closes ("max popups")

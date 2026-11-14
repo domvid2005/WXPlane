@@ -89,13 +89,20 @@ std::string fmt(const char* f, ...) {
 }
 
 bool tzStdQuarterHours(double lat, double lon, int& q);   // the time zone map (below)
-// Local time at a point: X-Plane's time zone near the aircraft (within 250 nm); else the time zone map's standard offset there
-// plus daylight time where it is kept (suntime.h); else, off the map, an estimate from the longitude (marked ~)
+// Local time at a point: X-Plane's time where the point lies in the aircraft's own time zone (within 250 nm); else the time zone
+// map's standard offset there plus daylight time where it is kept (suntime.h); else, off the map, an estimate from the longitude
+// (marked ~). (2026-11-14: X-Plane's time was used for any point within 250 nm, so across a zone line near the aircraft the map
+// showed the aircraft's zone.)
 double localOffsetAt(const UiData& d, double lat, double lon, bool& estimate) {
     estimate = false;
-    if (d.haveLocalOffset && (!d.havePos || distNm(d.lat, d.lon, lat, lon) < 250.0)) return d.localOffsetS;
     int q = 0;
-    if (tzStdQuarterHours(lat, lon, q)) return q * 900.0 + dstShiftS(lat, lon, q, d.now);
+    const bool onMap = tzStdQuarterHours(lat, lon, q);
+    if (d.haveLocalOffset && (!d.havePos || distNm(d.lat, d.lon, lat, lon) < 250.0)) {
+        int qa = 0;
+        const bool acOnMap = d.havePos && tzStdQuarterHours(d.lat, d.lon, qa);
+        if (!onMap || !acOnMap || qa == q) return d.localOffsetS;   // the aircraft's zone (or the map cannot tell them apart)
+    }
+    if (onMap) return q * 900.0 + dstShiftS(lat, lon, q, d.now);
     estimate = true;
     return std::round(lon / 15.0) * 3600.0;
 }
@@ -797,9 +804,12 @@ const TzData& tzData() {
 }
 // The standard UTC offset (quarter hours) of the time zone at a point; false off the map (the data has none there)
 bool tzStdQuarterHours(double lat, double lon, int& q) {
-    static double lastLat = 1e9, lastLon = 1e9; static int lastQ = 0; static bool lastOk = false;
-    if (std::fabs(lat - lastLat) < 0.002 && std::fabs(lon - lastLon) < 0.002) { q = lastQ; return lastOk; }   // the same point again
-    lastLat = lat; lastLon = lon; lastOk = false;
+    // a few points remembered (the aircraft and the point under the map's + are both asked every frame)
+    struct Hit { double lat = 1e9, lon = 1e9; int q = 0; bool ok = false; };
+    static Hit cache[4]; static int next = 0;
+    for (const Hit& h : cache)
+        if (std::fabs(lat - h.lat) < 0.002 && std::fabs(lon - h.lon) < 0.002) { q = h.q; return h.ok; }   // the same point again
+    Hit hit; hit.lat = lat; hit.lon = lon;
     if (lon > 180) lon -= 360; else if (lon < -180) lon += 360;
     const float x = (float)lon, y = (float)lat;
     for (const TzZone& z : tzData().zones) {
@@ -808,10 +818,11 @@ bool tzStdQuarterHours(double lat, double lon, int& q) {
         for (const auto& r : z.rings)
             for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
                 if ((r[i].y > y) != (r[j].y > y) && x < (r[j].x - r[i].x) * (y - r[i].y) / (r[j].y - r[i].y) + r[i].x) in = !in;
-        if (in) { lastQ = z.q; lastOk = true; break; }
+        if (in) { hit.q = z.q; hit.ok = true; break; }
     }
-    q = lastQ;
-    return lastOk;
+    cache[next] = hit; next = (next + 1) % 4;
+    q = hit.q;
+    return hit.ok;
 }
 bool& showTimeZones() { static bool v = false; return v; }   // the map's "Time Zone" layer
 
@@ -3529,6 +3540,9 @@ void tabServices(const UiData& d, const UiFonts& f) {
 }
 
 } // namespace
+
+// for the UI test: the local time offset the map uses at a point (seconds)
+double uiLocalOffsetForTest(const UiData& d, double lat, double lon) { bool est = false; return localOffsetAt(d, lat, lon, est); }
 
 std::string flightCategory(const Report& r) {
     const bool haveVis = r.hasVis || r.cavok;
