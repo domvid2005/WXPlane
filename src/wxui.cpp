@@ -1265,12 +1265,13 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         const double spanLat = rangeNm * 1.5 / 60.0, spanLon = spanLat / std::max(0.15, kx);
         const float la0 = (float)(cLat - spanLat), la1 = (float)(cLat + spanLat), lo0 = (float)(cLon - spanLon), lo1 = (float)(cLon + spanLon);
         const ImU32 col = IM_COL32(190, 140, 235, 200);
-        for (const MapLine& L : tzData().lines) {
-            if (L.lo1 < lo0 || L.lo0 > lo1 || L.la1 < la0 || L.la0 > la1) continue;
-            float run = 0;   // dashes 7 px on, 5 px off, continuing along the line
-            ImVec2 a = at(L.pts[0].y, L.pts[0].x);
-            for (size_t k = 1; k < L.pts.size(); ++k) {
-                const ImVec2 bq = at(L.pts[k].y, L.pts[k].x);
+        // a dashed line through points (lon, lat): 7 px on, 5 px off, continuing along the line
+        auto dashed = [&](const std::vector<ImVec2>& pts) {
+            if (pts.size() < 2) return;
+            float run = 0;
+            ImVec2 a = at(pts[0].y, pts[0].x);
+            for (size_t k = 1; k < pts.size(); ++k) {
+                const ImVec2 bq = at(pts[k].y, pts[k].x);
                 const float len = std::hypot(bq.x - a.x, bq.y - a.y);
                 if (len > size * 3) { a = bq; continue; }   // across the date line
                 if ((a.x < p.x && bq.x < p.x) || (a.y < p.y && bq.y < p.y) || (a.x > p.x + size && bq.x > p.x + size) || (a.y > p.y + size && bq.y > p.y + size)) {
@@ -1286,6 +1287,36 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     s0 += step; run += step;
                 }
                 a = bq;
+            }
+        };
+        for (const MapLine& L : tzData().lines) {
+            if (L.lo1 < lo0 || L.lo0 > lo1 || L.la1 < la0 || L.la0 > la1) continue;
+            dashed(L.pts);
+        }
+        // Arizona (without the Navajo Nation, with the Hopi Reservation) and Saskatchewan keep standard time all year (suntime.h). While
+        // their neighbours are on daylight time their clock differs from Utah and New Mexico, from the Navajo Nation and from Manitoba:
+        // those borders are drawn as zone lines then. (Arizona then matches California, Nevada and Sonora, and Saskatchewan matches
+        // Alberta, so no line is added there.)
+        if (usDst(d.now, -7.0)) {
+            size_t nAz = 0, nNv = 0, nHp = 0, nSk = 0;
+            const NoDstPt* az = arizonaOutline(nAz);
+            const NoDstPt* nv = navajoOutline(nNv);
+            const NoDstPt* hp = hopiOutline(nHp);
+            const NoDstPt* sk = saskatchewanOutline(nSk);
+            auto v = [](const NoDstPt& q) { return ImVec2((float)q.lon, (float)q.lat); };
+            std::vector<std::vector<ImVec2>> lines(3);
+            // Utah line west of the Navajo Nation, the Navajo Nation's inner edge, then the New Mexico line south of it
+            lines[0].push_back(v(az[0]));                                   // Utah corner (114 W)
+            lines[0].push_back(v(nv[0]));                                   // where the Navajo Nation meets the Utah line
+            for (size_t k = nNv - 1; k >= 2; --k) lines[0].push_back(v(nv[k]));   // its west and south edges, round to New Mexico
+            lines[0].push_back(v(az[2]));                                   // down the New Mexico line to Mexico
+            for (size_t k = 0; k <= nHp; ++k) lines[1].push_back(v(hp[k % nHp]));   // the Hopi Reservation, closed
+            for (size_t k = 1; k < nSk - 1; ++k) lines[2].push_back(v(sk[k]));      // the Manitoba line
+            for (const auto& L : lines) {
+                float bLo0 = 1e9f, bLo1 = -1e9f, bLa0 = 1e9f, bLa1 = -1e9f;
+                for (const ImVec2& q : L) { bLo0 = std::min(bLo0, q.x); bLo1 = std::max(bLo1, q.x); bLa0 = std::min(bLa0, q.y); bLa1 = std::max(bLa1, q.y); }
+                if (bLo1 < lo0 || bLo0 > lo1 || bLa1 < la0 || bLa0 > la1) continue;
+                dashed(L);
             }
         }
     }

@@ -9,6 +9,7 @@
 #include "../src/metar.h"
 #include "../src/radar.h"
 #include "../src/sources.h"
+#include "../src/suntime.h"
 #include "../src/windshear.h"
 #include "../src/viewer.h"
 #include "../src/windsaloft.h"
@@ -1641,6 +1642,24 @@ int main() {
     tl::run();
     tsun::run();
 
+    // --- daylight time where neighbours differ (2026-11-14): Arizona keeps MST, the Navajo Nation inside it does not, the Hopi
+    //     Reservation inside that does; the strip of New Mexico up to 109.0 W keeps its daylight time; Saskatchewan keeps CST
+    {
+        const std::time_t july = 1782907200;   // 2026-07-01 12:00 UTC
+        const std::time_t nov = 1794657600;    // 2026-11-14 12:00 UTC
+        CHECK(dstShiftS(33.45, -112.07, -28, july) == 0);      // Phoenix
+        CHECK(dstShiftS(36.13, -111.24, -28, july) == 3600);   // Tuba City (Navajo Nation)
+        CHECK(dstShiftS(36.73, -110.25, -28, july) == 3600);   // Kayenta (Navajo Nation)
+        CHECK(dstShiftS(35.80, -110.50, -28, july) == 0);      // Second Mesa (Hopi)
+        CHECK(dstShiftS(33.00, -109.02, -28, july) == 3600);   // New Mexico, just east of the line (was taken as Arizona)
+        CHECK(dstShiftS(35.53, -108.74, -28, july) == 3600);   // Gallup
+        CHECK(dstShiftS(37.10, -113.58, -28, july) == 3600);   // St George, Utah
+        CHECK(dstShiftS(50.45, -104.61, -24, july) == 0);      // Regina
+        CHECK(dstShiftS(49.90, -97.14, -24, july) == 3600);    // Winnipeg
+        CHECK(dstShiftS(33.45, -112.07, -28, nov) == 0 && dstShiftS(36.13, -111.24, -28, nov) == 0);   // November: standard time
+        CHECK(zoneName(33.45, -112.07, -7 * 3600.0, july) == "MST");
+        CHECK(zoneName(36.13, -111.24, -6 * 3600.0, july) == "MDT");
+    }
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

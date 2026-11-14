@@ -82,6 +82,62 @@ inline bool auDst(std::time_t utc, double stdOffsetH, bool nz) {
     return utc >= on || utc < off;
 }
 
+// Places that keep standard time all year inside a zone whose neighbours change (2026-11-14: Arizona and Saskatchewan were
+// rectangles; the strip of New Mexico up to 109.0 W lost its daylight time and the Navajo Nation, which keeps it, did not get it).
+// Outlines (lon, lat), simplified from the state, provincial and reservation boundaries; used for the local time and drawn on the
+// map's Time Zone layer while daylight time is on around them.
+struct NoDstPt { double lon, lat; };
+inline bool inNoDstPoly(const NoDstPt* p, size_t n, double lat, double lon) {
+    bool in = false;
+    for (size_t i = 0, j = n - 1; i < n; j = i++)
+        if ((p[i].lat > lat) != (p[j].lat > lat) && lon < (p[j].lon - p[i].lon) * (lat - p[i].lat) / (p[j].lat - p[i].lat) + p[i].lon) in = !in;
+    return in;
+}
+inline const NoDstPt* arizonaOutline(size_t& n) {   // the state line; the west side follows the Colorado River
+    static const NoDstPt p[] = {
+        {-114.0506, 37.0004}, {-109.0452, 37.0004}, {-109.0475, 31.3323}, {-111.0747, 31.3322}, {-114.8126, 32.4943},
+        {-114.8094, 32.6176}, {-114.7221, 32.7208}, {-114.5269, 32.8091}, {-114.4686, 32.9452}, {-114.5114, 33.0273},
+        {-114.7064, 33.1053}, {-114.6795, 33.3592}, {-114.5329, 33.5262}, {-114.5354, 33.9284}, {-114.4105, 34.1023},
+        {-114.1405, 34.3031}, {-114.3405, 34.4466}, {-114.5650, 34.7746}, {-114.6342, 35.0018}, {-114.5772, 35.1335},
+        {-114.6800, 35.5000}, {-114.6534, 35.6100}, {-114.7380, 36.0101}, {-114.6200, 36.1400}, {-114.4000, 36.1500},
+        {-114.2600, 36.0300}, {-114.0466, 36.1940}};
+    n = sizeof p / sizeof p[0];
+    return p;
+}
+inline const NoDstPt* navajoOutline(size_t& n) {   // the Navajo Nation's part of Arizona: it keeps daylight time
+    static const NoDstPt p[] = {
+        {-111.60, 37.0004}, {-109.0452, 37.0004}, {-109.0465, 35.20}, {-109.60, 35.17}, {-110.40, 35.28}, {-111.00, 35.50},
+        {-111.40, 35.76}, {-111.72, 36.10}, {-111.62, 36.60}};
+    n = sizeof p / sizeof p[0];
+    return p;
+}
+inline const NoDstPt* hopiOutline(size_t& n) {   // the Hopi Reservation inside it: standard time all year, like the rest of Arizona
+    static const NoDstPt p[] = {
+        {-111.00, 35.75}, {-111.00, 36.00}, {-110.75, 36.15}, {-110.25, 36.20}, {-110.00, 36.00}, {-110.00, 35.55}, {-110.75, 35.55}};
+    n = sizeof p / sizeof p[0];
+    return p;
+}
+inline const NoDstPt* saskatchewanOutline(size_t& n) {   // the province (Lloydminster on the Alberta line keeps Alberta's time)
+    static const NoDstPt p[] = {
+        {-110.005, 49.0}, {-101.367, 49.0}, {-101.50, 52.0}, {-101.60, 53.9}, {-101.89, 55.8}, {-102.00, 60.0}, {-110.005, 60.0}};
+    n = sizeof p / sizeof p[0];
+    return p;
+}
+inline bool arizonaStandardAllYear(double lat, double lon) {
+    size_t n = 0;
+    const NoDstPt* az = arizonaOutline(n);
+    if (!inNoDstPoly(az, n, lat, lon)) return false;
+    const NoDstPt* nv = navajoOutline(n);
+    if (!inNoDstPoly(nv, n, lat, lon)) return true;
+    const NoDstPt* hp = hopiOutline(n);
+    return inNoDstPoly(hp, n, lat, lon);
+}
+inline bool saskatchewanStandardAllYear(double lat, double lon) {
+    size_t n = 0;
+    const NoDstPt* sk = saskatchewanOutline(n);
+    return inNoDstPoly(sk, n, lat, lon);
+}
+
 // Daylight saving time added (seconds) to a place's standard UTC offset (in quarter hours) at a moment: the US and Canada,
 // Europe, south-east Australia and New Zealand (the places that do not change are left out: Hawaii, Arizona, Saskatchewan,
 // Mexico, Iceland, Russia, Turkey, Queensland, the Northern Territory, Western Australia ...); 0 elsewhere.
@@ -89,8 +145,8 @@ inline double dstShiftS(double lat, double lon, int stdQ, std::time_t utc) {
     if (lat > 14 && lon < -50 && lon > -180) {   // North America
         if (stdQ < -36 || stdQ > -14) return 0;                                           // Hawaii
         if (!(lat > 31.3 || (lon > -97.2 && lat > 24.3))) return 0;                        // Mexico, Central America, the Caribbean
-        if (stdQ == -28 && lat > 31 && lat < 37 && lon > -114.8 && lon < -109.0) return 0;  // Arizona
-        if (stdQ == -24 && lat > 49 && lat < 60 && lon > -110 && lon < -101.4) return 0;   // Saskatchewan
+        if (stdQ == -28 && arizonaStandardAllYear(lat, lon)) return 0;                     // Arizona (not the Navajo Nation)
+        if (stdQ == -24 && saskatchewanStandardAllYear(lat, lon)) return 0;                // Saskatchewan
         return usDst(utc, stdQ / 4.0) ? 3600 : 0;
     }
     if (lat > 35.9 && lat < 72 && lon > -32 && lon < 45) {   // Europe
@@ -112,7 +168,7 @@ inline std::string zoneName(double lat, double lon, double offS, std::time_t utc
     const bool eu = lat > 34 && lat < 72 && lon > -25 && lon < 45;
     if (na) {
         if (lat < 23 && lon < -150) return q == -40 ? "HST" : "";   // Hawaii: no DST
-        if (q == -28 && lat > 31 && lat < 37 && lon > -114.8 && lon < -109.0) return "MST";   // Arizona: MST all year
+        if (q == -28 && arizonaStandardAllYear(lat, lon)) return "MST";   // Arizona: MST all year
         struct Z { int q; const char* s; const char* d; double stdH; };
         static const Z zs[] = {{-36, "AKST", "AKDT", -9}, {-32, "PST", "PDT", -8}, {-28, "MST", "MDT", -7}, {-24, "CST", "CDT", -6},
                                {-20, "EST", "EDT", -5}, {-16, "AST", "ADT", -4}, {-14, "NST", "NDT", -3.5}};

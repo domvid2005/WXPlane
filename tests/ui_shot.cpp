@@ -402,6 +402,15 @@ int main(int argc, char** argv) {
         if (!writePng(cv, out + "/ui_map_tz.png")) return 1;
         std::printf("wrote %s\n", (out + "/ui_map_tz.png").c_str());
     }
+    {   // in July over Arizona: its line to Utah and New Mexico, the Navajo Nation's edge and the Hopi Reservation are drawn (no daylight time)
+        UiData z = d;
+        z.lat = 35.2; z.lon = -111.6; z.now = 1782907200; z.forcePanEastNm = 0; z.forcePanNorthNm = 0; z.forceRange = 7;
+        for (int fr = 0; fr < 20; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); z.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(z, f, W, H, false, act); ImGui::Render(); ++frames; }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        if (!writePng(cv, out + "/ui_map_tz_arizona.png")) return 1;
+        std::printf("wrote %s\n", (out + "/ui_map_tz_arizona.png").c_str());
+    }
     d.forceAloftLayers = 0; d.forceRange = 6; d.forcePanEastNm = d.forcePanNorthNm = 0; d.forceLocalTime = 0;   // back to 80 nm, on the aircraft
     for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
     d.forceLocalTime = -1; d.forceRange = -1;
