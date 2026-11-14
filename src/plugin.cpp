@@ -1658,7 +1658,7 @@ void frameCheckTick() {
 // come from where it started toward what WXPlane wants there (blendAt, as the weather watch). It ends when X-Plane's values stop
 // changing for 8 s (they can settle short of the target, where neighbouring records blend in), or after 3 minutes.
 struct BlendWatch {
-    bool on = false, haveStart = false;
+    bool on = false, haveStart = false, changedOnce = false;
     double start = 0, lastChange = 0, nextPoll = 0, doneAt = -1;
     float startSig[8] = {}, lastSig[8] = {}, target[8] = {};
     float progress = 0;
@@ -1684,12 +1684,50 @@ void blendTarget(double lat, double lon, float* s) {
     for (int k = 0; k < 3; ++k) { q.cloud_layers[k].coverage = x.clouds[k].coverage; q.cloud_layers[k].alt_base = x.clouds[k].baseM; }
     blendSig(q, s);
 }
-void blendMark() {
-    if (!g_drLat || !g_drLon || g_lastRes.stations.empty()) return;
+bool blendRead(float* s) {   // X-Plane's weather at the aircraft, as compared
+    if (!g_drLat || !g_drLon || !g_drElev) return false;
+    XPLMWeatherInfo_t q;
+    std::memset(&q, 0, sizeof q);
+    q.structSize = sizeof q;
+    XPLMGetWeatherAtLocation(XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), XPLMGetDatad(g_drElev), &q);
+    blendSig(q, s);
+    return true;
+}
+// Before records go to X-Plane: where its weather at the aircraft starts from (2026-11-14: read a second after the hand-over, X-Plane
+// had usually taken it already, so the ring showed 0 % and ended within seconds)
+void blendBegin() {
+    if (g_blend.on && g_blend.doneAt < 0) return;   // a slice of the same update: the watch goes on
+    if (g_lastRes.stations.empty()) return;
+    g_blend = BlendWatch{};
+    if (!blendRead(g_blend.startSig)) return;
+    std::memcpy(g_blend.lastSig, g_blend.startSig, sizeof g_blend.startSig);
+    g_blend.haveStart = true;
     const double t = steadyS();
-    if (!g_blend.on) { g_blend = BlendWatch{}; g_blend.on = true; g_blend.start = t; g_blend.nextPoll = t; }
-    g_blend.lastChange = t;   // a slice of the same update: the watch goes on
+    g_blend.on = true; g_blend.start = t; g_blend.lastChange = t; g_blend.nextPoll = t + 1.0;
+}
+void blendMark() {   // after records went to X-Plane: what WXPlane wants at the aircraft
+    if (!g_blend.on || !g_drLat || !g_drLon || g_lastRes.stations.empty()) return;
     blendTarget(XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), g_blend.target);
+}
+// The first load, checked (2026-11-14 KDFW: after regen_weather and the start-up load, X-Plane kept its own weather at the aircraft for
+// 90 s, until WXPlane's next update; Sacramento and Seattle looked the same): 15 s after the first load is in, if X-Plane's weather at
+// the aircraft has not moved at all, every record is sent again once, as one replacing, immediate update.
+double g_firstLoadCheckAt = -1;
+float g_firstLoadSig[8] = {};
+bool g_firstLoadResent = false;
+void firstLoadCheckTick() {
+    if (g_firstLoadCheckAt < 0 || steadyS() < g_firstLoadCheckAt) return;
+    g_firstLoadCheckAt = -1;
+    float s[8];
+    if (!blendRead(s) || g_firstLoadResent || g_recs.empty()) return;
+    bool moved = false;
+    for (int k = 0; k < 8; ++k) moved = moved || std::fabs(s[k] - g_firstLoadSig[k]) > 0.02f;
+    if (moved) { logf("first load: X-Plane took the weather on"); return; }
+    if (!g_pendingTodo.empty() || !g_pendingGone.empty()) { logf("first load: X-Plane's weather at the aircraft has not moved yet, but a newer update is on its way"); return; }
+    g_firstLoadResent = true;
+    for (const auto& kv : g_recs) g_pendingTodo.push_back(Todo{kv.first, kv.second});
+    g_pendingReplace = true; g_pendingImmediate = true; g_pendingManual = true; g_pendingStartup = false;
+    logf("first load: X-Plane's weather at the aircraft had not moved 15 s after the load - sending all %zu records again", g_pendingTodo.size());
 }
 void blendTick() {
     const double t = steadyS();
@@ -1703,19 +1741,22 @@ void blendTick() {
     XPLMGetWeatherAtLocation(XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), XPLMGetDatad(g_drElev), &q);
     float s[8];
     blendSig(q, s);
-    if (!g_blend.haveStart) { std::memcpy(g_blend.startSig, s, sizeof s); std::memcpy(g_blend.lastSig, s, sizeof s); g_blend.haveStart = true; return; }
+    if (!g_blend.haveStart) return;
     bool changed = false;
     for (int k = 0; k < 8; ++k) changed = changed || std::fabs(s[k] - g_blend.lastSig[k]) > 0.02f;
     std::memcpy(g_blend.lastSig, s, sizeof s);
-    if (changed) g_blend.lastChange = t;
+    if (changed) { g_blend.lastChange = t; g_blend.changedOnce = true; }
     double d0 = 0, d1 = 0;
     for (int k = 0; k < 8; ++k) { d0 += std::fabs(g_blend.startSig[k] - g_blend.target[k]); d1 += std::fabs(s[k] - g_blend.target[k]); }
     const float p = d0 > 0.05 ? (float)std::max(0.0, std::min(1.0, 1.0 - d1 / d0)) : 0.0f;
     g_blend.progress = std::max(g_blend.progress, std::min(0.97f, p));   // never runs backward; full only when it has settled
-    const bool settled = t - g_blend.lastChange >= 8.0 && t - g_blend.start >= 3.0;
-    if (settled || t - g_blend.start > 180.0) {
-        logf("blend: X-Plane's weather at the aircraft %s %.0f s after the change (it came %.0f%% of the way to WXPlane's values there)",
-             settled ? "settled" : "was still changing", (settled ? g_blend.lastChange : t) - g_blend.start, 100.0 * std::max(0.0, std::min(1.0, d0 > 0.05 ? 1.0 - d1 / d0 : 1.0)));
+    // settled: it changed, then stood still for 8 s; or it has not changed at all in 30 s (nothing there to blend, or X-Plane did not take it)
+    const bool settled = g_blend.changedOnce && t - g_blend.lastChange >= 8.0;
+    const bool still = !g_blend.changedOnce && t - g_blend.start >= 30.0;
+    if (settled || still || t - g_blend.start > 180.0) {
+        if (still) logf("blend: X-Plane's weather at the aircraft did not change in the 30 s after the change");
+        else logf("blend: X-Plane's weather at the aircraft %s %.0f s after the change (it came %.0f%% of the way to WXPlane's values there)",
+                  settled ? "settled" : "was still changing", (settled ? g_blend.lastChange : t) - g_blend.start, 100.0 * std::max(0.0, std::min(1.0, d0 > 0.05 ? 1.0 - d1 / d0 : 1.0)));
         g_blend.progress = 1.0f; g_blend.doneAt = t;
     }
 }
@@ -1747,6 +1788,8 @@ void flushPending() {
         budget = std::min(budget, (size_t)(behind / g_releaseStepS) + 1);
         g_nextRelease = t0 + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(g_releaseStepS * (double)budget));
     }
+    blendBegin();   // X-Plane's weather at the aircraft before this goes in
+    const bool firstLoadBatch = g_pendingStartup;
     XPLMBeginWeatherUpdate();
     while (budget > 0 && !g_pendingGone.empty()) { eraseRec(g_pendingGone.back()); g_pendingGone.pop_back(); --budget; ++erased; }
     size_t n = std::min(budget, g_pendingTodo.size());
@@ -1773,6 +1816,10 @@ void flushPending() {
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued): %.0f ms setting records, %.0f ms in X-Plane's end of update",
                         ms, sent, erased, g_pendingTodo.size() + g_pendingGone.size(), msSets, ms - msSets);
     if (g_pendingTodo.empty() && g_pendingGone.empty()) logf("all weather records handed to X-Plane");
+    if (firstLoadBatch && !g_firstLoadResent && g_pendingTodo.empty() && g_pendingGone.empty() && g_blend.haveStart) {
+        std::memcpy(g_firstLoadSig, g_blend.startSig, sizeof g_firstLoadSig);   // checked 15 s from now (firstLoadCheckTick)
+        g_firstLoadCheckAt = steadyS() + 15.0;
+    }
 }
 
 // Two records X-Plane would show the same way: differences below what anyone could see or feel. The 2026-11-06 refresh re-sent all
@@ -3294,6 +3341,7 @@ float flightLoop(float, float, int, void*) {
     }
     frameCheckTick();
     blendTick();
+    firstLoadCheckTick();
     return 0.25f;
 }
 
