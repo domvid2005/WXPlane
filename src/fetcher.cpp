@@ -1,4 +1,7 @@
 #include "fetcher.h"
+
+#include <chrono>
+#include <thread>
 #include <cctype>
 #include <cstring>
 #include <sstream>
@@ -311,6 +314,18 @@ bool loadMrms(const std::string& url, const GribWindow& win, GribField& f, std::
     return true;
 }
 
+// Three tries, 2 s and then 5 s apart (2026-11-13/14 KATL, KMDW: PrecipFlag downloads cut off mid-transfer twice in a row, "end of
+// response with 1201 bytes missing"; an immediate second try hit the same). The worker thread waits; the sim does not.
+bool loadMrmsRetry(const std::string& url, const GribWindow& win, GribField& f, std::string& err) {
+    static const int kWaitS[] = {2, 5};
+    for (int attempt = 0; ; ++attempt) {
+        f = GribField();
+        if (loadMrms(url, win, f, err)) return true;
+        if (attempt >= 2) return false;
+        std::this_thread::sleep_for(std::chrono::seconds(kWaitS[attempt]));
+    }
+}
+
 GribWindow windowFor(double lat, double lon, double rangeNm) {
     GribWindow w;
     double dLat = rangeNm / 60.0 + 0.1, dLon = rangeNm / (60.0 * std::max(0.2, std::cos(lat * 3.14159265358979 / 180.0))) + 0.1;
@@ -329,10 +344,8 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
     for (const std::string& region : mrmsRegionsFor(rq.lat, rq.lon)) {
         const std::string name = region.empty() ? "CONUS" : region;
         GribField refl;
-        if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) {
-            refl = GribField();   // one retry: a truncated download ("bad gzip data", 2026-11-06) made the first load go without storms
-            if (!loadMrms(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) { lastErr = name + ": " + lastErr; continue; }
-        }
+        // retried (a truncated download, "bad gzip data", 2026-11-06, made the first load go without storms)
+        if (!loadMrmsRetry(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr)) { lastErr = name + ": " + lastErr; continue; }
         if (refl.refTime > 0 && now - refl.refTime > 30 * 60) {
             lastErr = name + ": radar mosaic is " + std::to_string((now - refl.refTime) / 60) + " min old, ignoring";
             continue;
@@ -342,8 +355,7 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
         bool haveTops = false;
         bool oldTops = false;
         if (cfg.radarEchoTops) {
-            haveTops = loadMrms(mrmsUrl(region, "EchoTop_18"), win, tops, topErr);
-            if (!haveTops) { tops = GribField(); haveTops = loadMrms(mrmsUrl(region, "EchoTop_18"), win, tops, topErr); }   // one retry (truncated downloads happen)
+            haveTops = loadMrmsRetry(mrmsUrl(region, "EchoTop_18"), win, tops, topErr);   // retried (truncated downloads happen)
             if (haveTops) { lastTops_ = tops; lastTopsRegion_ = region; lastTopsAt_ = now; }
             else if (lastTops_.valid() && lastTopsRegion_ == region && now - lastTopsAt_ < 45 * 60) {
                 // Falling back to heights estimated from reflectivity changes every storm's height at once (13.5 km measured became 10.5 km estimated
@@ -357,14 +369,21 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
         if (cfg.radarPrecipType) {
             GribField flag;
             std::string flagErr;
-            bool haveFlag = loadMrms(mrmsUrl(region, "PrecipFlag"), win, flag, flagErr);
-            if (!haveFlag) { flag = GribField(); haveFlag = loadMrms(mrmsUrl(region, "PrecipFlag"), win, flag, flagErr); }
-            if (haveFlag && flag.refTime > 0 && refl.refTime > 0 && std::llabs((long long)(flag.refTime - refl.refTime)) > 20 * 60) { haveFlag = false; flagErr = "older than the reflectivity"; }
+            bool haveFlag = loadMrmsRetry(mrmsUrl(region, "PrecipFlag"), win, flag, flagErr);
+            bool oldFlag = false;
+            if (haveFlag) { lastFlag_ = flag; lastFlagRegion_ = region; lastFlagAt_ = now; }
+            else if (lastFlag_.valid() && lastFlagRegion_ == region && now - lastFlagAt_ < 20 * 60) {
+                // still failing after the retries: the last good precipitation type (rain areas move slowly over 20 minutes) instead of
+                // treating every echo far from an airport as possible convection
+                flag = lastFlag_; haveFlag = true; oldFlag = true;
+            }
+            if (haveFlag && !oldFlag && flag.refTime > 0 && refl.refTime > 0 && std::llabs((long long)(flag.refTime - refl.refTime)) > 20 * 60) { haveFlag = false; flagErr = "older than the reflectivity"; }
             if (haveFlag || stations) {
                 int capped = 0;
                 conv = convectiveMask(refl, haveFlag ? &flag : nullptr, stations, (float)cfg.radarStratiformMaxDbz, capped);
                 char b[200];
-                if (haveFlag) std::snprintf(b, sizeof b, "precipitation type from MRMS PrecipFlag: %d pixel(s) of steady rain/snow capped at %.0f dBZ", capped, cfg.radarStratiformMaxDbz);
+                if (haveFlag) std::snprintf(b, sizeof b, "precipitation type from MRMS PrecipFlag%s: %d pixel(s) of steady rain/snow capped at %.0f dBZ",
+                                            oldFlag ? (" (download failed, the one from " + std::to_string((now - lastFlagAt_) / 60) + " min ago)").c_str() : "", capped, cfg.radarStratiformMaxDbz);
                 else std::snprintf(b, sizeof b, "MRMS PrecipFlag unavailable (%s): convection only within 60 nm of an airport reporting it; %d pixel(s) capped at %.0f dBZ", flagErr.c_str(), capped, cfg.radarStratiformMaxDbz);
                 typeNote = b;
             }

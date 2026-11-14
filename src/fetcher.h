@@ -94,6 +94,9 @@ private:
     GribField lastTops_;              // last echo-top grid that downloaded fine, reused when a later download fails (worker thread only)
     std::string lastTopsRegion_;
     std::time_t lastTopsAt_ = 0;      // when it was downloaded
+    GribField lastFlag_;              // last MRMS PrecipFlag grid that downloaded fine, reused the same way (worker thread only)
+    std::string lastFlagRegion_;
+    std::time_t lastFlagAt_ = 0;
     std::vector<Station> radarStations_; // the last full update's reports (worker thread only)
     std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
     // European radar (EUMETNET OPERA): the composite's header and the tiles already downloaded, for the slot they belong to
