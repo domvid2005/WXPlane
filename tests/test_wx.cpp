@@ -1650,6 +1650,8 @@ int main() {
         CHECK(dstShiftS(33.45, -112.07, -28, july) == 0);      // Phoenix
         CHECK(dstShiftS(36.13, -111.24, -28, july) == 3600);   // Tuba City (Navajo Nation)
         CHECK(dstShiftS(36.73, -110.25, -28, july) == 3600);   // Kayenta (Navajo Nation)
+        CHECK(dstShiftS(36.926, -111.448, -28, july) == 0);    // Page (KPGA): not in the Navajo Nation, MST all year
+        CHECK(dstShiftS(35.652, -109.067, -28, july) == 3600); // Window Rock (Navajo Nation)
         CHECK(dstShiftS(35.80, -110.50, -28, july) == 0);      // Second Mesa (Hopi)
         CHECK(dstShiftS(33.00, -109.02, -28, july) == 3600);   // New Mexico, just east of the line (was taken as Arizona)
         CHECK(dstShiftS(35.53, -108.74, -28, july) == 3600);   // Gallup

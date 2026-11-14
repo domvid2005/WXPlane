@@ -123,12 +123,19 @@ inline const NoDstPt* saskatchewanOutline(size_t& n) {   // the province (Lloydm
     n = sizeof p / sizeof p[0];
     return p;
 }
+inline const NoDstPt* pageOutline(size_t& n) {   // Page and Lake Powell at the Navajo Nation's north-west corner: not in it (MST all year)
+    static const NoDstPt p[] = {{-111.62, 36.84}, {-111.33, 36.84}, {-111.33, 37.0004}, {-111.60, 37.0004}};
+    n = sizeof p / sizeof p[0];
+    return p;
+}
 inline bool arizonaStandardAllYear(double lat, double lon) {
     size_t n = 0;
     const NoDstPt* az = arizonaOutline(n);
     if (!inNoDstPoly(az, n, lat, lon)) return false;
     const NoDstPt* nv = navajoOutline(n);
     if (!inNoDstPoly(nv, n, lat, lon)) return true;
+    const NoDstPt* pg = pageOutline(n);
+    if (inNoDstPoly(pg, n, lat, lon)) return true;   // Page (KPGA): MST all year (2026-11-14 review)
     const NoDstPt* hp = hopiOutline(n);
     return inNoDstPoly(hp, n, lat, lon);
 }

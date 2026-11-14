@@ -100,7 +100,10 @@ double localOffsetAt(const UiData& d, double lat, double lon, bool& estimate) {
     if (d.haveLocalOffset && (!d.havePos || distNm(d.lat, d.lon, lat, lon) < 250.0)) {
         int qa = 0;
         const bool acOnMap = d.havePos && tzStdQuarterHours(d.lat, d.lon, qa);
-        if (!onMap || !acOnMap || qa == q) return d.localOffsetS;   // the aircraft's zone (or the map cannot tell them apart)
+        // the same clock as at the aircraft, daylight time included (2026-11-14 review: Arizona and New Mexico, the Navajo Nation,
+        // Saskatchewan and Manitoba share a standard zone but not a summer clock); or the map cannot tell
+        if (!onMap || !acOnMap ||
+            q * 900.0 + dstShiftS(lat, lon, q, d.now) == qa * 900.0 + dstShiftS(d.lat, d.lon, qa, d.now)) return d.localOffsetS;
     }
     if (onMap) return q * 900.0 + dstShiftS(lat, lon, q, d.now);
     estimate = true;
@@ -1298,13 +1301,14 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         // those borders are drawn as zone lines then. (Arizona then matches California, Nevada and Sonora, and Saskatchewan matches
         // Alberta, so no line is added there.)
         if (usDst(d.now, -7.0)) {
-            size_t nAz = 0, nNv = 0, nHp = 0, nSk = 0;
+            size_t nAz = 0, nNv = 0, nHp = 0, nSk = 0, nPg = 0;
             const NoDstPt* az = arizonaOutline(nAz);
             const NoDstPt* nv = navajoOutline(nNv);
             const NoDstPt* hp = hopiOutline(nHp);
             const NoDstPt* sk = saskatchewanOutline(nSk);
+            const NoDstPt* pg = pageOutline(nPg);
             auto v = [](const NoDstPt& q) { return ImVec2((float)q.lon, (float)q.lat); };
-            std::vector<std::vector<ImVec2>> lines(3);
+            std::vector<std::vector<ImVec2>> lines(4);
             // Utah line west of the Navajo Nation, the Navajo Nation's inner edge, then the New Mexico line south of it
             lines[0].push_back(v(az[0]));                                   // Utah corner (114 W)
             lines[0].push_back(v(nv[0]));                                   // where the Navajo Nation meets the Utah line
@@ -1312,6 +1316,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             lines[0].push_back(v(az[2]));                                   // down the New Mexico line to Mexico
             for (size_t k = 0; k <= nHp; ++k) lines[1].push_back(v(hp[k % nHp]));   // the Hopi Reservation, closed
             for (size_t k = 1; k < nSk - 1; ++k) lines[2].push_back(v(sk[k]));      // the Manitoba line
+            for (size_t k = 0; k + 1 < nPg; ++k) lines[3].push_back(v(pg[k]));      // round Page (MST) inside the Navajo Nation's corner
             for (const auto& L : lines) {
                 float bLo0 = 1e9f, bLo1 = -1e9f, bLa0 = 1e9f, bLa1 = -1e9f;
                 for (const ImVec2& q : L) { bLo0 = std::min(bLo0, q.x); bLo1 = std::max(bLo1, q.x); bLa0 = std::min(bLa0, q.y); bLa1 = std::max(bLa1, q.y); }

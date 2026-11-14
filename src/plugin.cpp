@@ -852,6 +852,8 @@ void turbConflictCheck(bool force) {
     if (c == g_turbConflict) return;
     g_turbConflict = c;
     if (!c.empty()) logf("turbulence: %s is running and does the turbulence - WXPlane leaves X-Plane's turbulence to it", c.c_str());
+    else if (g_xprRunning && g_cfg.turbWithXPRealistic)
+        logf("turbulence: XPRealistic is running, and WXPlane does the turbulence alongside it (turbulence_with_xprealistic = 1)");
     else logf("turbulence: no other turbulence add-on running any more - WXPlane's turbulence is back");
 }
 

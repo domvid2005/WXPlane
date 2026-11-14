@@ -506,6 +506,13 @@ int main(int argc, char** argv) {
         const double chi = wx::uiLocalOffsetForTest(z, 41.9, -87.6), ind = wx::uiLocalOffsetForTest(z, 39.77, -86.16);
         std::printf("local time on the map: Chicago %+.1f h, Indianapolis (140 nm away, Eastern) %+.1f h\n", chi / 3600.0, ind / 3600.0);
         if (chi != -6 * 3600.0 || ind != -5 * 3600.0) { std::printf("UI: local time on the map: wrong zone across the line\n"); return 1; }
+        // the same standard zone, another summer clock: aircraft at Phoenix in July (MST, UTC-7), Albuquerque 290 nm and Gallup 190 nm
+        // away keep daylight time (MDT, UTC-6) - within 250 nm X-Plane's time was used for the whole standard zone (2026-11-14 review)
+        UiData az = z;
+        az.lat = 33.43; az.lon = -112.01; az.localOffsetS = -7 * 3600.0; az.now = 1782907200;
+        const double phx = wx::uiLocalOffsetForTest(az, 33.5, -112.0), gup = wx::uiLocalOffsetForTest(az, 35.53, -108.74);
+        std::printf("local time on the map in July: Phoenix %+.1f h, Gallup NM (190 nm away) %+.1f h\n", phx / 3600.0, gup / 3600.0);
+        if (phx != -7 * 3600.0 || gup != -6 * 3600.0) { std::printf("UI: local time on the map: Arizona's clock shown in New Mexico\n"); return 1; }
     }
     // map windows: never on one of the map's buttons, and dragging one onto another (or onto a button) only slides it up to them,
     // it never overlaps them, and no window closes ("max popups")
