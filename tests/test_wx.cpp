@@ -1061,6 +1061,17 @@ int main() {
             GribField rf4 = rf; rf4.v = {45, 45, 45, 45, 25, 45};
             convectiveMask(rf4, nullptr, &sts, 33.0f, capped);
             CHECK(capped == 0 && rf4.v[0] == 45);
+            {   // an older PrecipFlag from elsewhere that does not cover these pixels (2026-11-14 review): the airports decide there, the
+                // pixels are not taken as steady rain (a storm line in a newly entered area would have been capped at 33 dBZ)
+                GribField far = rf; far.lat0 = 30.0; far.lon0 = -100.0; far.ni = far.nj = 2; far.v = {1, 1, 1, 1};
+                GribField rf5 = rf; rf5.v = {45, 45, 45, 45, 25, 45};
+                convectiveMask(rf5, &far, &sts, 33.0f, capped);
+                CHECK(rf5.v[0] == 45);   // near KMWH reporting -TSRA: convection stays
+                GribField rf6 = rf; rf6.v = {45, 45, 45, 45, 25, 45};
+                std::vector<Station> calm(sts.begin(), sts.begin() + 2);
+                convectiveMask(rf6, &far, &calm, 33.0f, capped);
+                CHECK(rf6.v[0] == 33);   // no airport reporting convection: steady rain, as without a flag
+            }
             Station cbOnly = sts[0]; cbOnly.rawMetar = "METAR KXYZ 100552Z 31006KT 10SM BKN040 07/07 A3004 RMK CB DSNT NW"; CHECK(convectionReported(cbOnly));
             Station tsno = sts[0]; tsno.icao = "KATS"; tsno.rawMetar = "METAR KATS 100552Z AUTO 31006KT 10SM CLR 07/07 A3004 RMK AO2 TSNO"; parseReport(tsno.rawMetar, tsno.report);
             CHECK(!convectionReported(tsno));   // the identifier and "sensor not operating" are not thunder

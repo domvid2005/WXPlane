@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <fstream>
 #include <functional>
@@ -981,7 +982,7 @@ GribField convectiveMask(GribField& refl, const GribField* flag, const std::vect
     GribField m = refl;
     capped = 0;
     std::vector<const Station*> ev;
-    if (!flag && stations) for (const auto& st : *stations) if (convectionReported(st)) ev.push_back(&st);
+    if (stations) for (const auto& st : *stations) if (convectionReported(st)) ev.push_back(&st);
     const bool sameGrid = flag && flag->ni == refl.ni && flag->nj == refl.nj && std::fabs(flag->lat0 - refl.lat0) < 1e-6 && std::fabs(flag->lon0 - refl.lon0) < 1e-6;
     for (int j = 0; j < refl.nj; ++j) {
         const double la = refl.lat0 - j * refl.dLat;
@@ -989,10 +990,10 @@ GribField convectiveMask(GribField& refl, const GribField* flag, const std::vect
             const size_t k = (size_t)j * (size_t)refl.ni + (size_t)i;
             const double lo = refl.lon0 + i * refl.dLon;
             bool conv;
-            if (flag) {
-                const float f = sameGrid ? flag->v[k] : flag->at(la, lo);
+            const float f = flag ? (sameGrid ? flag->v[k] : flag->at(la, lo)) : std::numeric_limits<float>::quiet_NaN();
+            if (!std::isnan(f)) {
                 conv = (f > 5.5f && f < 7.5f) || (f > 95.5f && f < 96.5f);
-            } else {
+            } else {   // no flag, or a point it does not cover (an older grid from elsewhere): airports reporting convection decide
                 conv = false;
                 if (refl.v[k] > capDbz)
                     for (const Station* s : ev) if (std::fabs(s->lat - la) < 1.0 && distNm(la, lo, s->lat, s->lon) <= 60.0) { conv = true; break; }

@@ -71,6 +71,7 @@ private:
     FetchRequest req_;
     FetchResult res_;
     std::atomic<bool> working_{false};
+    std::atomic<bool> stopping_{false};   // set by stop(): downloads skip their remaining retries and waits
     std::vector<std::pair<std::string, std::time_t>> noAtis_; // negative cache, worker thread only
     // winds-aloft cache (worker thread only)
     // global-model winds aloft (Open-Meteo GFS), worker thread only
@@ -97,6 +98,7 @@ private:
     GribField lastFlag_;              // last MRMS PrecipFlag grid that downloaded fine, reused the same way (worker thread only)
     std::string lastFlagRegion_;
     std::time_t lastFlagAt_ = 0;
+    double lastFlagLat_ = 0, lastFlagLon_ = 0;   // where the aircraft was: the grid only covers the radar range around that spot
     std::vector<Station> radarStations_; // the last full update's reports (worker thread only)
     std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
     // European radar (EUMETNET OPERA): the composite's header and the tiles already downloaded, for the slot they belong to
