@@ -1308,15 +1308,18 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const NoDstPt* sk = saskatchewanOutline(nSk);
             const NoDstPt* pg = pageOutline(nPg);
             auto v = [](const NoDstPt& q) { return ImVec2((float)q.lon, (float)q.lat); };
-            std::vector<std::vector<ImVec2>> lines(4);
-            // Utah line west of the Navajo Nation, the Navajo Nation's inner edge, then the New Mexico line south of it
+            std::vector<std::vector<ImVec2>> lines(3);
+            // one path along where the summer clock changes: the Utah line from 114 W to Page's east edge (Arizona and Page on MST
+            // against Utah), down round Page (against the Navajo Nation), the Navajo Nation's west and south edges, then the New
+            // Mexico line to Mexico. (The Navajo edge beside Page has MST on both sides: no line there.)
             lines[0].push_back(v(az[0]));                                   // Utah corner (114 W)
-            lines[0].push_back(v(nv[0]));                                   // where the Navajo Nation meets the Utah line
-            for (size_t k = nNv - 1; k >= 2; --k) lines[0].push_back(v(nv[k]));   // its west and south edges, round to New Mexico
+            lines[0].push_back(v(pg[2]));                                   // Page's north-east corner on the Utah line
+            lines[0].push_back(v(pg[1]));                                   // its south-east corner
+            lines[0].push_back(v(pg[0]));                                   // its south-west corner, on the Navajo Nation's edge
+            for (size_t k = nNv - 1; k >= 2; --k) lines[0].push_back(v(nv[k]));   // the Navajo Nation's west and south edges
             lines[0].push_back(v(az[2]));                                   // down the New Mexico line to Mexico
             for (size_t k = 0; k <= nHp; ++k) lines[1].push_back(v(hp[k % nHp]));   // the Hopi Reservation, closed
             for (size_t k = 1; k < nSk - 1; ++k) lines[2].push_back(v(sk[k]));      // the Manitoba line
-            for (size_t k = 0; k + 1 < nPg; ++k) lines[3].push_back(v(pg[k]));      // round Page (MST) inside the Navajo Nation's corner
             for (const auto& L : lines) {
                 float bLo0 = 1e9f, bLo1 = -1e9f, bLa0 = 1e9f, bLa1 = -1e9f;
                 for (const ImVec2& q : L) { bLo0 = std::min(bLo0, q.x); bLo1 = std::max(bLo1, q.x); bLa0 = std::min(bLa0, q.y); bLa1 = std::max(bLa1, q.y); }
