@@ -49,6 +49,8 @@ struct UiData {
     double localOffsetS = 0;
     // update state
     bool busy = false;                  // a download is running
+    std::string updateVersion;          // a newer WXPlane on the SkunkCrafts Updater (checked at start-up), not dismissed yet: the yellow notice
+    float blendProgress = -1;           // X-Plane blending the last weather change in at the aircraft: 0..1 (the ring round the status dot); -1 none
     double nextUpdateS = -1;            // seconds to the next scheduled update, -1 unknown
     std::string status1, status2;       // the menu's status lines
     bool xpRealWeather = false;         // X-Plane's own real weather is on (it should be off)
@@ -102,6 +104,7 @@ struct UiActions {
     bool popOut = false;                // move the window to its own OS window (or back)
     // the settings (the plugin's former menu toggles): flip these
     bool toggleNightDim = false;
+    bool dismissUpdate = false;         // the yellow update notice's Dismiss button
     bool toggleTurbWithXpr = false;     // XPRealistic for its sounds only: WXPlane does the turbulence anyway
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
     // the one "Realistic turbulence & windshear" switch: set both to this (-1: untouched)

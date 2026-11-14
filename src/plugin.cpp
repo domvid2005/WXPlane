@@ -744,7 +744,14 @@ std::string utcHM(std::time_t t) {
 // it (the window says so and locks its turbulence controls). Checked when enabled and every 15 s: the name of the first such
 // enabled plugin, "" when none.
 std::string g_turbConflict;
-bool g_xprRunning = false;   // XPRealistic is enabled (whether or not it counts, turbulence_with_xprealistic)
+bool g_xprRunning = false;
+// the update check (updateCheckStart, below)
+std::thread g_updTh;
+std::atomic<bool> g_updCancel{false};
+std::mutex g_updM;
+std::string g_updVersion;   // the newer version, "" when none (guarded by g_updM)
+bool g_updChecked = false, g_updDismissed = false;
+   // XPRealistic is enabled (whether or not it counts, turbulence_with_xprealistic)
 // X-ProTurb is a FlyWithLua script (2026-11-14, a customer: 3.1.1 was not detected - X-Plane's plugin list only shows FlyWithLua):
 // FlyWithLua runs the scripts in its Scripts folder (a script switched off is moved out of it), so that folder is looked through.
 // Paths as X-Plane gives them (HFS on a Mac), and listed with XPLMGetDirectoryContents, which takes the same form.
@@ -1646,6 +1653,73 @@ void frameCheckTick() {
          (fb - fd > 1.0 || wd > 2.5 * mb + 10.0) ? "  ** over the 1 fps / hitch limit **" : "");
 }
 
+// ---- The blend watch (the ring round the status dot, 2026-11-14): after every weather change it reads X-Plane's weather at the
+// aircraft once a second - visibility, sea-level pressure, and each cloud layer's coverage and base - and measures how far it has
+// come from where it started toward what WXPlane wants there (blendAt, as the weather watch). It ends when X-Plane's values stop
+// changing for 8 s (they can settle short of the target, where neighbouring records blend in), or after 3 minutes.
+struct BlendWatch {
+    bool on = false, haveStart = false;
+    double start = 0, lastChange = 0, nextPoll = 0, doneAt = -1;
+    float startSig[8] = {}, lastSig[8] = {}, target[8] = {};
+    float progress = 0;
+} g_blend;
+// the values compared (scaled so a step of 1 is a clearly visible change): visibility (log, km), sea-level pressure (per 2 hPa),
+// three cloud layers' coverage (per 25 %) and base (per 300 m, only where there is a layer)
+void blendSig(const XPLMWeatherInfo_t& q, float* s) {
+    s[0] = (float)std::log10(std::max(100.0, (double)q.visibility) / 1000.0) * 4.0f;   // metres
+    s[1] = q.pressure_sl / 200.0f;   // Pa -> per 2 hPa
+    for (int k = 0; k < 3; ++k) {
+        s[2 + k] = q.cloud_layers[k].coverage / 0.25f;
+        s[5 + k] = q.cloud_layers[k].coverage > 0.02f ? q.cloud_layers[k].alt_base / 300.0f : 0.0f;
+    }
+}
+void blendTarget(double lat, double lon, float* s) {
+    const std::time_t now = std::time(nullptr);
+    const wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
+    const wx::XpWx x = wx::buildXp(b, g_cfg, now, &g_lastRes.aloft, fogNear(b.lat, b.lon, 5.0, now));
+    XPLMWeatherInfo_t q;
+    std::memset(&q, 0, sizeof q);
+    q.visibility = (float)x.visM;
+    q.pressure_sl = x.qnhPa > 0 ? x.qnhPa : (float)(b.report.altimHpa > 0 ? b.report.altimHpa * 100.0 : 101325.0);
+    for (int k = 0; k < 3; ++k) { q.cloud_layers[k].coverage = x.clouds[k].coverage; q.cloud_layers[k].alt_base = x.clouds[k].baseM; }
+    blendSig(q, s);
+}
+void blendMark() {
+    if (!g_drLat || !g_drLon || g_lastRes.stations.empty()) return;
+    const double t = steadyS();
+    if (!g_blend.on) { g_blend = BlendWatch{}; g_blend.on = true; g_blend.start = t; g_blend.nextPoll = t; }
+    g_blend.lastChange = t;   // a slice of the same update: the watch goes on
+    blendTarget(XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), g_blend.target);
+}
+void blendTick() {
+    const double t = steadyS();
+    if (!g_blend.on) return;
+    if (g_blend.doneAt >= 0) { if (t - g_blend.doneAt > 2.0) g_blend.on = false; return; }   // full for 2 s, then gone
+    if (t < g_blend.nextPoll || !g_drLat || !g_drLon || !g_drElev) return;
+    g_blend.nextPoll = t + 1.0;
+    XPLMWeatherInfo_t q;
+    std::memset(&q, 0, sizeof q);
+    q.structSize = sizeof q;
+    XPLMGetWeatherAtLocation(XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), XPLMGetDatad(g_drElev), &q);
+    float s[8];
+    blendSig(q, s);
+    if (!g_blend.haveStart) { std::memcpy(g_blend.startSig, s, sizeof s); std::memcpy(g_blend.lastSig, s, sizeof s); g_blend.haveStart = true; return; }
+    bool changed = false;
+    for (int k = 0; k < 8; ++k) changed = changed || std::fabs(s[k] - g_blend.lastSig[k]) > 0.02f;
+    std::memcpy(g_blend.lastSig, s, sizeof s);
+    if (changed) g_blend.lastChange = t;
+    double d0 = 0, d1 = 0;
+    for (int k = 0; k < 8; ++k) { d0 += std::fabs(g_blend.startSig[k] - g_blend.target[k]); d1 += std::fabs(s[k] - g_blend.target[k]); }
+    const float p = d0 > 0.05 ? (float)std::max(0.0, std::min(1.0, 1.0 - d1 / d0)) : 0.0f;
+    g_blend.progress = std::max(g_blend.progress, std::min(0.97f, p));   // never runs backward; full only when it has settled
+    const bool settled = t - g_blend.lastChange >= 8.0 && t - g_blend.start >= 3.0;
+    if (settled || t - g_blend.start > 180.0) {
+        logf("blend: X-Plane's weather at the aircraft %s %.0f s after the change (it came %.0f%% of the way to WXPlane's values there)",
+             settled ? "settled" : "was still changing", (settled ? g_blend.lastChange : t) - g_blend.start, 100.0 * std::max(0.0, std::min(1.0, d0 > 0.05 ? 1.0 - d1 / d0 : 1.0)));
+        g_blend.progress = 1.0f; g_blend.doneAt = t;
+    }
+}
+
 void flushPending() {
     if (g_pendingTodo.empty() && g_pendingGone.empty()) return;
     const bool immediateNow = g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup));
@@ -1693,7 +1767,7 @@ void flushPending() {
     if (g_pendingReplace) windshearResend();
     XPLMEndWeatherUpdate(g_pendingReplace ? 0 : 1 /*0: replaces all our previous records*/, (g_pendingImmediate && (g_pendingManual || (g_cfg.firstLoadImmediate && g_pendingStartup))) ? 1 : 0);
     if (g_pendingTodo.empty()) g_pendingReplace = false;
-    if (sent || erased) { g_lastSendAt = Clock::now(); g_lastSendImmediate = immediateNow; frameCheckMark(sent + erased); }
+    if (sent || erased) { g_lastSendAt = Clock::now(); g_lastSendImmediate = immediateNow; frameCheckMark(sent + erased); blendMark(); }
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     const double msSets = std::chrono::duration<double, std::milli>(tSets - t0).count();
     if (ms > 20.0) logf("weather update took %.0f ms for %zu records, %zu erased (%zu still queued): %.0f ms setting records, %.0f ms in X-Plane's end of update",
@@ -3219,6 +3293,7 @@ float flightLoop(float, float, int, void*) {
         }
     }
     frameCheckTick();
+    blendTick();
     return 0.25f;
 }
 
@@ -3478,6 +3553,8 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     if (drG) { d.gNormal = XPLMGetDataf(drG); d.haveG = true; }
     if (g_drGsFetch) d.gsKt = XPLMGetDataf(g_drGsFetch) * 1.943844;
     d.busy = g_fetcher.busy();
+    if (!g_updDismissed) { std::lock_guard<std::mutex> lk(g_updM); d.updateVersion = g_updVersion; }
+    d.blendProgress = g_blend.on && g_blend.haveStart ? g_blend.progress : -1.0f;
     if (g_everRequested && g_cfg.enabled) d.nextUpdateS = std::max(0.0, g_cfg.updateMinutes * 60.0 - std::chrono::duration<double>(Clock::now() - g_lastRequest).count());
     d.status1 = g_status1; d.status2 = g_status2;
     d.xpRealWeather = g_xpRealWx;
@@ -3531,6 +3608,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     if (act.toggleEnabled) menuHandler(nullptr, (void*)(intptr_t)kEnabled);
     if (act.toggleAtis) menuHandler(nullptr, (void*)(intptr_t)kAtis);
     if (act.toggleNightDim) { g_cfg.nightDim = !g_cfg.nightDim; wx::saveConfig(g_cfgPath, g_cfg); }
+    if (act.dismissUpdate && !g_updDismissed) { g_updDismissed = true; logf("update check: notice dismissed"); }
     if (act.toggleTurbWithXpr) { g_cfg.turbWithXPRealistic = !g_cfg.turbWithXPRealistic; wx::saveConfig(g_cfgPath, g_cfg); turbConflictCheck(true); }
 #ifndef WX_HARNESS
     wx::xpui::setNightDim(g_cfg.nightDim);
@@ -3598,6 +3676,49 @@ void menuHandler(void*, void* item) {
 
 } // namespace
 
+// ---- Update check (2026-11-14): once per X-Plane session, when the plugin is first enabled, the SkunkCrafts release's
+// skunkcrafts_updater.cfg is read ("version|5.1.2"); a newer version than this one gets a yellow notice over the window, with a
+// Dismiss button, until dismissed (it comes back at the next start of X-Plane). update_check = 0 turns it off.
+// true when version a ("5.1.2") is newer than b ("5.1.1"); the parts are compared as numbers
+bool versionNewer(const std::string& a, const std::string& b) {
+    auto parts = [](const std::string& v) { std::vector<long> p; long n = -1; for (char c : v) { if (std::isdigit((unsigned char)c)) n = (n < 0 ? 0 : n) * 10 + (c - '0'); else if (c == '.') { p.push_back(n < 0 ? 0 : n); n = -1; } else break; } if (n >= 0) p.push_back(n); return p; };
+    const std::vector<long> pa = parts(a), pb = parts(b);
+    for (size_t i = 0; i < std::max(pa.size(), pb.size()); ++i) {
+        const long x = i < pa.size() ? pa[i] : 0, y = i < pb.size() ? pb[i] : 0;
+        if (x != y) return x > y;
+    }
+    return false;
+}
+void updateCheckStart() {
+#ifndef WX_HARNESS
+    if (g_updChecked || !g_cfg.updateCheck) return;
+    g_updChecked = true;
+    g_updCancel = false;
+    g_updTh = std::thread([]() {
+        std::string body, err;
+        long status = 0;
+        const std::string url = "https://raw.githubusercontent.com/domvid2005/WXPlane/refs/heads/release/WXPlane/skunkcrafts_updater.cfg";
+        if (!wx::httpGetCancellable(url, "", body, status, err, 15, 64 * 1024, &g_updCancel) || status != 200) {
+            if (!g_updCancel) logf("update check: could not read the SkunkCrafts release (%s)", err.empty() ? ("HTTP " + std::to_string(status)).c_str() : err.c_str());
+            return;
+        }
+        std::string ver;
+        std::istringstream in(body);
+        for (std::string line; std::getline(in, line);)
+            if (line.compare(0, 8, "version|") == 0) { ver = line.substr(8); while (!ver.empty() && std::isspace((unsigned char)ver.back())) ver.pop_back(); break; }
+        if (ver.empty()) { logf("update check: no version in the SkunkCrafts release"); return; }
+        if (versionNewer(ver, WX_VERSION)) {
+            { std::lock_guard<std::mutex> lk(g_updM); g_updVersion = ver; }
+            logf("update check: WXPlane %s is available on the SkunkCrafts Updater (this is %s)", ver.c_str(), WX_VERSION);
+        } else logf("update check: up to date (%s; the SkunkCrafts release is %s)", WX_VERSION, ver.c_str());
+    });
+#endif
+}
+void updateCheckStop() {
+    g_updCancel = true;
+    if (g_updTh.joinable()) g_updTh.join();
+}
+
 PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     std::strcpy(outName, "WXPlane");
     std::strcpy(outSig, "com.wxplane.xp12.noaa");
@@ -3655,6 +3776,7 @@ PLUGIN_API void XPluginStop(void) {
         g_loop = nullptr;
     }
     if (g_frameLoop) { XPLMDestroyFlightLoop(g_frameLoop); g_frameLoop = nullptr; }
+    updateCheckStop();   // (normally already stopped by XPluginDisable)
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
 #ifndef WX_HARNESS
     stopSearch();
@@ -3669,6 +3791,7 @@ PLUGIN_API void XPluginStop(void) {
 
 PLUGIN_API int XPluginEnable(void) {
     wx::httpGlobalInit();
+    updateCheckStart();
     logf("downloads: %s", wx::httpTlsInfo().c_str());
     g_fetcher.start();
     g_turbFetch.start();
@@ -3719,6 +3842,7 @@ PLUGIN_API void XPluginDisable(void) {
     g_pluginEnabled = false;
     g_fetcher.stop();
     g_turbFetch.stop();
+    updateCheckStop();   // before the HTTP clean-up below
     turbRestore("plugin disabled");
     regionRestore("plugin disabled");
     destroyMapLayers();

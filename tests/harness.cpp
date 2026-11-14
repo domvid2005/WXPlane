@@ -1250,6 +1250,11 @@ int main() {
             const size_t fc = g_logAll.find("frame check: weather change");
             std::printf("  frame check: %s\n", fc == std::string::npos ? "(none)" : g_logAll.substr(fc, g_logAll.find('\n', fc) - fc).c_str());
             CHECK(fc != std::string::npos && g_logAll.find("frame check: X-Plane's clouds") != std::string::npos);
+            // the blend watch (the ring round the status dot) ends: X-Plane's weather at the aircraft stopped changing
+            for (int i = 0; i < 600 && g_logAll.find("blend: X-Plane's weather at the aircraft") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+            const size_t bl = g_logAll.find("blend: ");
+            std::printf("  %s\n", bl == std::string::npos ? "blend: (none)" : g_logAll.substr(bl, g_logAll.find('\n', bl) - bl).c_str());
+            CHECK(bl != std::string::npos);
         }
         if (const char* dp = std::getenv("WX_DUMP")) {   // for the cloud-edge picture (tools)
             FILE* f = std::fopen(dp, "w");

@@ -3748,9 +3748,41 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     updateMapAlt(d);
     updateWinds(d);
     act.mapAltFt = !showTurb() ? -1.0 : (composite() ? -2.0 : mapAlt().shown);   // -2: the composite (worst level in the column)
-    // X-Plane's own real weather on: nothing in the window can be clicked, and a red warning covers it (finish(), below)
-    if (d.xpRealWeather) ImGui::BeginDisabled();
+    // X-Plane's own real weather on: nothing in the window can be clicked, and a red warning covers it (finish(), below). A newer
+    // WXPlane on the SkunkCrafts Updater (checked at start-up): a yellow notice covers it the same way, until its Dismiss button.
+    const bool updNotice = !d.xpRealWeather && !d.updateVersion.empty();
+    if (d.xpRealWeather || updNotice) ImGui::BeginDisabled();
     auto finish = [&]() {
+        if (updNotice) {
+            ImGui::EndDisabled();
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+            fg->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + ws.y), IM_COL32(10, 10, 12, 170));
+            const float big = ImGui::GetFontSize() * 1.9f, mid = ImGui::GetFontSize() * 1.05f;
+            const std::string l1 = "WXPLANE " + d.updateVersion + " IS AVAILABLE";
+            const std::string l2 = std::string("You have WXPlane ") + WX_VERSION + ". Run the SkunkCrafts Updater to install the new version.";
+            const char* l3 = "The changes are listed in CHANGELOG.md and on the X-Plane.org file page.";
+            const ImVec2 t1 = f.title->CalcTextSizeA(big, FLT_MAX, 0, l1.c_str()), t2 = f.body->CalcTextSizeA(mid, FLT_MAX, 0, l2.c_str()), t3 = f.body->CalcTextSizeA(mid, FLT_MAX, 0, l3);
+            const ImVec2 bt = f.body->CalcTextSizeA(mid, FLT_MAX, 0, "Dismiss");
+            const float btnW = bt.x + 44, btnH = bt.y + 16;
+            const float bw = std::min(ws.x - 40, std::max(720.0f, std::max(t2.x, t3.x) + 60)), bh = 30 + t1.y + 18 + t2.y + 6 + t3.y + 22 + btnH + 22;
+            const ImVec2 b0(wp.x + (ws.x - bw) * 0.5f, wp.y + (ws.y - bh) * 0.5f), b1(b0.x + bw, b0.y + bh);
+            fg->AddRectFilled(b0, b1, IM_COL32(170, 128, 16, 245), 10.0f);
+            fg->AddRect(b0, b1, IM_COL32(255, 214, 102, 255), 10.0f, 0, 2.0f);
+            float y = b0.y + 30;
+            fg->AddText(f.title, big, ImVec2(b0.x + (bw - t1.x) * 0.5f, y), IM_COL32(255, 255, 255, 255), l1.c_str()); y += t1.y + 18;
+            fg->AddText(f.body, mid, ImVec2(b0.x + (bw - t2.x) * 0.5f, y), IM_COL32(255, 244, 214, 255), l2.c_str()); y += t2.y + 6;
+            fg->AddText(f.body, mid, ImVec2(b0.x + (bw - t3.x) * 0.5f, y), IM_COL32(255, 244, 214, 255), l3); y += t3.y + 22;
+            // the Dismiss bubble at the bottom (the notice is over everything, so the click is taken here)
+            const ImVec2 q0(b0.x + (bw - btnW) * 0.5f, y), q1(q0.x + btnW, q0.y + btnH);
+            const bool hov = ImGui::IsMouseHoveringRect(q0, q1, false);
+            fg->AddRectFilled(q0, q1, hov ? IM_COL32(60, 44, 6, 255) : IM_COL32(40, 30, 4, 235), btnH * 0.5f);
+            fg->AddRect(q0, q1, IM_COL32(255, 214, 102, 255), btnH * 0.5f, 0, 1.5f);
+            fg->AddText(f.body, mid, ImVec2(q0.x + (btnW - bt.x) * 0.5f, q0.y + (btnH - bt.y) * 0.5f), IM_COL32(255, 255, 255, 255), "Dismiss");
+            if (hov && ImGui::IsMouseClicked(0)) act.dismissUpdate = true;
+            ImGui::End();
+            return;
+        }
         if (!d.xpRealWeather) { ImGui::End(); return; }
         ImGui::EndDisabled();
         ImDrawList* fg = ImGui::GetForegroundDrawList();
@@ -3822,8 +3854,20 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
                 dl->AddText(ImVec2(tx + 2 * r + 8, ty), cWarn, live.c_str());
             } else if (!live.empty()) {
                 const SvcState sv = d.busy ? SvcState::Degraded : SvcState::Ok;
-                dl->AddCircleFilled(ImVec2(tx + 4, b0.y + bh * 0.5f), 4.0f, sv == SvcState::Ok ? IM_COL32(76, 175, 80, 255) : cWarn, 16);
-                dl->AddText(ImVec2(tx + 14, ty), cMuted, live.c_str());
+                const ImU32 dotC = sv == SvcState::Ok ? IM_COL32(76, 175, 80, 255) : cWarn;
+                const ImVec2 dc(tx + 4, b0.y + bh * 0.5f);
+                dl->AddCircleFilled(dc, 4.0f, dotC, 16);
+                if (d.blendProgress >= 0) {   // X-Plane blending the new weather in: a ring round the dot, filling clockwise from the top
+                    const float rr = 7.0f, a0 = -0.5f * (float)kPi;
+                    dl->AddCircle(dc, rr, IM_COL32(60, 64, 72, 255), 24, 1.6f);
+                    if (d.blendProgress > 0.005f) {
+                        dl->PathArcTo(dc, rr, a0, a0 + 2.0f * (float)kPi * std::min(1.0f, d.blendProgress), 24);
+                        dl->PathStroke(dotC, ImDrawFlags_None, 1.6f);
+                    }
+                    if (ImGui::IsMouseHoveringRect(b0, b1))
+                        ImGui::SetTooltip(d.blendProgress >= 1.0f ? "The new weather is in" : "Blending the new weather in... %d%%", (int)std::lround(d.blendProgress * 100.0f));
+                }
+                dl->AddText(ImVec2(tx + (d.blendProgress >= 0 ? 18 : 14), ty), cMuted, live.c_str());   // clear of the ring
             }
             dl->PopClipRect();
             ImGui::Dummy(ImVec2(bw, bh));

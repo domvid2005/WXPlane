@@ -457,6 +457,18 @@ int main(int argc, char** argv) {
         d.cfg = &cfg;
     }
     d.xpRealWeather = false;
+    // a newer WXPlane on the SkunkCrafts Updater: the yellow notice over the window, with its Dismiss button; then the blend ring
+    // round the status dot at 64 %
+    for (int pass = 0; pass < 2; ++pass) {
+        d.updateVersion = pass == 0 ? "5.1.2" : ""; d.blendProgress = pass == 1 ? 0.64f : -1.0f;
+        for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 0 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        const std::string p = out + (pass == 0 ? "/ui_update_notice.png" : "/ui_blend_ring.png");
+        if (!writePng(cv, p)) return 1;
+        std::printf("wrote %s\n", p.c_str());
+    }
+    d.updateVersion.clear(); d.blendProgress = -1.0f;
     // another turbulence add-on running: the caution over the Turbulence tab (its controls locked), the setting greyed out
     d.turbConflict = "XPRealisticPro"; d.xprRunning = true;   // with the "Turbulence with XPRealistic" row on the Settings tab
     for (int pass = 0; pass < 2; ++pass) {
