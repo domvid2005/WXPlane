@@ -744,11 +744,52 @@ std::string utcHM(std::time_t t) {
 // it (the window says so and locks its turbulence controls). Checked when enabled and every 15 s: the name of the first such
 // enabled plugin, "" when none.
 std::string g_turbConflict;
+bool g_xprRunning = false;   // XPRealistic is enabled (whether or not it counts, turbulence_with_xprealistic)
+// X-ProTurb is a FlyWithLua script (2026-11-14, a customer: 3.1.1 was not detected - X-Plane's plugin list only shows FlyWithLua):
+// FlyWithLua runs the scripts in its Scripts folder (a script switched off is moved out of it), so that folder is looked through.
+// Paths as X-Plane gives them (HFS on a Mac), and listed with XPLMGetDirectoryContents, which takes the same form.
+bool luaScriptRunning(const char* flyWithLuaPath, const char* const* keys, size_t nKeys, std::string& found) {
+    const char sep = XPLMGetDirectorySeparator()[0];
+    std::string p = flyWithLuaPath, dir;
+    // the FlyWithLua folder: the last part of the path whose name holds "flywithlua" (its .xpl sits in a subfolder: 64/, win_x64/ ...)
+    size_t end = p.size();
+    while (end > 0) {
+        const size_t start = p.rfind(sep, end - 1);
+        const size_t s0 = start == std::string::npos ? 0 : start + 1;
+        std::string part = p.substr(s0, end - s0), lo;
+        for (char c : part) if (std::isalnum((unsigned char)c)) lo += (char)std::tolower((unsigned char)c);
+        if (lo == "flywithlua" || (lo.find("flywithlua") == 0 && lo.find("xpl") == std::string::npos)) { dir = p.substr(0, end); break; }
+        if (start == std::string::npos) break;
+        end = start;
+    }
+    if (dir.empty()) return false;
+    dir += sep; dir += "Scripts";
+    std::vector<char> buf(64 * 1024);
+    std::vector<char*> idx(2048);
+    int total = 0, offset = 0;
+    for (;;) {
+        int got = 0;
+        const int more = XPLMGetDirectoryContents(dir.c_str(), offset, buf.data(), (int)buf.size(), idx.data(), (int)idx.size(), &total, &got);
+        for (int i = 0; i < got; ++i) {
+            std::string lo;
+            for (const char* c = idx[(size_t)i]; *c; ++c) lo += (char)std::tolower((unsigned char)*c);
+            if (lo.size() < 4 || lo.compare(lo.size() - 4, 4, ".lua") != 0) continue;
+            std::string k;
+            for (char c : lo) if (std::isalnum((unsigned char)c)) k += c;
+            for (size_t j = 0; j < nKeys; ++j) if (k.find(keys[j]) != std::string::npos) { found = idx[(size_t)i]; return true; }
+        }
+        if (more || got <= 0) break;   // 1: everything was returned
+        offset += got;
+    }
+    return false;
+}
 // Plugins that live in an aircraft's folder (Aircraft/...) never count as a conflict (2026-11-12: the X-Crafts ERJ's EICAS plugin
 // must not turn WXPlane's turbulence off); the known ones that add their own turbulence effects get a note on the Turbulence tab.
 std::string findTurbConflict() {
     const XPLMPluginID me = XPLMGetMyID();
     const int n = XPLMCountPlugins();
+    std::string found;
+    bool xpr = false;
     for (int i = 0; i < n; ++i) {
         const XPLMPluginID id = XPLMGetNthPlugin(i);
         if (id == me || id < 0 || !XPLMIsPluginEnabled(id)) continue;
@@ -782,11 +823,25 @@ std::string findTurbConflict() {
         }
         auto has = [&](const char* k) { for (const auto& w : words) if (w.find(k) != std::string::npos) return true; return false; };
         if (aircraft) continue;   // an aircraft's own plugin (the X-Crafts ERJ's EICAS, for one) is never a turbulence add-on: not mentioned
-        static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen", "xprealistic"};
+        // XPRealistic: some use it for its sounds only, with its motion (camera shake) off - then WXPlane does the turbulence anyway
+        // (turbulence_with_xprealistic, the Settings tab; a customer, 2026-11-14)
+        if (has("xprealistic")) {
+            xpr = true;
+            if (g_cfg.turbWithXPRealistic) continue;
+            if (found.empty()) found = name[0] ? std::string(name) : std::string(sig);
+            continue;
+        }
+        static const char* kTurbAddons[] = {"activesky", "asxp", "xproturb", "proturb", "turbulen"};
         for (const char* k : kTurbAddons)
-            if (has(k)) return name[0] ? std::string(name) : std::string(sig);
+            if (has(k) && found.empty()) found = name[0] ? std::string(name) : std::string(sig);
+        if (has("flywithlua") && found.empty()) {   // X-ProTurb and other turbulence scripts run inside FlyWithLua
+            static const char* kLua[] = {"xproturb", "proturb"};
+            std::string script;
+            if (luaScriptRunning(path, kLua, sizeof kLua / sizeof kLua[0], script)) found = "X-ProTurb (" + script + ")";
+        }
     }
-    return "";
+    g_xprRunning = xpr;
+    return found;
 }
 void turbConflictCheck(bool force) {
     static Clock::time_point next{};
@@ -3426,6 +3481,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     d.xpRealWeather = g_xpRealWx;
     d.turbOn = g_cfg.enabled && g_cfg.realisticTurbulence && g_turbConflict.empty();
     d.turbConflict = g_turbConflict;
+    d.xprRunning = g_xprRunning;
     d.turbEdr = g_uiTs.edr; d.turbSource = g_uiTs.source; d.turbData = g_uiTs.data; d.turbProfile = g_uiTs.profile; d.turbGrid = g_uiTs.grid; d.turbGridDLat = g_uiTs.gridDLat; d.turbGridDLon = g_uiTs.gridDLon;
     d.turbGridAltFt = g_uiTs.gridAltFt; d.turbGridSeq = g_uiTs.gridSeq;
     d.magVarAt = magVarEastAt;
@@ -3473,6 +3529,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     if (act.toggleEnabled) menuHandler(nullptr, (void*)(intptr_t)kEnabled);
     if (act.toggleAtis) menuHandler(nullptr, (void*)(intptr_t)kAtis);
     if (act.toggleNightDim) { g_cfg.nightDim = !g_cfg.nightDim; wx::saveConfig(g_cfgPath, g_cfg); }
+    if (act.toggleTurbWithXpr) { g_cfg.turbWithXPRealistic = !g_cfg.turbWithXPRealistic; wx::saveConfig(g_cfgPath, g_cfg); turbConflictCheck(true); }
 #ifndef WX_HARNESS
     wx::xpui::setNightDim(g_cfg.nightDim);
 #endif

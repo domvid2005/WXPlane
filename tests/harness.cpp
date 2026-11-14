@@ -120,6 +120,23 @@ static const char* hpath(const char* name) {   // a stable C string: the file in
 #endif
 void XPLMGetPrefsPath(char* o) { std::strcpy(o, hpath("X-Plane.prf")); }
 const char* XPLMGetDirectorySeparator(void) { return "/"; }
+// FlyWithLua's Scripts folder, for the X-ProTurb check (a test fills it)
+std::vector<std::string> g_luaScripts;
+int XPLMGetDirectoryContents(const char* dir, int first, char* names, int bufSize, char** idx, int idxCount, int* total, int* got) {
+    std::vector<std::string> files;
+    const std::string d = dir ? dir : "";
+    if (d.size() >= 18 && d.compare(d.size() - 18, 18, "FlyWithLua/Scripts") == 0) files = g_luaScripts;
+    if (total) *total = (int)files.size();
+    int n = 0, at = 0;
+    for (size_t i = (size_t)first; i < files.size() && n < idxCount; ++i) {
+        if (at + (int)files[i].size() + 1 > bufSize) break;
+        std::strcpy(names + at, files[i].c_str());
+        idx[n++] = names + at;
+        at += (int)files[i].size() + 1;
+    }
+    if (got) *got = n;
+    return first + n >= (int)files.size() ? 1 : 0;
+}
 char* XPLMExtractFileAndPath(char* p) { char* s = std::strrchr(p, '/'); if (s) *s = 0; return p; }
 static std::string g_navId;
 XPLMNavRef XPLMFindNavAid(const char*, const char* id, float*, float*, int*, XPLMNavType) {
@@ -918,6 +935,26 @@ static int runTurb() {
     CHECK(g_logAll.find("is running and does the turbulence") == std::string::npos);
     g_otherPath.clear();
     g_otherPlugin.clear();
+    // 2e) X-ProTurb is a FlyWithLua script (a customer, 2026-11-14: 3.1.1 was not detected - only "FlyWithLua NG+" is a plugin)
+    std::printf("[turb] 2e) FlyWithLua with X-ProTurb in its Scripts folder: a conflict; switched off (moved out): none\n");
+    g_logAll.clear();
+    g_otherPlugin = "FlyWithLua NG+";
+    g_otherPath = "Resources/plugins/FlyWithLua/64/win.xpl";
+    g_luaScripts = {"Copilot.lua", "X-ProTurb_v3.1.1.lua", "readme.txt"};
+    CHECK(pumpUntil("X-ProTurb (X-ProTurb_v3.1.1.lua) is running and does the turbulence", 30));
+    g_logAll.clear();
+    g_luaScripts = {"Copilot.lua", "proturb_readme.txt"};   // the script moved out (switched off); a text file is no script
+    CHECK(pumpUntil("no other turbulence add-on running any more", 30));
+    g_luaScripts.clear();
+    g_otherPath.clear();
+    g_otherPlugin.clear();
+    // 2f) XPRealistic is a turbulence add-on by default (turbulence_with_xprealistic = 0)
+    std::printf("[turb] 2f) XPRealistic: a conflict by default\n");
+    g_otherPlugin = "XPRealisticPro";
+    CHECK(pumpUntil("XPRealisticPro is running and does the turbulence", 30));
+    g_logAll.clear();
+    g_otherPlugin.clear();
+    CHECK(pumpUntil("no other turbulence add-on running any more", 30));
     std::printf("[turb] 3) the menu toggle puts X-Plane's values back\n");
     g_menuHandler(nullptr, (void*)(intptr_t)10 /*kTurbulence*/);
     CHECK(pumpUntil("realistic turbulence off: X-Plane's region turbulence put back", 5));

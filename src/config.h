@@ -105,6 +105,7 @@ struct Config {
     double maxTurbulence = 1.0;
     double windshearOdds = 1.0;         // 0..1: how often windshear forms (1 = the realistic rate; 0 = none, like Max turbulence 0)
     bool realisticTurbulence = true;
+    bool turbWithXPRealistic = false; // XPRealistic used for its sounds only (its motion off): WXPlane does the turbulence anyway (a customer, 2026-11-14)
     bool turbReports = true;          // pilot reports raise the turbulence outside GTGN coverage (SIGMETs/AIRMETs are map-only)  // menu: Enable Realistic Turbulence (NOAA GTGN in the US, ECMWF estimate elsewhere)
     bool radarEchoTops = true;    // download MRMS echo tops for storm heights
     double stormCoreCoverage = 0.95; // coverage of storm cells that are surrounded by other storm cells (35+ dBZ); rim cells keep storm_coverage_max, so only the outline breaks up

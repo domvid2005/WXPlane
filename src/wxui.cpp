@@ -3468,6 +3468,10 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
                 ImGui::Spacing();
             }
             if (flip) act.setTurbWs = on ? 0 : 1;
+            // XPRealistic used for its sounds only, its motion effects off: WXPlane can do the turbulence alongside it (a customer,
+            // 2026-11-14); shown while it runs, or while the choice is on
+            if (d.xprRunning || d.cfg->turbWithXPRealistic)
+                settingRow("Turbulence with XPRealistic", d.cfg->turbWithXPRealistic, "On: WXPlane does the turbulence even while XPRealistic runs. For when XPRealistic is used for its sounds only, with its motion effects (camera shake) switched off in XPRealistic; with both on, the turbulence is felt twice. Off: WXPlane leaves the turbulence to XPRealistic.", act.toggleTurbWithXpr);
         }
         if (off) { ImGui::PopStyleColor(2); ImGui::EndDisabled(); }
         ImGui::Separator(); ImGui::Spacing();

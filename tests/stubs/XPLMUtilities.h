@@ -3,6 +3,7 @@
 void XPLMDebugString(const char*);
 void XPLMGetPrefsPath(char*);
 const char* XPLMGetDirectorySeparator(void);
+int XPLMGetDirectoryContents(const char* inDirectoryPath, int inFirstReturn, char* outFileNames, int inFileNameBufSize, char** outIndices, int inIndexCount, int* outTotalFiles, int* outReturnedFiles);
 char* XPLMExtractFileAndPath(char*);
 typedef void* XPLMCommandRef;
 XPLMCommandRef XPLMFindCommand(const char*);

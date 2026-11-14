@@ -52,6 +52,7 @@ struct UiData {
     double nextUpdateS = -1;            // seconds to the next scheduled update, -1 unknown
     std::string status1, status2;       // the menu's status lines
     bool xpRealWeather = false;         // X-Plane's own real weather is on (it should be off)
+    bool xprRunning = false;            // XPRealistic is running (the Settings tab offers to do the turbulence alongside it)
     std::string turbConflict;           // another add-on that does turbulence (ActiveSky XP, xProTurb ...): WXPlane leaves it to it
     // turbulence at the aircraft
     bool turbOn = false;
@@ -101,6 +102,7 @@ struct UiActions {
     bool popOut = false;                // move the window to its own OS window (or back)
     // the settings (the plugin's former menu toggles): flip these
     bool toggleNightDim = false;
+    bool toggleTurbWithXpr = false;     // XPRealistic for its sounds only: WXPlane does the turbulence anyway
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
     // the one "Realistic turbulence & windshear" switch: set both to this (-1: untouched)
     int setTurbWs = -1;
