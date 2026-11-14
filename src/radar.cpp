@@ -1170,9 +1170,8 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     // Steady rain (MRMS PrecipFlag, under 40 dBZ) falls out of the station's broken or overcast deck (nimbostratus); it is not a cloud of
     // its own (2026-11-13 near KCDW: a rain layer from the lowest base, 652 m, took slot 0 in the rain records and pushed the station's
     // decks a slot up; X-Plane blends slot by slot, so the overcast vanished there and the cloud top dropped from 12,300 to 6,000 ft).
-    // The rain goes into that deck instead: its coverage at least what the radar calls for, its top raised to the radar's (or the
-    // model's) where that is higher, within the depth X-Plane allows and clear of the deck above. Base, slot and type stay the
-    // station's. Without such a deck the rain still builds its own cloud, below.
+    // The rain falls from that deck, which is left as the station reports it (see below). Without such a deck the rain still builds its
+    // own cloud, below.
     // Showers under 40 dBZ too (2026-11-13 KAUN: a showery cell built its own layer from the lowest base, 605 m, on top of the broken
     // deck there and pushed out the 46 % layer at 5,186 m); only thunderstorm cores (40 dBZ and up) grow a cloud of their own.
     bool hosted = false;
@@ -1186,20 +1185,11 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
                 (k.coverage > x.clouds[host].coverage - 0.05f && k.topM - k.baseM > x.clouds[host].topM - x.clouds[host].baseM)) host = i;
         }
         if (host >= 0) {
-            XpCloud& h = x.clouds[host];
-            float t = clampf((dbz - 20.0f) / 25.0f, 0.0f, 1.0f);
-            float cov = (0.5f + ((float)cfg.stormCoverageMax - 0.5f) * t) * (0.8f + 0.2f * c.frac) * c.coverScale * (1.0f - 0.25f * c.edge);
-            h.coverage = std::min(1.0f, std::max(h.coverage, cov));
-            topM = stormTopM(c, cfg, h.baseM);
-            if (c.edge > 0) topM = std::max(h.baseM + 1500.0f, h.baseM + (topM - h.baseM) * (1.0f - 0.45f * c.edge));
-            if (!x.modelProfM.empty()) { const float mt = modelCloudTopM(x.modelProfM, h.baseM); if (mt > topM) topM = mt; }
-            // deeper than X-Plane allows for the deck's type: the rain deck becomes cumulus (2.0), as steady-rain clouds were before
-            if (topM - h.baseM > xpMaxThicknessM(h.type) && h.type < 2.0f && topM > h.topM) h.type = 2.0f;
-            float ceil = std::min(kXpTopM, h.baseM + xpMaxThicknessM(h.type));
-            for (int i = 0; i < 3; ++i)
-                if (i != host && x.clouds[i].coverage > 0 && x.clouds[i].baseM > h.baseM) ceil = std::min(ceil, x.clouds[i].baseM - (float)cfg.layerGapM);
-            if (topM > h.topM) h.topM = std::max(h.topM, std::min(topM, ceil));
-            topM = h.topM;   // (a shower's turbulence, below, reaches up to the deck's top)
+            // The station's decks stay exactly as reported (2026-11-13 KSEA/KSMF): records whose deck the rain had made thicker and
+            // taller lost their overcast in X-Plane, while the same decks in records with rain from the report alone, or no rain, showed.
+            // X-Plane makes its own rain clouds from the precipitation; the radar here only sets the rain, the visibility and a shower's
+            // turbulence (up to the deck's top).
+            topM = x.clouds[host].topM;
             hosted = true;
         }
     }
