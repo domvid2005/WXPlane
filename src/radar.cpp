@@ -1167,38 +1167,11 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     else if (dbz >= 35) cap = 4000; else if (dbz >= 30) cap = 6000; else if (dbz >= 25) cap = 8000;
     x.visM = std::min(x.visM, cap);
 
-    // Steady rain (MRMS PrecipFlag, under 40 dBZ) falls out of the station's broken or overcast deck (nimbostratus); it is not a cloud of
-    // its own (2026-11-13 near KCDW: a rain layer from the lowest base, 652 m, took slot 0 in the rain records and pushed the station's
-    // decks a slot up; X-Plane blends slot by slot, so the overcast vanished there and the cloud top dropped from 12,300 to 6,000 ft).
-    // The rain falls from that deck, which is left as the station reports it (see below). Without such a deck the rain still builds its
-    // own cloud, below.
-    // Showers under 40 dBZ too (2026-11-13 KAUN: a showery cell built its own layer from the lowest base, 605 m, on top of the broken
-    // deck there and pushed out the 46 % layer at 5,186 m); only thunderstorm cores (40 dBZ and up) grow a cloud of their own.
-    bool hosted = false;
-    float topM = 0.0f;
-    if (dbz < 40.0f) {
-        int host = -1;
-        for (int i = 0; i < 3; ++i) {
-            const XpCloud& k = x.clouds[i];
-            if (k.coverage < 0.6f || k.type < 0.5f || k.type >= 2.25f || (i == 0 && x.fogLayerApplied)) continue;
-            if (host < 0 || k.coverage > x.clouds[host].coverage + 0.05f ||
-                (k.coverage > x.clouds[host].coverage - 0.05f && k.topM - k.baseM > x.clouds[host].topM - x.clouds[host].baseM)) host = i;
-        }
-        if (host >= 0) {
-            // The station's decks stay exactly as reported (2026-11-13 KSEA/KSMF): records whose deck the rain had made thicker and
-            // taller lost their overcast in X-Plane, while the same decks in records with rain from the report alone, or no rain, showed.
-            // X-Plane makes its own rain clouds from the precipitation; the radar here only sets the rain, the visibility and a shower's
-            // turbulence (up to the deck's top).
-            topM = x.clouds[host].topM;
-            hosted = true;
-        }
-    }
-    if (!hosted) {
     // Slot choice: the station's own layers must survive. Use the top slot if it is free, else the middle one; only when all
     // are taken does the storm replace the highest of them (slot 0 may hold ground fog and is never used).
     const int slot = stormSlot(x);
     float baseM = baseOverrideM > 0 ? baseOverrideM : stormBaseFor(x, c, fieldElevM);
-    topM = stormTopM(c, cfg, baseM);
+    float topM = stormTopM(c, cfg, baseM);
     // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a wall.
     if (c.edge > 0) topM = std::max(baseM + 1500.0f, baseM + (topM - baseM) * (1.0f - 0.45f * c.edge));
     // Steady rain (MRMS PrecipFlag): the radar sees the rain, not the small ice above it, so its echo top reads low for the cloud. Where
@@ -1228,7 +1201,6 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     cl.topM = topM;
     x.cloudCount = 0;
     for (const auto& k : x.clouds) if (k.coverage > 0) ++x.cloudCount;
-    }
 
     // Turbulence and gusts below the storm top.
     float turb = c.stratiform ? 0.0f : clampf((dbz - 30.0f) / 30.0f, 0.0f, 1.0f) * (float)cfg.maxTurbulence;   // steady rain: no storm turbulence

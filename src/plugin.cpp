@@ -2690,28 +2690,6 @@ void weatherWatch() {
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
              x.clouds[i].type, x.clouds[i].coverage, x.clouds[i].baseM, x.clouds[i].topM, el);
-    // Probe (2026-11-13 KSMF, an overcast X-Plane did not show): X-Plane's cloud layers here asked at three heights, so a log shows
-    // whether a layer we sent exists at any height or is dropped outright
-    {
-        std::string out;
-        for (double h : {el + 2.0, el + 2500.0, el + 5000.0}) {
-            XPLMWeatherInfo_t q;
-            std::memset(&q, 0, sizeof q);
-            q.structSize = sizeof q;
-            XPLMGetWeatherAtLocation(lat, lon, h, &q);
-            char b[200];
-            std::snprintf(b, sizeof b, "%s at %.0f m:", out.empty() ? "" : " |", h);
-            out += b;
-            for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i) {
-                const auto& c = q.cloud_layers[i];
-                if (c.coverage <= 0.0f) { out += " -"; continue; }
-                std::snprintf(b, sizeof b, " t%.1f %.0f%% %.0f-%.0f", c.cloud_type, c.coverage * 100.0f, c.alt_base, c.alt_top);
-                out += b;
-            }
-        }
-        logf("  X-Plane's clouds here asked at three heights:%s%s", out.c_str(),
-             "");
-    }
     // The global model's cloud cover by height here (what the cloud tops are taken from, model_tops), and the top it gives each deck
     if (!x.modelProfM.empty()) {
         std::string line;

@@ -634,40 +634,6 @@ int main() {
         float t2 = 0; for (const auto& k : s2.clouds) t2 = std::max(t2, k.topM);
         NEAR(t2, 2500, 1);
     }
-    // --- rain under 40 dBZ under a broken/overcast deck: no layer of its own and the decks exactly as the station reports them (KCDW, KSEA)
-    {
-        XpWx w;
-        w.clouds[0].type = 2.0f; w.clouds[0].coverage = 0.80f; w.clouds[0].baseM = 662; w.clouds[0].topM = 1030;
-        w.clouds[1].type = 1.5f; w.clouds[1].coverage = 0.98f; w.clouds[1].baseM = 1180; w.clouds[1].topM = 2478;
-        w.clouds[2].type = 1.5f; w.clouds[2].coverage = 0.32f; w.clouds[2].baseM = 4038; w.clouds[2].topM = 4438;
-        w.cloudCount = 3;
-        RadarCell c; c.dbz = 25; c.dbzFine = 25; c.rateMmH = 1; c.stratiform = true; c.topM = 6000; c.topKnown = true; c.lat = 40.8;
-        XpWx a = w; applyStorm(a, c, cfg, 50.0, 40.8);
-        CHECK(a.cloudCount == 3 && a.precip > 0);
-        CHECK(a.clouds[0].baseM == 662 && a.clouds[0].topM == 1030 && a.clouds[0].coverage == 0.80f);   // the broken deck as it was
-        CHECK(a.clouds[1].baseM == 1180 && a.clouds[1].topM == 2478 && a.clouds[1].coverage == 0.98f && a.clouds[1].type == 1.5f);   // unchanged
-        CHECK(a.clouds[2].baseM == 4038 && a.clouds[2].coverage == 0.32f);
-        // KSMF: heavy steady rain under an overcast of type 1.5 at 2,141 m with a 7.2 km radar top. Sent 5,084 m deep (the cumulus
-        // limit) at type 1.5, X-Plane dropped the layer; the deck now becomes cumulus, and 1.5 has a limit between stratus and cumulus
-        NEAR(xpMaxThicknessM(1.5f), 0.5f * (kXpMaxThickM[1] + kXpMaxThickM[2]), 1);
-        {
-            XpWx k; k.clouds[0].type = 1.5f; k.clouds[0].coverage = 0.97f; k.clouds[0].baseM = 2141; k.clouds[0].topM = 3541; k.cloudCount = 1;
-            RadarCell h = c; h.dbz = h.dbzFine = 35; h.topM = 7225;
-            applyStorm(k, h, cfg, 9.0, 38.7);
-            CHECK(k.clouds[0].type == 1.5f && k.clouds[0].baseM == 2141 && k.clouds[0].topM == 3541 && k.precip > 0);   // deck unchanged, rain set
-        }
-        {   // KAUN: a showery cell (not steady) under 40 dBZ goes into the deck too: no duplicate layer at the lowest base, nothing pushed out
-            XpWx sh = w;
-            RadarCell s2 = c; s2.stratiform = false; s2.dbz = s2.dbzFine = 32;
-            applyStorm(sh, s2, cfg, 50.0, 40.8);
-            CHECK(sh.cloudCount == 3 && sh.clouds[0].baseM == 662 && sh.clouds[1].baseM == 1180 && sh.clouds[2].baseM == 4038 && sh.clouds[2].coverage == 0.32f);
-            CHECK(sh.turbulence > 0.0f);   // a shower keeps its (light) turbulence
-        }
-        RadarCell cb = c; cb.stratiform = false; cb.dbz = cb.dbzFine = 50;                              // a thunderstorm still builds its own cloud
-        XpWx b = w; applyStorm(b, cb, cfg, 50.0, 40.8);
-        bool tall = false; for (const auto& k : b.clouds) tall = tall || (k.type >= 2.9f && k.topM > 5000);
-        CHECK(tall);
-    }
     // --- close decks keep their reported bases (KEWR BKN016 BKN020 OVC035: BKN020 went out at 2,490 ft); they share the space between
     {
         Station st; st.elevM = 3;
@@ -1331,11 +1297,8 @@ int main() {
         {   // weak echoes are cumulus, strong ones cumulonimbus; a weak cell next to a strong one does not get a deep tower
             RadarCell wk = cc; wk.dbz = 24; wk.topKnown = false; wk.topM = 0; wk.key = "R9:9";
             XpWx ws = ob; applyStorm(ws, wk, oc, 300, 38);
-            bool same = true;   // under the station's broken/overcast deck a weak echo changes no cloud (X-Plane makes its rain clouds)
-            for (int q = 0; q < 3; ++q) same = same && ws.clouds[q].baseM == ob.clouds[q].baseM && ws.clouds[q].topM == ob.clouds[q].topM && ws.clouds[q].coverage == ob.clouds[q].coverage && ws.clouds[q].type == ob.clouds[q].type;
-            bool deck = false; for (int q = 0; q < 3; ++q) deck = deck || (ob.clouds[q].coverage >= 0.6f && ob.clouds[q].type >= 0.5f && ob.clouds[q].type < 2.25f);
-            CHECK(same || !deck);
-            CHECK(ws.precip > 0);
+            int sl = ws.clouds[2].coverage > 0 && ws.clouds[2].topM > ws.clouds[1].topM ? 2 : 1;
+            CHECK(ws.clouds[sl].type == 2.0f && ws.clouds[sl].topM < 9000);
             wk.dbz = 42; XpWx ms = ob; applyStorm(ms, wk, oc, 300, 38);   // a thunderstorm core (40 dBZ and up)
             CHECK(ms.clouds[2].type == 3.0f || ms.clouds[1].type == 3.0f);
         }

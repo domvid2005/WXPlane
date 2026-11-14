@@ -1,6 +1,6 @@
-# WXPlane 5.1 – live real-world weather for X-Plane 12
+# WXPlane 5.1.1 – live real-world weather for X-Plane 12
 
-**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1 adds a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, night dimming, and updates through SkunkCrafts Updater.
+**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1.1 refines the clouds: natural coverage within each METAR category, cloud tops from the global model, and reported cloud bases kept exactly. Version 5.1 added a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, night dimming, and updates through SkunkCrafts Updater.
 
 Free. No accounts and no API keys. Windows, macOS and Linux.
 
@@ -13,6 +13,16 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Realistic turbulence:** clear-air and storm turbulence at every altitude, from NOAA GTGN in the US, an ECMWF-based estimate elsewhere, and live pilot reports. A Max turbulence slider scales it to taste.
 - **Realistic windshear:** gust fronts and microburst outflow around real convective storms.
 - **Smooth:** downloads run in the background and every update fades in over 1–2 minutes. No freezes, no sudden jumps.
+
+## New in 5.1.1
+
+- **Natural cloud coverage:** each METAR category varies within its real range – FEW 10–25%, SCT 35–50%, BKN 70–85%, OVC 97–100% – leaning heavier next to heavier sky and lighter next to lighter or clear sky.
+- **Realistic cloud tops:** an airport report gives only where a cloud starts. Where the global model has cloud at that height, the deck now reaches the model's top instead of a fixed thickness.
+- **Cloud bases where they are reported**, even for decks reported a few hundred feet apart. Decks are never joined; if there are more than X-Plane can show, the lightest one is left out, never a storm.
+- **Cleaner cloud blending:** clouds blend with their neighbours only where the layers touch, start at the same height and are the same kind, so there are no waves hanging under the cloud and no layers out of order. Next to an airport, its decks keep their reported heights and coverage, also in the rain around it.
+- **Mist** is shown by the visibility alone, leaving the cloud slot for a real deck. Fog keeps its ground layer, only near the airports that report it.
+- **Turbulence settings** are no longer locked by the X-Crafts ERJ's EICAS on a Mac either.
+- **Log.txt** records the frame rate around every weather change, and the rain and the model's cloud cover at the aircraft.
 
 ## New in 5.1
 
@@ -32,11 +42,11 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
   - The map's unit switches sit at the bottom right, and the tabs are all one size.
   - The logo is sharp at every size.
 - **Dim at night** (Settings, on by default): the window dims as the daylight goes and brightens again at dawn, so a night cockpit no longer goes dark while the window is open. A popped-out window is never dimmed.
-- **Natural cloud coverage:** each METAR category varies within its real range – FEW 10–25%, SCT 35–50%, BKN 70–85%, OVC 97–100% – leaning heavier next to heavier sky and lighter next to lighter or clear sky. Overcast never thins below 95% where WXPlane blends it with the weather around it.
+- **Fuller cloud decks:** OVC is sent at 97% coverage and never thins below 95% where WXPlane blends it with the weather around it; BKN is 75–80% (was 70%), varying from station to station.
 - **Map:** popups keep clear of the map's buttons and can't be dragged onto each other. With the map moved off the aircraft in North Lock, north is the north at the + (with °M the map turns with the local magnetic variation).
 - **Smoother start:** all tabs stay up while the first weather downloads, and a slow download counts the time it has taken ("Still downloading… 0:47") instead of freezing.
 - **Refresh and Pop out** are tabs at the right of the tab row, with the update status in a bubble above them.
-- **Aircraft plugins** (such as the X-Crafts ERJ's EICAS) no longer lock the turbulence settings.
+- **Aircraft plugins** (such as the X-Crafts ERJ's EICAS) no longer lock the turbulence settings. WXPlane shows a note instead.
 - Daylight saving time for Australia and New Zealand local times, plus many smaller fixes.
 
 ## New in 5.0
