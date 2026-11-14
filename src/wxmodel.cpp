@@ -17,7 +17,7 @@ void coverRange(int cover, float& lo, float& hi) {
         case CloudGroup::FEW: lo = 0.10f; hi = 0.25f; break;
         case CloudGroup::SCT: lo = 0.35f; hi = 0.50f; break;
         case CloudGroup::BKN: lo = 0.70f; hi = 0.85f; break;
-        default: lo = 0.97f; hi = 1.00f; break;   // OVC (and VV)
+        default: lo = 0.97f; hi = 0.97f; break;   // OVC (and VV): 97 %, as in 5.1 (2026-11-13: X-Plane dropped overcasts sent at 98 % in every record around)
     }
 }
 float coverageFor(int cover) { float lo, hi; coverRange(cover, lo, hi); return 0.5f * (lo + hi); }

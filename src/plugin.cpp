@@ -657,11 +657,13 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             B.max_altitude_msl_ft = std::max(B.max_altitude_msl_ft, L.alt_top / 0.3048f);
         }
     }
-    // the empty slots go out as before (0 m, no coverage), so X-Plane drops them
+    // the empty slots go out as before (0 m, no coverage), so X-Plane drops them; no cloud layer above 97 % (2026-11-13 KSEA/KSMF:
+    // overcasts sent at 98 % in every record around the airport did not show; ground fog keeps its full coverage)
     for (size_t i = 0; i < n; ++i)
         for (int k = 0; k < K; ++k) {
             XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
             if (c.coverage <= 0.0f) { c.cloud_type = 0; c.coverage = 0; c.alt_base = 0; c.alt_top = 0; }
+            else if (c.coverage > 0.97f && c.alt_base >= todo[i].rec.elev + 250.0f) c.coverage = 0.97f;
         }
 }
 

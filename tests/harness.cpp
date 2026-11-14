@@ -1202,6 +1202,12 @@ int main() {
             }
             std::printf("  layers below the layer in the slot under them: %d\n", inverted);
             CHECK(inverted == 0);
+            // no cloud layer above 97 % (ground fog aside): X-Plane dropped overcasts sent at 98 % in every record around (KSEA 2026-11-13)
+            float maxCov = 0;
+            for (size_t i = before; i < g_calls.size(); ++i)
+                for (int k = 0; k < 3; ++k) { const auto& c = g_calls[i].info.cloud_layers[k]; if (c.alt_top - c.alt_base > 260.0f || c.alt_base > 600.0f) maxCov = std::max(maxCov, c.coverage); }
+            std::printf("  highest cloud coverage sent (fog aside): %.3f\n", maxCov);
+            CHECK(maxCov <= 0.9701f);
             // the frame-time recorder logged the weather change (the frame rates, or why it could not compare) and X-Plane's clouds
             for (int i = 0; i < 400 && g_logAll.find("frame check: X-Plane's clouds") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
             const size_t fc = g_logAll.find("frame check: weather change");
