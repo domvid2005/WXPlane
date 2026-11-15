@@ -18,6 +18,7 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 
 - **Blend ring:** a ring round the status dot fills while X-Plane blends new weather in at your aircraft.
 - **Update notice:** when a newer WXPlane is out on SkunkCrafts Updater, a yellow notice says so at start-up, with a Dismiss button.
+- **Rain at airports:** under radar rain, an airport's rain cloud keeps its full height, so the rain falls and the overcast above stays (it was cut to a thin, fog-like sheet).
 - **Overcast** at a steady 97% coverage.
 - **Local time on the map** is right next to time-zone lines, and Arizona and Saskatchewan, which stay on standard time all year, are outlined in summer.
 - **Turbulence add-ons:** X-ProTurb is now recognised, and WXPlane's turbulence can run alongside XPRealistic (Settings).

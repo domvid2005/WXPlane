@@ -205,6 +205,7 @@ struct Rec {
     bool kept = false;        // an airport that left range, left in place with its surroundings' weather (see applyResult)
     std::string bumpOf;       // a rough-top record: the key of the deck record it sits on (it follows that record's final layers)
     std::string holdOf;       // a rain record over an airport: it keeps that airport's layers as sent (no cloud smoothing, like the airport)
+    bool rainCloud = false;   // an airport record that took the radar's rain cloud (stormCloudsAtStations): its layers overlap on purpose
 };
 std::map<std::string, Rec> g_recs; // what we have currently set in the sim, by station
 
@@ -542,9 +543,11 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
     // deck above (490-790 m under 754-1307 m under 1068 m), and X-Plane merged the overlapping layers: a reported deck went missing.
     // Each top now stays 150 m under the next layer's base in its record (40 m right at the ground, less between close decks), as
     // buildXp keeps them; the bases are never moved.
-    // Rain records keep their layers: a storm grows up through the station's decks on purpose (validateXp allows them to overlap).
+    // Rain records keep their layers: a storm grows up through the station's decks on purpose (validateXp allows them to overlap). So does
+    // an airport that took the radar's rain cloud (2026-11-14 KFDR: its rain cloud was cut to 978-1057 m under a deck 50 m above, X-Plane
+    // drew an 80 m sheet like fog at the field, dropped the overcast over it, and no rain fell on the aircraft).
     for (size_t i = 0; i < n; ++i) {
-        if (isBump(i) || (todo[i].key.compare(0, 6, "radar:") == 0 && todo[i].rec.info.precip_rate > 0.0f)) continue;
+        if (isBump(i) || todo[i].rec.rainCloud || (todo[i].key.compare(0, 6, "radar:") == 0 && todo[i].rec.info.precip_rate > 0.0f)) continue;
         XPLMWeatherInfoClouds_t* L = todo[i].rec.info.cloud_layers;
         for (int k = 0; k < K; ++k) {
             if (!isReal[i][k] || L[k].cloud_type >= 2.25f) continue;   // TCU and CB keep their tops
@@ -2144,6 +2147,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 x.precip = std::max(x.precip, std::min(1.0f, std::max(0.05f, nc->rateMmH / std::max(1.0f, (float)g_cfg.radarRainFullMmH))));
         } else if (stormHere)
             x.precip = std::max(x.precip, wx::stormPrecipAt(res.radar.cells, s.lat, s.lon, g_cfg.radarCellNm * g_cfg.stormRadiusFactor, (float)g_cfg.radarRainFullMmH));
+        bool tookRainCloud = false;
         if (stormHere && g_cfg.stormCloudsAtStations) {
             // ...and its cloud too. The station kept only its METAR layers, so inside a storm deck its circle showed as a round hole in the
             // tops (2026-11-04 screenshot, Ohio) and a hole in the map. The storm of the record it stands in is added to its own layers,
@@ -2158,6 +2162,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 wx::applyStorm(x, *sc, g_cfg, s.elevM, s.lat);
                 x.visM = vis; x.windDir = wd; x.windMs = wm;
                 ++stationStorms;
+                tookRainCloud = true;
             }
         }
         if (x.visM < 20000.0f) x.visM = std::max(50.0f, x.visM * g_visK); // g_visK stays 1 unless the read-back check learned otherwise
@@ -2182,6 +2187,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
         Rec r;
         r.airport = airportKnown(s);
         r.icao = s.icao; r.lat = s.lat; r.lon = s.lon; r.elev = s.elevM;
+        r.rainCloud = tookRainCloud;
         r.info = info;
         r.info.age = 0.0f;
         seen[s.icao] = true;

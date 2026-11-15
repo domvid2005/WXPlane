@@ -2,6 +2,7 @@
 
 ## 5.1.2
 - Overcast (OVC) at a steady 97% coverage
+- Rain at an airport: the airport's rain cloud is no longer cut to a thin sheet under the deck above it (it looked like fog, X-Plane dropped the overcast over it and no rain fell)
 - Blend ring round the status dot: fills while X-Plane blends new weather in at the aircraft (shown only when the weather there is changing)
 - Update notice: at start-up, a yellow notice in the window when a newer WXPlane is out on SkunkCrafts Updater, with a Dismiss button (update_check)
 - Map: the local time under the cursor is right next to time-zone lines; Arizona (outside the Navajo Nation) and Saskatchewan, which keep standard time all year, are outlined in summer
