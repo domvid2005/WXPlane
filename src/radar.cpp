@@ -1136,25 +1136,50 @@ float stormTopM(const RadarCell& c, const Config&, float baseM) {
     return topM;
 }
 
-static int stormSlot(const XpWx& x) {
-    int slot = 2;
-    if (x.clouds[2].coverage > 0 && x.clouds[1].coverage <= 0) slot = 1;   // else every slot is taken: slot 2 (the highest, layers are packed bottom-up) is replaced
-    return slot;
+// Where a rain cloud goes and where its base is (2026-11-14 KDFW: SCT070 BKN110 OVC250 filled the three slots and light rain over the
+// field took the highest one, so the overcast at 25,000 ft vanished in the rain).
+//   - a free slot: the top one, else the middle one (the station's own layers survive)
+//   - all three taken: the rain cloud joins the deck it runs into (the lowest one within 600 m above its top or overlapping it), as one
+//     cloud from the rain's base to that deck's top; with no deck in reach it takes the slot of the lightest deck (FEW < SCT < BKN < OVC,
+//     the higher one among equals), as decks are dropped elsewhere. Ground fog in slot 0 and cumulonimbus decks are never taken.
+//     Thunderstorm cores (40 dBZ and up, not steady rain) still replace the highest deck, as in 5.1.
+struct StormPlan { int slot = 2; bool full = false, merge = false; float baseM = 0; };
+static StormPlan stormPlan(const XpWx& x, const RadarCell& c, double fieldElevM) {
+    StormPlan pl;
+    float ownBase = (float)fieldElevM + (c.dbz >= 40 ? 900.0f : 600.0f);
+    for (int i = 0; i < 3; ++i)    // do not float above the station's own lowest layer
+        if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) ownBase = std::min(ownBase, x.clouds[i].baseM);
+    if (x.clouds[2].coverage <= 0 || x.clouds[1].coverage <= 0) {
+        pl.slot = x.clouds[2].coverage > 0 ? 1 : 2;
+        pl.baseM = ownBase;
+        if (x.clouds[pl.slot].coverage > 0 && x.clouds[pl.slot].baseM <= fieldElevM + 2500.0f)
+            pl.baseM = x.clouds[pl.slot].baseM;   // X-Plane blends slot by slot: a storm 700 m under the deck it replaced made a thin column (KFYV)
+        return pl;
+    }
+    pl.full = true;
+    if (c.dbz >= 40.0f && !c.stratiform) {   // a thunderstorm core keeps the 5.1 rule: it replaces the highest deck and grows from its base if low
+        pl.slot = 2;
+        pl.baseM = x.clouds[2].baseM <= fieldElevM + 2500.0f ? x.clouds[2].baseM : ownBase;
+        return pl;
+    }
+    pl.baseM = ownBase;
+    static const Config kCfg{};
+    const float ownTop = stormTopM(c, kCfg, ownBase);
+    auto usable = [&](int i) { return !(x.fogLayerApplied && i == 0) && x.clouds[i].type < 2.5f; };
+    int touch = -1, light = -1;
+    for (int i = 0; i < 3; ++i) {
+        if (!usable(i)) continue;
+        const XpCloud& k = x.clouds[i];
+        if (touch < 0 && k.baseM <= ownTop + 600.0f && k.topM >= ownBase - 150.0f) touch = i;
+        if (light < 0 || k.coverage <= x.clouds[light].coverage) light = i;
+    }
+    if (touch >= 0) { pl.slot = touch; pl.merge = true; }
+    else if (light >= 0) pl.slot = light;
+    else pl.slot = 2;
+    return pl;
 }
 
-float stormBaseFor(const XpWx& x, const RadarCell& c, double fieldElevM) {
-    const int slot = stormSlot(x);
-    float baseM = (float)fieldElevM + (c.dbz >= 40 ? 900.0f : 600.0f);
-    if (x.clouds[slot].coverage > 0 && x.clouds[slot].baseM <= fieldElevM + 2500.0f) {
-        // X-Plane blends records slot by slot, bases and tops included. A storm base 700 m below the deck it replaces turned the
-        // blend at the station into a thin 560-6000 m column (seen in a log at KFYV), so the storm grows from the replaced deck's base.
-        baseM = x.clouds[slot].baseM;
-    } else {
-        for (int i = 0; i < 3; ++i)    // otherwise do not float above the station's own lowest layer
-            if (x.clouds[i].coverage > 0 && x.clouds[i].baseM > fieldElevM + 150 && !(x.fogLayerApplied && i == 0)) baseM = std::min(baseM, x.clouds[i].baseM);
-    }
-    return baseM;
-}
+float stormBaseFor(const XpWx& x, const RadarCell& c, double fieldElevM) { return stormPlan(x, c, fieldElevM).baseM; }
 
 void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElevM, double /*lat*/, float baseOverrideM) {
     const float dbz = c.dbz;
@@ -1170,8 +1195,9 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
 
     // Slot choice: the station's own layers must survive. Use the top slot if it is free, else the middle one; only when all
     // are taken does the storm replace the highest of them (slot 0 may hold ground fog and is never used).
-    const int slot = stormSlot(x);
-    float baseM = baseOverrideM > 0 ? baseOverrideM : stormBaseFor(x, c, fieldElevM);
+    const StormPlan plan = stormPlan(x, c, fieldElevM);
+    const int slot = plan.slot;
+    float baseM = baseOverrideM > 0 ? baseOverrideM : plan.baseM;
     float topM = stormTopM(c, cfg, baseM);
     // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a wall.
     if (c.edge > 0) topM = std::max(baseM + 1500.0f, baseM + (topM - baseM) * (1.0f - 0.45f * c.edge));
@@ -1183,7 +1209,13 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
         if (mt > topM) topM = std::min({mt, baseM + xpMaxThicknessM(2.0f), kXpTopM});
     }
     XpCloud& cl = x.clouds[slot];
-    const float replacedCov = cl.coverage;   // the deck this storm grows out of (0 if the slot was free)
+    const float replacedCov = cl.coverage;
+    if (plan.merge) {   // one cloud: the rain's base to the deck's top, kept clear of the next deck up
+        baseM = std::min(baseM, cl.baseM);
+        float roof = 1e9f;
+        for (int i = slot + 1; i < 3; ++i) if (x.clouds[i].coverage > 0) roof = std::min(roof, x.clouds[i].baseM - 150.0f);
+        topM = std::max(cl.topM, std::min(topM, roof));
+    }   // the deck this storm grows out of (0 if the slot was free)
     // Cumulonimbus from 30 dBZ up (and for any measured echo top above 6 km); a weak echo is cumulus (2.0), not a deep anvil. Ramping
     // further down to 1.0 made smooth stratus sheets with curtain edges, so the floor stays at cumulus.
     // 3 (cumulonimbus) only for real thunderstorm cores: X-Plane gives that type strong up- and downdrafts. Ordinary rain clouds are

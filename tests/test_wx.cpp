@@ -1000,6 +1000,30 @@ int main() {
             CHECK(std::fabs(ov.clouds[2].baseM - 1300.0f) < 0.5f && ov.clouds[2].topM > 1300.0f + 1500.0f);
             CHECK(std::fabs(stormBaseFor(base, cell, 400) - st.clouds[2].baseM) < 0.5f);
         }
+        {   // all three slots taken (KDFW SCT070 BKN110 OVC250, field 183 m) and light rain over the field: the rain cloud joins the
+            // scattered deck it runs into, the broken and the overcast at 25,000 ft stay
+            XpWx d; d.cloudCount = 3;
+            d.clouds[0].coverage = 0.46f; d.clouds[0].baseM = 2302; d.clouds[0].topM = 3371; d.clouds[0].type = 2;
+            d.clouds[1].coverage = 0.78f; d.clouds[1].baseM = 3521; d.clouds[1].topM = 6096; d.clouds[1].type = 2;
+            d.clouds[2].coverage = 0.97f; d.clouds[2].baseM = 7788; d.clouds[2].topM = 8337; d.clouds[2].type = 0;
+            RadarCell r = cell; r.key = "R7:7"; r.dbz = 25; r.frac = 1; r.edge = 0; r.topM = 0; r.topKnown = false; r.stratiform = true;
+            XpWx dr = d; applyStorm(dr, r, sc, 183, 33);
+            CHECK(dr.clouds[2].coverage >= 0.96f && dr.clouds[2].baseM == 7788.0f);       // the overcast stays
+            CHECK(dr.clouds[1].coverage >= 0.77f && dr.clouds[1].baseM == 3521.0f);       // so does the broken deck
+            CHECK(dr.clouds[0].baseM < 1000.0f && dr.clouds[0].topM >= 3371.0f && dr.precip > 0);   // rain's own base, up to the scattered deck's top
+            CHECK(std::fabs(stormBaseFor(d, r, 183) - dr.clouds[0].baseM) < 0.5f);
+            // nothing in reach of the rain cloud: the lightest deck makes room, never the overcast
+            CHECK(dr.clouds[0].topM <= 3521.0f - 150.0f + 0.5f);                            // and stays clear of the broken deck above
+            RadarCell rk = r; rk.topKnown = true; rk.topM = 2152;                           // the log's echo top
+            XpWx dk = d; applyStorm(dk, rk, sc, 183, 33);
+            CHECK(dk.clouds[0].baseM < 1000.0f && dk.clouds[0].topM >= 3371.0f && dk.clouds[2].baseM == 7788.0f);
+            XpWx h = d; h.clouds[0].baseM = 5800; h.clouds[0].topM = 6200; h.clouds[0].coverage = 0.97f; h.clouds[1].baseM = 6500; h.clouds[1].topM = 7000; h.clouds[1].coverage = 0.30f;
+            XpWx hr = h; applyStorm(hr, r, sc, 183, 33);
+            CHECK(hr.clouds[0].baseM == 5800.0f && hr.clouds[2].baseM == 7788.0f && hr.clouds[1].baseM < 1000.0f);
+            RadarCell tc = r; tc.dbz = 50; tc.stratiform = false;                           // a thunderstorm core still replaces the highest deck
+            XpWx tr = d; applyStorm(tr, tc, sc, 183, 33);
+            CHECK(tr.clouds[2].type == 3.0f && tr.clouds[0].baseM == 2302.0f);
+        }
         {   // a measured echo top is used as it is, and the map label shows the same number
             RadarCell m = cell; m.key = "R5:5"; m.dbz = 48; m.topM = 11277; m.topKnown = true; m.frac = 0.5f;
             XpWx a = base; applyStorm(a, m, sc, 400, 38);
