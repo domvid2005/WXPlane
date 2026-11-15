@@ -1702,7 +1702,9 @@ void blendTarget(double lat, double lon, float* s) {
             if (d > r) continue;
             const double wi = std::max(0.05, 1.0 - d / r);
             float si[8];
-            blendSig(kv.second.info, si);
+            XPLMWeatherInfo_t ri = kv.second.info;   // the record as kept holds the QNH in pressure_alt; it goes out as pressure_sl (sendRec)
+            if (ri.pressure_alt > 0 && !(ri.pressure_sl > 0)) { ri.pressure_sl = ri.pressure_alt; ri.pressure_alt = 0; }
+            blendSig(ri, si);
             for (int k = 0; k < 8; ++k) acc[k] += wi * si[k];
             w += wi;
         }
