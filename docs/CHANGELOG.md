@@ -2,7 +2,6 @@
 
 ## 5.1.2
 - Overcast (OVC) at a steady 97% coverage
-- Rain under a full sky keeps the overcast: when all three cloud slots are taken, a rain cloud joins the deck it runs into, or takes the lightest deck's slot; thunderstorms still replace the highest deck
 - Blend ring round the status dot: fills while X-Plane blends new weather in at the aircraft (shown only when the weather there is changing)
 - Update notice: at start-up, a yellow notice in the window when a newer WXPlane is out on SkunkCrafts Updater, with a Dismiss button (update_check)
 - Map: the local time under the cursor is right next to time-zone lines; Arizona (outside the Navajo Nation) and Saskatchewan, which keep standard time all year, are outlined in summer
