@@ -1674,7 +1674,24 @@ void blendSig(const XPLMWeatherInfo_t& q, float* s) {
     }
 }
 void blendTarget(double lat, double lon, float* s) {
-    const std::time_t now = std::time(nullptr);
+    // What WXPlane sent over the aircraft: the records that cover it, the nearer ones counting more (2026-11-14 KFDR: compared with the
+    // airport reports alone, the rain cloud and the rain's lower visibility counted as missing, and the ring stopped at 37 %)
+    {
+        double w = 0, acc[8] = {};
+        for (const auto& kv : g_recs) {
+            if (!kv.second.bumpOf.empty()) continue;   // rough-top extras sit on their deck record
+            const double r = std::max(0.5, (double)kv.second.info.radius_nm);
+            const double d = wx::distNm(lat, lon, kv.second.lat, kv.second.lon);
+            if (d > r) continue;
+            const double wi = std::max(0.05, 1.0 - d / r);
+            float si[8];
+            blendSig(kv.second.info, si);
+            for (int k = 0; k < 8; ++k) acc[k] += wi * si[k];
+            w += wi;
+        }
+        if (w > 0) { for (int k = 0; k < 8; ++k) s[k] = (float)(acc[k] / w); return; }
+    }
+    const std::time_t now = std::time(nullptr);   // nothing sent covers the aircraft: the airport reports' picture there
     const wx::Station b = wx::blendAt(g_lastRes.stations, lat, lon);
     const wx::XpWx x = wx::buildXp(b, g_cfg, now, &g_lastRes.aloft, fogNear(b.lat, b.lon, 5.0, now));
     XPLMWeatherInfo_t q;
