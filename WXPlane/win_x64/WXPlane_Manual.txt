@@ -1,5 +1,5 @@
 ================================================================================
-  WXPlane 5.1.1 for X-Plane 12  -  User Manual
+  WXPlane 5.1.2 for X-Plane 12  -  User Manual
 ================================================================================
 
 WXPlane replaces X-Plane 12's weather with live, real-world data: airport
@@ -73,6 +73,14 @@ flown 40 nm, so the weather keeps up with you along your route.
     the weather is built from scratch: at start-up, when WXPlane is
     switched back on, and after a jump to a new place (a new flight or a
     teleport). Until it ends, the sky may not match the reports yet.
+  * Blend ring: a thin ring round the green status dot fills while X-Plane
+    blends new weather in at your aircraft, and disappears when it is in.
+    It shows only when the weather where you are actually changes; it can
+    start a minute or so after the change, because X-Plane reports its
+    weather to plugins with a delay.
+  * Update notice: when a newer WXPlane is out on SkunkCrafts Updater, a
+    yellow notice says so once, at start-up. Dismiss closes it; update
+    through SkunkCrafts Updater. (update_check in WXPlane.cfg)
 
 
 --------------------------------------------------------------------------------
@@ -216,13 +224,14 @@ TURBULENCE
     last minute). Pilot reports are on the Overview and the Map tab.
   * Windshear odds (0-1.0): how often gust fronts and microbursts form.
     1.0 is the realistic rate; 0 means none at all (like Max turbulence 0).
-  * Another turbulence add-on running (ActiveSky XP, xProTurb, XPRealistic
+  * Another turbulence add-on running (ActiveSky XP, X-ProTurb, XPRealistic
     ...): WXPlane leaves X-Plane's turbulence to it. A red TURBULENCE
     CONFLICT caution covers this tab and its controls are locked until that
     add-on is disabled. The switch in Settings still works (to turn
-    WXPlane's turbulence and windshear off altogether). An aircraft's own
-    plugins never count as a conflict; the X-Crafts ERJ's EICAS plugin, which
-    may add turbulence effects of its own, gets a note on this tab.
+    WXPlane's turbulence and windshear off altogether). X-ProTurb runs as a
+    FlyWithLua script: it counts while its script is in FlyWithLua's Scripts
+    folder. XPRealistic counts unless "Turbulence with XPRealistic" is on in
+    Settings. An aircraft's own plugins never count as a conflict.
 
 SERVICES
   Every data source WXPlane uses, with its state:
@@ -247,6 +256,12 @@ SETTINGS
     elsewhere, and pilot reports), instead of X-Plane's own.
   * Realistic windshear - gust fronts and microburst outflow near real
     storms.
+  * Turbulence with XPRealistic (shown while XPRealistic runs) - on:
+    WXPlane does the turbulence even with XPRealistic running, for when
+    XPRealistic is used for its sounds only and its motion effects (camera
+    shake) are switched off in XPRealistic. With both doing motion, the
+    turbulence is felt twice. Off (the default): WXPlane leaves the
+    turbulence to XPRealistic. (turbulence_with_xprealistic in WXPlane.cfg)
   (Max turbulence, which scales all of WXPlane's turbulence from 0 to 1.0,
   is on the Turbulence tab.)
   * Dim at night - the window (in the sim, not popped out) dims as the
@@ -312,6 +327,8 @@ SETTINGS
                                        steady rain is never topped lower
                                        than the model's cloud (storms keep
                                        the radar's echo tops)
+      update_check              (1)    at start-up, check whether a newer
+                                       WXPlane is out (0 = never check)
 
   The README in the source repository lists every key. If something goes
   wrong, delete WXPlane.cfg and WXPlane writes a fresh one with the
