@@ -1,7 +1,17 @@
 # WXPlane changelog
 
+## 5.1.2
+- Overcast (OVC) at a steady 97% coverage
+- Rain under a full sky keeps the overcast: when all three cloud slots are taken, a rain cloud joins the deck it runs into, or takes the lightest deck's slot; thunderstorms still replace the highest deck
+- Blend ring round the status dot: fills while X-Plane blends new weather in at the aircraft (shown only when the weather there is changing)
+- Update notice: at start-up, a yellow notice in the window when a newer WXPlane is out on SkunkCrafts Updater, with a Dismiss button (update_check)
+- Map: the local time under the cursor is right next to time-zone lines; Arizona (outside the Navajo Nation) and Saskatchewan, which keep standard time all year, are outlined in summer
+- Turbulence add-on check: X-ProTurb (a FlyWithLua script) is now recognised; with XPRealistic, WXPlane's turbulence can run alongside it (Turbulence with XPRealistic, in Settings)
+- Radar: the US radar download is retried after a short failure, and the rain-type check no longer flattens storms in an area just flown into
+- Log.txt: when the blend settled at the aircraft, and whether X-Plane's read-back took the first load (it lags what X-Plane draws by 2-3 minutes)
+
 ## 5.1.1
-- Cloud coverage varies within each METAR category – FEW 10–25%, SCT 35–50%, BKN 70–85%, OVC 97–100% – leaning to the heavy end next to heavier sky and to the light end next to lighter or clear sky
+- Cloud coverage varies within each METAR category – FEW 10–25%, SCT 35–50%, BKN 70–85%, OVC 97–100% (97% from 5.1.2) – leaning to the heavy end next to heavier sky and to the light end next to lighter or clear sky
 - Cloud tops from the global model's humidity where it has cloud at a reported base (model_tops, on by default)
 - Reported cloud bases kept exactly, also for decks reported close together; decks are never joined (with more decks than slots the lightest goes, never a storm)
 - Clouds blend between neighbours only where the layers touch, start at the same height and are the same kind; no waves under the cloud, no layers out of order

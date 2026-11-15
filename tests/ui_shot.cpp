@@ -460,7 +460,7 @@ int main(int argc, char** argv) {
     // a newer WXPlane on the SkunkCrafts Updater: the yellow notice over the window, with its Dismiss button; then the blend ring
     // round the status dot at 64 %
     for (int pass = 0; pass < 2; ++pass) {
-        d.updateVersion = pass == 0 ? "5.1.2" : ""; d.blendProgress = pass == 1 ? 0.64f : -1.0f;
+        d.updateVersion = pass == 0 ? "5.1.3" : ""; d.blendProgress = pass == 1 ? 0.64f : -1.0f;
         for (int fr = 0; fr < 3; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); d.forceTab = fr == 0 ? 0 : -1; UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }
         Canvas cv((int)(W * scale), (int)(H * scale));
         raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);

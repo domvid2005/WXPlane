@@ -2560,7 +2560,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                             ms, d(applyT0, tPh1), g_navLookupMs, d(tPh1, tPh2), d(tPh2, tPh3), d(tPh3, tPh4), d(tPh4, Clock::now()));
     }
     if (g_cfg.topBumps) logf("overcast tops: %d rough-top records scattered over thick overcast decks", bumpCount);
-    logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm(s) replaced a third station layer; %d station(s) inside a storm took its cloud",
+    logf("submitted weather: %d stations, %d storm records, %d rough-top records; validation adjusted %d item(s)%s%s; %d storm/rain record(s) found all three cloud slots taken (a thunderstorm replaces the highest deck; rain joins the deck it runs into or takes the lightest deck's slot); %d station(s) inside a storm took its cloud",
          (int)res.stations.size(), stormCount, bumpCount, valFixes, valNote.empty() ? "" : " - first: ", valNote.c_str(), stormClash, stationStorms);
     logf("applied %d stations (%d ATIS, %d fog, %d with cirrus from the global model, %d with winds/temps aloft from %zu global-model points) around %.2f,%.2f%s",
          res.metarCount, res.atisCount, fogCount, cirrusCount, aloftCount, res.aloft.size(), res.centerLat, res.centerLon,

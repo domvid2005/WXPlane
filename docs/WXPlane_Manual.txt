@@ -1,5 +1,5 @@
 ================================================================================
-  WXPlane 5.1.1 for X-Plane 12  -  User Manual
+  WXPlane 5.1.2 for X-Plane 12  -  User Manual
 ================================================================================
 
 WXPlane replaces X-Plane 12's weather with live, real-world data: airport
@@ -73,6 +73,14 @@ flown 40 nm, so the weather keeps up with you along your route.
     the weather is built from scratch: at start-up, when WXPlane is
     switched back on, and after a jump to a new place (a new flight or a
     teleport). Until it ends, the sky may not match the reports yet.
+  * Blend ring: a thin ring round the green status dot fills while X-Plane
+    blends new weather in at your aircraft, and disappears when it is in.
+    It shows only when the weather where you are actually changes; it can
+    start a minute or so after the change, because X-Plane reports its
+    weather to plugins with a delay.
+  * Update notice: when a newer WXPlane is out on SkunkCrafts Updater, a
+    yellow notice says so once, at start-up. Dismiss closes it; update
+    through SkunkCrafts Updater. (update_check in WXPlane.cfg)
 
 
 --------------------------------------------------------------------------------
@@ -319,6 +327,8 @@ SETTINGS
                                        steady rain is never topped lower
                                        than the model's cloud (storms keep
                                        the radar's echo tops)
+      update_check              (1)    at start-up, check whether a newer
+                                       WXPlane is out (0 = never check)
 
   The README in the source repository lists every key. If something goes
   wrong, delete WXPlane.cfg and WXPlane writes a fresh one with the

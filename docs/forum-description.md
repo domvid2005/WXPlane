@@ -1,6 +1,6 @@
-# WXPlane 5.1.1 – live real-world weather for X-Plane 12
+# WXPlane 5.1.2 – live real-world weather for X-Plane 12
 
-**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1.1 refines the clouds: natural coverage within each METAR category, cloud tops from the global model, and reported cloud bases kept exactly. Version 5.1 added a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, night dimming, and updates through SkunkCrafts Updater.
+**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1.2 adds a blend ring, update notices and better rain under a full sky. Version 5.1.1 refined the clouds: natural coverage within each METAR category, cloud tops from the global model, and reported cloud bases kept exactly. Version 5.1 added a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, night dimming, and updates through SkunkCrafts Updater.
 
 Free. No accounts and no API keys. Windows, macOS and Linux.
 
@@ -13,6 +13,16 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Realistic turbulence:** clear-air and storm turbulence at every altitude, from NOAA GTGN in the US, an ECMWF-based estimate elsewhere, and live pilot reports. A Max turbulence slider scales it to taste.
 - **Realistic windshear:** gust fronts and microburst outflow around real convective storms.
 - **Smooth:** downloads run in the background and every update fades in over 1–2 minutes. No freezes, no sudden jumps.
+
+## New in 5.1.2
+
+- **Blend ring:** a ring round the status dot fills while X-Plane blends new weather in at your aircraft.
+- **Update notice:** when a newer WXPlane is out on SkunkCrafts Updater, a yellow notice says so at start-up, with a Dismiss button.
+- **Rain under a full sky:** when the sky already has three cloud decks, a rain cloud joins the deck it runs into or replaces the lightest one, so the overcast above stays. Thunderstorms are unchanged.
+- **Overcast** at a steady 97% coverage.
+- **Local time on the map** is right next to time-zone lines, and Arizona and Saskatchewan, which stay on standard time all year, are outlined in summer.
+- **Turbulence add-ons:** X-ProTurb is now recognised, and WXPlane's turbulence can run alongside XPRealistic (Settings).
+- **Radar:** the US radar download retries after a short failure.
 
 ## New in 5.1.1
 
