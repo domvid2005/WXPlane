@@ -1668,13 +1668,27 @@ struct BlendWatch {
 } g_blend;
 // the values compared (scaled so a step of 1 is a clearly visible change): visibility (log, km), sea-level pressure (per 2 hPa),
 // three cloud layers' coverage (per 25 %) and base (per 300 m, only where there is a layer)
+// What the ring compares, slot by slot no longer (2026-11-14 KFDR: under rain X-Plane folds the decks inside the rain cloud into it, one
+// 97% layer 978-6382 m for the three sent, and slot-by-slot the ring stayed at 1% although the sky matched): visibility, sea-level
+// pressure, rain, the most cloud anywhere, and the lowest base and highest top of the cloud that counts (30% and more).
 void blendSig(const XPLMWeatherInfo_t& q, float* s) {
     s[0] = (float)std::log10(std::max(100.0, (double)q.visibility) / 1000.0) * 4.0f;   // metres
     s[1] = q.pressure_sl / 200.0f;   // Pa -> per 2 hPa
+    s[2] = std::max(0.0f, q.precip_rate) * 4.0f;
+    float cov = 0, base = 0, top = 0;
+    bool any = false;
     for (int k = 0; k < 3; ++k) {
-        s[2 + k] = q.cloud_layers[k].coverage / 0.25f;
-        s[5 + k] = q.cloud_layers[k].coverage > 0.02f ? q.cloud_layers[k].alt_base / 300.0f : 0.0f;
+        const auto& L = q.cloud_layers[k];
+        cov = std::max(cov, L.coverage);
+        if (L.coverage < 0.3f) continue;
+        base = any ? std::min(base, L.alt_base) : L.alt_base;
+        top = any ? std::max(top, L.alt_top) : L.alt_top;
+        any = true;
     }
+    s[3] = cov / 0.25f;
+    s[4] = any ? base / 300.0f : 0.0f;
+    s[5] = any ? top / 600.0f : 0.0f;
+    s[6] = s[7] = 0.0f;
 }
 void blendTarget(double lat, double lon, float* s) {
     // What WXPlane sent over the aircraft: the records that cover it, the nearer ones counting more (2026-11-14 KFDR: compared with the
@@ -1701,7 +1715,8 @@ void blendTarget(double lat, double lon, float* s) {
     std::memset(&q, 0, sizeof q);
     q.visibility = (float)x.visM;
     q.pressure_sl = x.qnhPa > 0 ? x.qnhPa : (float)(b.report.altimHpa > 0 ? b.report.altimHpa * 100.0 : 101325.0);
-    for (int k = 0; k < 3; ++k) { q.cloud_layers[k].coverage = x.clouds[k].coverage; q.cloud_layers[k].alt_base = x.clouds[k].baseM; }
+    q.precip_rate = x.precip;
+    for (int k = 0; k < 3; ++k) { q.cloud_layers[k].coverage = x.clouds[k].coverage; q.cloud_layers[k].alt_base = x.clouds[k].baseM; q.cloud_layers[k].alt_top = x.clouds[k].topM; }
     blendSig(q, s);
 }
 bool blendRead(float* s) {   // X-Plane's weather at the aircraft, as compared
