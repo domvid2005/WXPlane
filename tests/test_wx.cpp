@@ -10,6 +10,7 @@
 #include "../src/radar.h"
 #include "../src/sources.h"
 #include "../src/suntime.h"
+#include "../src/worldmetar.h"
 #include "../src/windshear.h"
 #include "../src/viewer.h"
 #include "../src/windsaloft.h"
@@ -35,6 +36,26 @@ static void utc(std::time_t t, std::tm* out) {
 }
 
 int main() {
+    {   // the worldwide METAR cache file (aviationweather.gov metars.cache.csv): preamble, header, quoted fields, old rows dropped
+        const std::string csv =
+            "No errors\nNo warnings\n27 ms\ndata source=metars\n3 results\n"
+            "raw_text,station_id,observation_time,latitude,longitude,temp_c,dewpoint_c,flight_category,elevation_m\n"
+            "LFPG 171730Z 22012KT 9999 FEW030 BKN045 09/05 Q1012 NOSIG,LFPG,2026-11-17T17:30:00Z,49.0128,2.5500,9,5,VFR,119\n"
+            "\"RJTT 171800Z 36005KT 2000 BR OVC004 12/11 Q1020\",RJTT,2026-11-17T18:00:00Z,35.5523,139.7800,12,11,IFR,6\n"
+            "KXXX 171000Z 00000KT 10SM CLR 10/01 A3000,KXXX,2026-11-17T10:00:00Z,40.0,-90.0,10,1,VFR,200\n"
+            "BAD 171800Z,BAD,2026-11-17T18:00:00Z,,,,,,\n";
+        std::vector<wx::Station> w;
+        const std::time_t now = 1794939600;   // 2026-11-17 18:20Z
+        CHECK(wx::parseWorldMetarCsv(csv, now, w));
+        CHECK(w.size() == 2);   // KXXX is more than 3 h old, BAD has no position
+        if (w.size() == 2) {
+            CHECK(w[0].icao == "LFPG" && std::fabs(w[0].lat - 49.0128) < 1e-6 && std::fabs(w[0].lon - 2.55) < 1e-6 && w[0].elevM == 119);
+            CHECK(w[1].icao == "RJTT" && w[1].report.visM > 1900 && w[1].report.visM < 2100);
+            CHECK(w[0].obsTime == 1794936600);
+        }
+        std::vector<wx::Station> none;
+        CHECK(!wx::parseWorldMetarCsv("<html>error</html>", now, none) && none.empty());
+    }
     Report r;
 
     // --- plain US METAR

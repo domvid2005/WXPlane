@@ -9,6 +9,7 @@ struct Config {
     bool enabled = true;          // master switch (also in the plugin menu)
     bool useAtis = true;          // merge D-ATIS data for airports near the aircraft
     bool frameCheck = true;       // the frame-time recorder: logs the frame rate around every weather change, and when X-Plane's clouds settle
+    bool worldMetars = true;      // the map shows every current METAR in the world (aviationweather.gov, every 10 min): display only, never sent to X-Plane
     bool updateCheck = true;      // at start-up, ask the SkunkCrafts release which version is out; a newer one gets a yellow notice in the window
     bool nightDim = true;         // the in-sim window dims with the daylight (X-Plane's auto exposure counts it at night)
     bool useAloft = true;         // NOAA winds/temps aloft instead of X-Plane's own above the surface

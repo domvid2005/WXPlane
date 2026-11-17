@@ -71,6 +71,7 @@ struct UiData {
     double loadingSlowS = -1;           // the download has run past its usual time: seconds it has taken so far (-1: not)
     std::string loadingWhat;            // e.g. "Loading weather", "New location"
     std::shared_ptr<const hz::Snapshot> reports;
+    std::shared_ptr<const std::vector<Station>> worldStations;   // every current METAR in the world (map only, never sent to X-Plane)
     // windshear
     bool wsOn = false;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
@@ -82,7 +83,7 @@ struct UiData {
     int forcePirep = -1;                // open this pilot report's info window on the Map tab
     int forceAdv = -1;                  // 1: AIRMET and SIGMET layers on, 0: off
     int forceAloftLayers = -1;          // bit 1 wind barbs, bit 2 clouds, bit 4 time zones (map layers)
-    int forceRange = -1;                // the map's range step (0 = 1 nm .. 8 = 320 nm)
+    int forceRange = -1;                // the map's range step (0 = 1 nm .. 11 = 2500 nm)
     int forceLocalTime = -1;            // the map's time bubble: 1 local time, 0 Zulu
     double forcePanEastNm = 0, forcePanNorthNm = 0;   // with forceRange: move the map off the aircraft by this much
     double forceMapAltFt = -1;          // the map's altitude slider

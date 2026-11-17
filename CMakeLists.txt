@@ -87,7 +87,7 @@ endif()
 
 set(WX_CORE_SOURCES
   src/json_mini.cpp src/metar.cpp src/sources.cpp src/wxmodel.cpp src/windsaloft.cpp src/config.cpp src/viewer.cpp
-  src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp src/windshear.cpp src/gribx.cpp src/turbulence.cpp src/hazards.cpp src/opera.cpp)
+  src/inflate.cpp src/png.cpp src/grib2.cpp src/radar.cpp src/windshear.cpp src/gribx.cpp src/turbulence.cpp src/hazards.cpp src/opera.cpp src/worldmetar.cpp)
 
 # --- The weather window (4.0): Dear ImGui (third_party/imgui, MIT) and the fonts it uses, embedded at build time ------------------
 add_library(wx_imgui STATIC
@@ -108,7 +108,7 @@ add_library(wx_ui STATIC src/wxui.cpp ${CMAKE_BINARY_DIR}/wx_fonts.c)
 target_link_libraries(wx_ui PUBLIC wx_imgui wx_codecs)
 
 add_library(WXPlane MODULE
-  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/wxgl.cpp src/xpimgui.cpp src/plugin.cpp)
+  ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/worldfetch.cpp src/wxgl.cpp src/xpimgui.cpp src/plugin.cpp)
 
 target_include_directories(WXPlane PRIVATE "${XPLANE_SDK}/CHeaders/XPLM")
 target_compile_definitions(WXPlane PRIVATE
@@ -178,7 +178,7 @@ if(WX_BUILD_TESTS)
   add_test(NAME weather_window COMMAND ui_shot ${CMAKE_BINARY_DIR})
   # the plugin itself in a simulated X-Plane (stub SDK, a libcurl mock with recorded weather data): every scenario is its own test
   if(UNIX AND NOT APPLE AND ZLIB_FOUND)
-    add_executable(harness tests/harness.cpp ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/wxgl.cpp src/plugin.cpp)
+    add_executable(harness tests/harness.cpp ${WX_CORE_SOURCES} src/http.cpp src/fetcher.cpp src/turbfetch.cpp src/worldfetch.cpp src/wxgl.cpp src/plugin.cpp)
     target_include_directories(harness BEFORE PRIVATE tests/stubs src)
     target_compile_definitions(harness PRIVATE WX_HARNESS=1 WX_HARNESS_DATA="${CMAKE_SOURCE_DIR}/tests/data/harness")
     target_link_libraries(harness PRIVATE wx_codecs ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS})

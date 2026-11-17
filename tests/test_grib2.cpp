@@ -12,9 +12,10 @@ int main(int argc, char** argv) {
     std::string dir = argv[1];
     for (int a = 2; a < argc; ++a) {
         std::string nm = argv[a], g = slurp(dir + "/" + nm + ".grib2");
-        wx::GribField f;
+        wx::GribField f, whole;
         wx::GribWindow w;
         w.latMin = 33.0; w.latMax = 36.0; w.lonMin = -100.0; w.lonMax = -95.0;
+        w.coarse = &whole; w.coarseStep = 5;   // the whole grid, coarse (the map's radar beyond the loaded area)
         bool ok = wx::decodeGrib2((const uint8_t*)g.data(), g.size(), w, f);
         if (!ok) std::printf("%s: error: %s\n", nm.c_str(), f.error.c_str());
         CHECK(ok);
@@ -36,6 +37,19 @@ int main(int argc, char** argv) {
         CHECK(bad == 0);
         CHECK(nan == 0 || nm.find("bitmap") != std::string::npos);
         CHECK(std::isnan(f.at(50.0, -97.0)) && std::isnan(f.at(34.0, -80.0)));      // outside the window
+        {   // each coarse value is the highest of its 5 x 5 block: never below the fine value inside it, at most a block's rise above
+            CHECK(whole.valid() && std::fabs(whole.dLat - 0.05) < 1e-9 && std::fabs(whole.dLon - 0.05) < 1e-9);
+            int cbad = 0, cn = 0;
+            for (double lat = 33.2; lat < 35.8; lat += 0.173)
+                for (double lon = -99.8; lon < -95.6; lon += 0.211) {
+                    const float fine = f.at(lat, lon), co = whole.at(lat, lon);
+                    if (std::isnan(fine) || std::isnan(co)) continue;
+                    ++cn;
+                    if (co < fine - 0.3f || co > fine + 0.45f) { ++cbad; if (cbad < 4) std::printf("  coarse at %.3f,%.3f: %f vs fine %f\n", lat, lon, co, fine); }
+                }
+            std::printf("%s: coarse grid %dx%d, %d points, %d bad\n", nm.c_str(), whole.ni, whole.nj, cn, cbad);
+            CHECK(cn > 100 && cbad == 0);
+        }
     }
     std::printf("%s\n", fails ? "GRIB2 FAILED" : "GRIB2 OK");
     return fails;

@@ -43,6 +43,7 @@
 #include "sources.h"
 #include "radar.h"
 #include "turbfetch.h"
+#include "worldfetch.h"
 #include "wxgl.h"
 #include "viewer.h"
 #ifndef WX_HARNESS
@@ -700,6 +701,7 @@ void eraseRec(const std::string& k) {
 // Only sim/weather/region/turbulence is written. When the feature is turned off, X-Plane's own values from before are put back.
 double awGet(XPLMDataRef r);
 wx::turb::Fetcher g_turbFetch;
+wx::WorldMetars g_worldMetars;   // every current METAR in the world, for the map only (never sent to X-Plane)
 std::shared_ptr<const wx::hz::Snapshot> g_mapReports;   // latest pilot reports, for the map, the turbulence floor and windshear odds
 struct TurbState {
     XPLMDataRef arr = nullptr, alts = nullptr, gN = nullptr, simT = nullptr, elev = nullptr;
@@ -877,6 +879,9 @@ void turbRestore(const char* why) {
 
 void turbulenceTick() {
     for (const auto& s : g_turbFetch.takeLog()) turbLog("%s", s.c_str());
+    // after the first weather is in (nothing else is downloaded while X-Plane loads scenery, and the start-up load goes first)
+    g_worldMetars.want(g_cfg.enabled && g_cfg.worldMetars && g_firstApplyDone);
+    for (const auto& s : g_worldMetars.takeLog()) logf("%s", s.c_str());
 #ifndef WX_HARNESS
     g_uiOpen = wx::xpui::isOpen();
 #endif
@@ -3629,6 +3634,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     wx::UiData d;
     d.res = &g_lastRes; d.haveData = g_haveLast; d.cfg = &g_cfg; d.now = std::time(nullptr);
     d.extraServices = g_turbFetch.services(d.now);
+    d.worldStations = g_worldMetars.stations();
     if (g_drLat && g_drLon) { d.lat = XPLMGetDatad(g_drLat); d.lon = XPLMGetDatad(g_drLon); d.havePos = !(d.lat == 0 && d.lon == 0); }
     if (g_drElev) d.altFt = XPLMGetDatad(g_drElev) / 0.3048;
     if (g_drTrkFetch) d.trackDeg = XPLMGetDataf(g_drTrkFetch);
@@ -3880,6 +3886,7 @@ PLUGIN_API int XPluginEnable(void) {
     logf("downloads: %s", wx::httpTlsInfo().c_str());
     g_fetcher.start();
     g_turbFetch.start();
+    g_worldMetars.start();
     if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayers();
     {   static bool hooked = false; if (!hooked) { hooked = true; XPLMRegisterMapCreationHook(mapCreated, nullptr); } }
     g_enabledAt = Clock::now();
@@ -3927,6 +3934,7 @@ PLUGIN_API void XPluginDisable(void) {
     g_pluginEnabled = false;
     g_fetcher.stop();
     g_turbFetch.stop();
+    g_worldMetars.stop();
     updateCheckStop();   // before the HTTP clean-up below
     turbRestore("plugin disabled");
     regionRestore("plugin disabled");

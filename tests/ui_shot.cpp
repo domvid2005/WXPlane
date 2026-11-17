@@ -291,6 +291,7 @@ int main(int argc, char** argv) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;   // as the plugin's renderer (xpimgui.cpp): large draw lists split
     io.DisplaySize = ImVec2(W, H);
     uiStyle();
     UiFonts f = uiLoadFonts(scale);
@@ -410,6 +411,49 @@ int main(int argc, char** argv) {
         raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
         if (!writePng(cv, out + "/ui_map_tz_arizona.png")) return 1;
         std::printf("wrote %s\n", (out + "/ui_map_tz_arizona.png").c_str());
+    }
+    {   // the world METARs (map only): zoomed out to 1280 nm, every airport with a current METAR as a small dot by flight category
+        auto world = std::make_shared<std::vector<Station>>();
+        const char* kinds[4] = {"XXXX 171800Z 27010KT 9999 FEW040 15/08 Q1015", "XXXX 171800Z 27010KT 4000 BR BKN025 15/08 Q1015",
+                                "XXXX 171800Z 27010KT 2000 BR OVC006 15/08 Q1015", "XXXX 171800Z 27010KT 0400 FG VV001 15/08 Q1015"};
+        unsigned seed = 12345;
+        auto rnd = [&]() { seed = seed * 1103515245u + 12345u; return (seed >> 8) / 16777216.0; };
+        for (int i = 0; i < 3000; ++i) {
+            Station st;
+            st.icao = "W" + std::to_string(1000 + i);
+            st.lat = 15 + rnd() * 50; st.lon = -130 + rnd() * 80;
+            st.rawMetar = kinds[(int)(rnd() * 4) & 3];
+            parseReport(st.rawMetar, st.report);
+            world->push_back(st);
+        }
+        UiData z = d;
+        z.worldStations = world;
+        // and the whole radar mosaic, coarse, beyond the loaded area: a few rain areas across the US
+        FetchResult r2 = *d.res;
+        {
+            auto m = std::make_shared<RadarMosaic>();
+            m->lat0 = 54.975; m->lon0 = -129.975; m->dLat = m->dLon = 0.05; m->ni = 1400; m->nj = 700;
+            m->v.assign((size_t)m->ni * m->nj, 0);
+            const double blobs[][4] = {{33, -97, 2.5, 50}, {41, -88, 1.8, 40}, {30, -84, 3.0, 35}, {46, -100, 2.0, 30}, {38, -77, 1.2, 45}};
+            for (int j = 0; j < m->nj; ++j)
+                for (int i = 0; i < m->ni; ++i) {
+                    const double la = m->lat0 - j * m->dLat, lo = m->lon0 + i * m->dLon;
+                    double z = 0;
+                    for (const auto& b : blobs) {
+                        const double dd = std::hypot((la - b[0]) / b[2], (lo - b[1]) / (b[2] * 1.6));
+                        if (dd < 1) z = std::max(z, b[3] * (1 - dd * dd) + 10 * std::sin(la * 7 + lo * 5) * (1 - dd));
+                    }
+                    m->v[(size_t)j * m->ni + i] = (unsigned char)std::max(0.0, std::min(255.0, z * 3));
+                }
+            r2.radar.mosaic = m;
+        }
+        z.res = &r2;
+        z.forceAloftLayers = 0; z.forceRange = 10; z.forcePanEastNm = 0; z.forcePanNorthNm = 0; z.forceLocalTime = 0;
+        for (int fr = 0; fr < 40; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); z.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(z, f, W, H, false, act); ImGui::Render(); ++frames; }
+        Canvas cv((int)(W * scale), (int)(H * scale));
+        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+        if (!writePng(cv, out + "/ui_map_world.png")) return 1;
+        std::printf("wrote %s\n", (out + "/ui_map_world.png").c_str());
     }
     d.forceAloftLayers = 0; d.forceRange = 6; d.forcePanEastNm = d.forcePanNorthNm = 0; d.forceLocalTime = 0;   // back to 80 nm, on the aircraft
     for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }

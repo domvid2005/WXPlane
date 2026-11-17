@@ -351,9 +351,11 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
     std::string lastErr;
     for (const std::string& region : mrmsRegionsFor(rq.lat, rq.lon)) {
         const std::string name = region.empty() ? "CONUS" : region;
-        GribField refl;
+        GribField refl, whole;
+        GribWindow winR = win;   // the reflectivity also gives the whole mosaic, coarse (5 x 5 cells, about 3 nm), for the map only
+        winR.coarse = &whole; winR.coarseStep = 5;
         // retried (a truncated download, "bad gzip data", 2026-11-06, made the first load go without storms)
-        if (!loadMrmsRetry(mrmsUrl(region, "MergedReflectivityQCComposite"), win, refl, lastErr, stopping_)) { lastErr = name + ": " + lastErr; continue; }
+        if (!loadMrmsRetry(mrmsUrl(region, "MergedReflectivityQCComposite"), winR, refl, lastErr, stopping_)) { lastErr = name + ": " + lastErr; continue; }
         if (refl.refTime > 0 && now - refl.refTime > 30 * 60) {
             lastErr = name + ": radar mosaic is " + std::to_string((now - refl.refTime) / 60) + " min old, ignoring";
             continue;
@@ -403,6 +405,16 @@ RadarResult Fetcher::fetchRadar(const FetchRequest& rq, std::time_t now, const s
         for (const auto& c : out.cells) radarPrev_.insert(c.key);
         out.source = "NOAA MRMS (" + name + ")";
         out.dataTime = refl.refTime;
+        if (whole.valid()) {   // the map's radar beyond the loaded area (never made into weather records)
+            auto m = std::make_shared<RadarMosaic>();
+            m->lat0 = whole.lat0; m->lon0 = whole.lon0; m->dLat = whole.dLat; m->dLon = whole.dLon; m->ni = whole.ni; m->nj = whole.nj;
+            m->v.resize(whole.v.size());
+            for (size_t k = 0; k < whole.v.size(); ++k) {
+                const float z = whole.v[k];
+                m->v[k] = (unsigned char)(std::isnan(z) || z < 5.0f ? 0 : std::min(255.0f, z * 3.0f + 0.5f));
+            }
+            out.mosaic = m;
+        }
         if (oldTops) out.note = "echo-top download failed (" + topErr + "), reusing the last good tops" + " from " + std::to_string((now - lastTopsAt_) / 60) + " min ago";
         else if (cfg.radarEchoTops && !haveTops) out.note = "echo tops unavailable (" + topErr + "), storm tops estimated";
         if (!typeNote.empty()) out.note += (out.note.empty() ? "" : "; ") + typeNote;

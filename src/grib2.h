@@ -9,8 +9,13 @@
 
 namespace wx {
 
+struct GribField;
 struct GribWindow {
     double latMin = -90, latMax = 90, lonMin = -180, lonMax = 180; // lon in -180..180; a window may not cross 180
+    // optional: a coarse copy of the WHOLE grid as well, each value the highest of a coarseStep x coarseStep block (NaN where all are
+    // missing); for the map's radar beyond the loaded area (display only)
+    int coarseStep = 0;
+    GribField* coarse = nullptr;
 };
 
 struct GribField {

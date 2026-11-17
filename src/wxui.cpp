@@ -842,8 +842,8 @@ ImU32 edrColor(double edr, int alpha) {
 
 // The radar picture: map, turbulence, storm cells, pilot reports, airports by flight category, the aircraft in the middle.
 // North up, or turned with the aircraft's heading together with the wind dial (viewRot).
-const double kRanges[] = {1, 2, 5, 10, 20, 40, 80, 160, 320};   // nm, the mouse wheel steps through these
-const int kRangeCount = 9;
+const double kRanges[] = {1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2500};   // nm, the mouse wheel steps through these (640 nm and up: the world METARs)
+const int kRangeCount = 12;
 int& radarRange() { static int r = 6; return r; }   // index into kRanges (80 nm)
 double rangeNmOf(int k) { return kRanges[std::max(0, std::min(kRangeCount - 1, k))]; }
 
@@ -1425,6 +1425,25 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         // With the natural picture the map shows the radar mosaic itself (1 nm, lightly smoothed), not the records' squares: the real
         // shapes of the echoes at every zoom ("radar too blocky", 2026-11-12). Without it, the blocks are spread as before.
         const bool raster = !d.res->radar.view.empty();
+        // beyond the loaded area: the whole mosaic, coarse (about 3 nm; map only, never sent to X-Plane), with the same light speckle
+        static std::vector<unsigned char> far;
+        far.assign(v.size(), 0);
+        const RadarMosaic* mos = d.res->radar.mosaic.get();
+        const double nearNm = d.cfg ? d.cfg->radarRangeNm : 120.0;
+        if (mos) {
+            for (int iy = 0; iy < n; ++iy)
+                for (int ix = 0; ix < n; ++ix) {
+                    const float X = ix * step + p.x - c.x, Yp = c.y - (iy * step + p.y);
+                    const double ex = (X * cr + Yp * sr) / px, ny = (-X * sr + Yp * cr) / px;
+                    const double la = cLat + ny / 60.0, lo = cLon + ex / (60.0 * kx);
+                    if (raster ? d.res->radar.viewCovers(la, lo) : distNm(la, lo, d.res->centerLat, d.res->centerLon) <= nearNm) continue;
+                    const size_t q = (size_t)iy * n + ix;
+                    far[q] = 1;
+                    const float z = mos->at(la, lo);
+                    if (z < 8.0f) continue;
+                    sw[q] = 1.0f; swv[q] = z; any = true;
+                }
+        }
         if (raster) {
             for (int iy = 0; iy < n; ++iy)
                 for (int ix = 0; ix < n; ++ix) {
@@ -1433,6 +1452,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     const float z = d.res->radar.viewAt(cLat + ny / 60.0, cLon + ex / (60.0 * kx));
                     if (z < 8.0f) continue;
                     const size_t q = (size_t)iy * n + ix;
+                    if (far[q]) continue;
                     sw[q] = 1.0f; swv[q] = z; any = true;
                 }
         }
@@ -1457,6 +1477,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     float t = dd <= r0 ? 1.0f : 1.0f - (dd - r0) / (r1 - r0);
                     t = t * t * (3 - 2 * t);
                     const size_t c = (size_t)iy * n + ix;
+                    if (far[c]) continue;
                     sw[c] += t; swv[c] += t * dbz; any = true;
                 }
         }
@@ -1483,7 +1504,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     const double ex = (X * cr + Yp * sr) / px, ny = (-X * sr + Yp * cr) / px;
                     const double gx = (cLon * 60.0 * kx + ex), gy = (cLat * 60.0 + ny);
                     const float nz = 0.65f * (vnoise(gx / 1.6, gy / 1.6) - 0.5f) + 0.35f * (vnoise(gx / 0.6 + 17.3, gy / 0.6 - 4.1) - 0.5f);
-                    if (raster) { v[c] = val + nz * 3.0f; continue; }   // the mosaic's own edges: only a fine speckle on top
+                    if (raster || far[c]) { v[c] = val + nz * 3.0f; continue; }   // the mosaic's own edges: only a fine speckle on top
                     val += nz * 9.0f * cov;
                     // the edge: weak and ragged where the coverage runs out
                     val *= 0.55f + 0.45f * cov;
@@ -1646,6 +1667,26 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             const float dm = std::hypot(mouse.x - q.x, mouse.y - q.y);
             if (interactive && (dm < bestPt || (dm <= 7.5f && hitKind == 4))) { bestPt = dm; hitKind = 2; hitKey = st.icao; hitAt = q; }
         }
+    // every other airport in the world with a current METAR (display only: the weather in the sim comes from the stations above): a
+    // smaller dot by flight category, a click opens its METAR like any airport's
+    if (showAirports() && d.worldStations) {
+        std::vector<const std::string*> loaded;
+        if (d.res) for (const auto& st : d.res->stations) loaded.push_back(&st.icao);
+        const float r = rangeNm >= 600 ? 2.0f : 2.8f;
+        for (const auto& st : *d.worldStations) {
+            const ImVec2 q = at(st.lat, st.lon);
+            if (!inside(q, 0)) continue;
+            bool dup = false;
+            for (const std::string* s : loaded) if (*s == st.icao) { dup = true; break; }
+            if (dup) continue;
+            const bool sel = isSel(2, st.icao);
+            if (sel) { selAt(2, st.icao, q); dl->AddCircle(q, 8.0f, IM_COL32(255, 255, 255, 220), 16, 1.5f); }
+            dl->AddCircleFilled(q, r, catColor(flightCategory(st.report)), 8);
+            if (rangeNm <= 40) dl->AddText(f.body, ImGui::GetFontSize() * 0.75f, ImVec2(q.x + 5, q.y - 6), cMuted, st.icao.c_str());
+            const float dm = std::hypot(mouse.x - q.x, mouse.y - q.y);
+            if (interactive && dm < bestPt && dm <= 10.0f) { bestPt = dm; hitKind = 2; hitKey = st.icao; hitAt = q; }
+        }
+    }
     // the aircraft: its true heading (not the ground track, which swings around when slow or stopped)
     const double a = (d.headingDeg - mapRotDeg) * kPi / 180.0;
     const ImVec2 dir((float)std::sin(a), -(float)std::cos(a)), n(-dir.y, dir.x);
@@ -1722,7 +1763,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     ImGui::InvisibleButton("radarclick", ImVec2(size, size));
     if (interactive) { mapSel().mapMin = p; mapSel().mapMax = ImVec2(p.x + size, p.y + size); }   // the info window stays inside this
     const bool hov = ImGui::IsItemHovered();
-    // the mouse wheel zooms: 1, 2, 5, 10, 20, 40, 80, 160, 320 nm (eased)
+    // the mouse wheel zooms: 1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2500 nm (eased)
     if (hov && ImGui::GetIO().MouseWheel != 0.0f) radarRange() = std::max(0, std::min(kRangeCount - 1, radarRange() - (ImGui::GetIO().MouseWheel > 0 ? 1 : -1)));
     if (interactive) {
         // drag to move the map (the Map tab only); a click without a drag selects
@@ -1793,6 +1834,8 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
     const hz::Pirep* p = nullptr; const Station* st = nullptr; const hz::Advisory* av = nullptr;
     if (sel.kind == 1 && d.reports && showPireps()) for (const auto& q : d.reports->pireps) if (pirepKey(q) == sel.key) p = &q;
     if (sel.kind == 2 && d.res && showAirports()) for (const auto& q : d.res->stations) if (q.icao == sel.key) st = &q;
+    bool worldOnly = false;   // an airport from the world METARs: shown on the map, not loaded into X-Plane
+    if (sel.kind == 2 && !st && d.worldStations && showAirports()) for (const auto& q : *d.worldStations) if (q.icao == sel.key) { st = &q; worldOnly = true; break; }
     if (sel.kind == 3 && d.reports) for (const auto& q : d.reports->advisories) if (advKey(q) == sel.key && (q.cls == hz::Advisory::Airmet ? showAirmets() : showSigmets())) av = &q;
     const WindPt* wp = nullptr;
     if (sel.kind == 4 && showWinds()) for (const auto& q : windPts()) if (q.key == sel.key) wp = &q;
@@ -1962,6 +2005,7 @@ bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::v
             ImGui::Spacing();
             ImGui::PushFont(f.bold); ImGui::TextUnformatted("METAR"); ImGui::PopFont(); ImGui::SameLine(0, 8); muted("winds true");
             infoText(f, st->rawMetar.empty() ? std::string("(no report text)") : st->rawMetar, cMetar);
+            if (worldOnly) muted("Map only: outside the weather loaded into X-Plane");
             if (st->hasAtis) {
                 ImGui::Spacing();
                 ImGui::PushFont(f.bold); ImGui::TextUnformatted(("ATIS " + st->atisLetter).c_str()); ImGui::PopFont(); ImGui::SameLine(0, 8); muted("winds magnetic");
@@ -2197,7 +2241,7 @@ void layerButtons(bool lockButton) {
 // The zoom: - and + with the range between them, in one bubble like the unit switches (all on one text-high row)
 float rangeButtonsWidth() {
     const ImGuiStyle& st = ImGui::GetStyle();
-    return 6 + (ImGui::CalcTextSize("-").x + 2 * st.FramePadding.x) + 6 + ImGui::CalcTextSize("320 nm").x + 6 + (ImGui::CalcTextSize("+").x + 2 * st.FramePadding.x) + 6;
+    return 6 + (ImGui::CalcTextSize("-").x + 2 * st.FramePadding.x) + 6 + ImGui::CalcTextSize("2500 nm").x + 6 + (ImGui::CalcTextSize("+").x + 2 * st.FramePadding.x) + 6;
 }
 void rangeButtons() {
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -2210,7 +2254,7 @@ void rangeButtons() {
     ImGui::SetCursorScreenPos(ImVec2(p0.x + 6, p0.y + 2));
     if (ImGui::SmallButton("-##zoom")) radarRange() = std::max(0, radarRange() - 1);
     const std::string t = fmt("%g nm", rangeNmOf(radarRange()));
-    const float tw = ImGui::CalcTextSize("320 nm").x, tx = p0.x + 6 + bm + 6 + (tw - ImGui::CalcTextSize(t.c_str()).x) * 0.5f;
+    const float tw = ImGui::CalcTextSize("2500 nm").x, tx = p0.x + 6 + bm + 6 + (tw - ImGui::CalcTextSize(t.c_str()).x) * 0.5f;
     dl->AddText(ImVec2(tx, p0.y + 2), cText, t.c_str());
     ImGui::SetCursorScreenPos(ImVec2(p0.x + boxW - 6 - bp, p0.y + 2));
     if (ImGui::SmallButton("+##zoom")) radarRange() = std::min(kRangeCount - 1, radarRange() + 1);

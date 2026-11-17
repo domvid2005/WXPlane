@@ -1,5 +1,10 @@
 # WXPlane changelog
 
+## 5.1.3 (in progress)
+- Map: every airport in the world with a current METAR (aviationweather.gov, every 10 minutes), as smaller dots by flight category; click for the METAR. Display only, never sent to X-Plane (world_metars)
+- Map: in the US, the whole NOAA radar mosaic beyond the weather loaded into X-Plane (about 3 nm detail), display only
+- Map: zoom out to 640, 1280 and 2500 nm
+
 ## 5.1.2
 - Overcast (OVC) at a steady 97% coverage
 - Rain at an airport: the airport's rain cloud is no longer cut to a thin sheet under the deck above it (it looked like fog, X-Plane dropped the overcast over it and no rain fell)

@@ -2,6 +2,7 @@
 #pragma once
 #include <cmath>
 #include <ctime>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -76,6 +77,25 @@ int addStormContour(std::vector<RadarCell>& cells, double cellNm, double baseRad
 int addStormLevelContours(std::vector<RadarCell>& cells, double cellNm, double baseRadiusNm, double aircraftLat, double aircraftLon,
                           double stepM, const std::vector<double>& levels, int maxAdd);
 
+// The whole radar mosaic, coarse (about 3 nm), for the map beyond the loaded area: display only, never made into weather records.
+// dBZ x 3 in a byte (0: no echo or no data), rows north -> south from lat0, columns west -> east from lon0 (block centres).
+struct RadarMosaic {
+    double lat0 = 0, lon0 = 0, dLat = 0, dLon = 0;
+    int ni = 0, nj = 0;
+    std::vector<unsigned char> v;
+    float at(double lat, double lon) const {   // dBZ, bilinear between block centres; 0 outside
+        if (v.empty()) return 0;
+        double dl = lon - lon0;
+        if (dl < -180) dl += 360; else if (dl > 180) dl -= 360;
+        const double u = dl / dLon, w = (lat0 - lat) / dLat;
+        const int i = (int)std::floor(u), j = (int)std::floor(w);
+        if (i < 0 || j < 0 || i + 1 >= ni || j + 1 >= nj) return 0;
+        const double fu = u - i, fw = w - j;
+        auto A = [&](int a, int b) { return v[(size_t)b * (size_t)ni + (size_t)a] / 3.0; };
+        return (float)((A(i, j) * (1 - fu) + A(i + 1, j) * fu) * (1 - fw) + (A(i, j + 1) * (1 - fu) + A(i + 1, j + 1) * fu) * fw);
+    }
+};
+
 struct RadarResult {
     bool attempted = false;
     bool ok = false;
@@ -99,6 +119,12 @@ struct RadarResult {
     std::vector<unsigned char> view;
     double viewX0 = 0, viewY0 = 0, viewG = 1;
     int viewW = 0, viewH = 0;
+    std::shared_ptr<const RadarMosaic> mosaic;   // the whole mosaic, coarse (map only, beyond the loaded area)
+    bool viewCovers(double lat, double lon) const {
+        if (view.empty()) return false;
+        const double u = (lon * 60.0 * cosRef - viewX0) / viewG, v = (lat * 60.0 - viewY0) / viewG;
+        return u >= 0 && v >= 0 && u < viewW && v < viewH;
+    }
     float viewAt(double lat, double lon) const {   // dBZ, bilinear; 0 outside
         if (view.empty()) return 0;
         const double u = (lon * 60.0 * cosRef - viewX0) / viewG - 0.5, v = (lat * 60.0 - viewY0) / viewG - 0.5;

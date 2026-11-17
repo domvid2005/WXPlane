@@ -164,6 +164,31 @@ bool decodeGrib2(const uint8_t* d, size_t n, const GribWindow& win, GribField& o
             out.v[(size_t)r * (size_t)wi + (size_t)c] = valueAt(i, j);
         }
     }
+    if (win.coarse && win.coarseStep > 1) {   // the whole grid, coarse: the highest value of each block
+        GribField& g = *win.coarse;
+        const int s = win.coarseStep, ci = gi / s, cj = gj / s;
+        g = GribField();
+        if (ci > 0 && cj > 0) {
+            g.ni = ci; g.nj = cj; g.dLat = dj * s; g.dLon = di * s; g.discipline = out.discipline; g.refTime = out.refTime;
+            g.v.assign((size_t)ci * (size_t)cj, kNaN);
+            // the block centres: rows north -> south, columns west -> east
+            g.lat0 = rowsN2S ? latOf(0) + (jPos ? 1 : -1) * dj * (s - 1) * 0.5 : latOf(gj - 1) + (jPos ? -1 : 1) * dj * (s - 1) * 0.5;
+            g.lon0 = colsW2E ? normLon(lonOf(0) + di * (s - 1) * 0.5) : normLon(lonOf(gi - 1) + di * (s - 1) * 0.5);
+            for (int r = 0; r < cj; ++r)
+                for (int c = 0; c < ci; ++c) {
+                    float best = kNaN;
+                    for (int b = 0; b < s; ++b) {
+                        const int j = rowsN2S ? r * s + b : gj - 1 - (r * s + b);
+                        for (int a = 0; a < s; ++a) {
+                            const int i = colsW2E ? c * s + a : gi - 1 - (c * s + a);
+                            const float x = valueAt(i, j);
+                            if (!std::isnan(x) && (std::isnan(best) || x > best)) best = x;
+                        }
+                    }
+                    g.v[(size_t)r * (size_t)ci + (size_t)c] = best;
+                }
+        }
+    }
     return true;
 }
 
