@@ -4101,7 +4101,45 @@ void uiDrawTablet(const UiData& d, const UiFonts& f, float width, float height, 
         ImGui::SetCursorPosX((width - ImGui::CalcTextSize(t).x) * 0.5f);
         muted(t);
     } else {
-        if (panelBegin("tabletmap", ImVec2(0, 0), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) radarPanel(d, f, true);
+        // the tablet is wide and short: the map as tall as the screen allows, the layer buttons, range and legend in a column on its
+        // left, the altitude slider on its right
+        if (panelBegin("tabletmap", ImVec2(0, 0), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
+            const float availW = ImGui::GetContentRegionAvail().x, availH = ImGui::GetContentRegionAvail().y;
+            const float sliderW = 50.0f, gap = std::max(10.0f, 7 + 6 + ImGui::CalcTextSize("00000 ft").x + 8 + 6 - sliderW * 0.5f);
+            const float colW = std::max(250.0f, availW * 0.3f);
+            const float size = std::max(120.0f, std::min(availH - 4, availW - colW - 12 - sliderW - gap));
+            ImGui::BeginGroup();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + colW);
+            ImGui::BeginChild("tabletcol", ImVec2(colW, size), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
+            sectionTitle(f, radarHeader(d).c_str());
+            rangeButtons();
+            ImGui::Spacing();
+            layerButtons(true);
+            ImGui::Spacing();
+            mutedWrapped(radarSubtitle(d));
+            ImGui::Spacing();
+            {   // the legend in two rows
+                const float vals[] = {15, 25, 35, 45, 55};
+                const char* labels[] = {"15", "25", "35", "45", "55 dBZ"};
+                for (int k = 0; k < 5; ++k) {
+                    if (k && k != 3) ImGui::SameLine(0, 10);
+                    const ImVec2 q = ImGui::GetCursorScreenPos();
+                    const float h = ImGui::GetTextLineHeight();
+                    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(q.x, q.y + h * 0.3f), ImVec2(q.x + 20, q.y + h * 0.7f), dbzColor(vals[k], 255), 2);
+                    ImGui::Dummy(ImVec2(22, h));
+                    ImGui::SameLine(0, 4);
+                    muted(labels[k]);
+                }
+            }
+            if (showTurb() && d.turbGrid.empty()) muted(d.turbOn ? "no turbulence data yet" : "turbulence off");
+            ImGui::EndChild();
+            ImGui::PopTextWrapPos();
+            ImGui::EndGroup();
+            ImGui::SameLine(0, 12);
+            radarCanvas(d, f, size, rangeNmOf(radarRange()), true);
+            ImGui::SameLine(0, gap);
+            altitudeSlider(d, sliderW, size);
+        }
         panelEnd();
         UnitScope us(g_unitsAir);
         infoWindow(d, f);
