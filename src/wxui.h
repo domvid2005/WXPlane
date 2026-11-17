@@ -75,7 +75,7 @@ struct UiData {
     std::string loadingWhat;            // e.g. "Loading weather", "New location"
     std::shared_ptr<const hz::Snapshot> reports;
     std::shared_ptr<const std::vector<Station>> worldStations;   // every current METAR in the world (map only, never sent to X-Plane)
-    std::shared_ptr<const FarData> far;   // winds, clouds and pilot reports for the map beyond the loaded weather (display only)
+    std::shared_ptr<const FarData> farView;   // winds, clouds and pilot reports for the map beyond the loaded weather (display only)
     // windshear
     bool wsOn = false;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;

@@ -3694,7 +3694,7 @@ void uiBuildAny(const wx::UiFonts& fonts, float w, float h, bool poppedOut, bool
     d.res = &g_lastRes; d.haveData = g_haveLast; d.cfg = &g_cfg; d.now = std::time(nullptr);
     d.extraServices = g_turbFetch.services(d.now);
     d.worldStations = g_worldMetars.stations();
-    d.far = g_farField.data();
+    d.farView = g_farField.data();
     d.turbWorld = g_turbFetch.inputs().ecGlobal;
     if (g_drLat && g_drLon) { d.lat = XPLMGetDatad(g_drLat); d.lon = XPLMGetDatad(g_drLon); d.havePos = !(d.lat == 0 && d.lon == 0); }
     if (g_drElev) d.altFt = XPLMGetDatad(g_drElev) / 0.3048;

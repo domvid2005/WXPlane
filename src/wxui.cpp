@@ -873,12 +873,12 @@ const std::vector<const hz::Pirep*>& pirepsAll(const UiData& d) {
     static std::vector<const hz::Pirep*> v;
     static std::shared_ptr<const hz::Snapshot> a0;   // held, so the pointers in v stay valid and a new snapshot never shares an address
     static std::shared_ptr<const FarData> b0;
-    if (d.reports == a0 && d.far == b0) return v;
-    a0 = d.reports; b0 = d.far;
+    if (d.reports == a0 && d.farView == b0) return v;
+    a0 = d.reports; b0 = d.farView;
     v.clear();
     std::set<std::string> seen;
     if (d.reports) for (const auto& p : d.reports->pireps) if (seen.insert(pirepKey(p)).second) v.push_back(&p);
-    if (d.far) for (const auto& p : d.far->pireps) if (seen.insert(pirepKey(p)).second) v.push_back(&p);
+    if (d.farView) for (const auto& p : d.farView->pireps) if (seen.insert(pirepKey(p)).second) v.push_back(&p);
     return v;
 }
 // mode 0: every column, a click opens the details under the row; 1: compact (no aircraft column, short ages), same clicks;
@@ -1137,7 +1137,7 @@ void updateWinds(const UiData& d) {
         }
     std::vector<const AloftStation*> aloftAll;
     if (d.res) for (const auto& s : d.res->aloft) aloftAll.push_back(&s);
-    if (d.far) for (const auto& s : d.far->aloft) aloftAll.push_back(&s);   // beyond the loaded weather (display only)
+    if (d.farView) for (const auto& s : d.farView->aloft) aloftAll.push_back(&s);   // beyond the loaded weather (display only)
     if (showWinds() && !surfaceWinds())
         for (const AloftStation* sp : aloftAll) {
             const AloftStation& s = *sp;
@@ -1351,12 +1351,12 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     // grid's corners by marching squares, so the edges are smooth lines rather than steps
     // beyond the loaded weather: the global model's cloud cover in the band of the map's altitude (low below ~6,500 ft, high above
     // ~20,000 ft), as soft grey shading (display only; the outlined clouds below are the ones in the sim)
-    if (showClouds() && d.far && !d.far->clouds.empty() && d.far->gridDeg > 0) {
+    if (showClouds() && d.farView && !d.farView->clouds.empty() && d.farView->gridDeg > 0) {
         // shaded smoothly between the grid's points (each square's corners carry their own cover), like the radar picture
         const float alt = mapAlt().shown;
-        const double g = d.far->gridDeg;
+        const double g = d.farView->gridDeg;
         std::map<std::pair<long, long>, float> cov;
-        for (const auto& c : d.far->clouds) {
+        for (const auto& c : d.farView->clouds) {
             const double v = atSurface() ? c.low : alt < 6500 ? c.low : alt < 20000 ? c.mid : c.high;
             cov[{std::lround(c.lat / g), std::lround(c.lon / g)}] = (float)v;
         }
@@ -1478,7 +1478,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     // echoes, drawn like a radar picture rather than as dots: every cell is spread onto a fine screen grid (full strength in its
     // core, fading out towards its edge, the strongest cell winning where they overlap), and the grid is drawn with the colours
     // blended between its points, so the echoes have soft edges and run from green rims into yellow, orange and red cores
-    const RadarMosaic* farRadar = d.far && d.far->radar ? d.far->radar.get() : nullptr;   // Europe beyond the loaded weather
+    const RadarMosaic* farRadar = d.farView && d.farView->radar ? d.farView->radar.get() : nullptr;   // Europe beyond the loaded weather
     const bool nearRadar = d.res && d.res->radar.ok;
     if (showRadar() && (nearRadar || farRadar)) {
         const double cell = d.cfg ? d.cfg->radarCellNm : 6.0;
@@ -1494,8 +1494,8 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         // shapes of the echoes at every zoom ("radar too blocky", 2026-11-12). Without it, the blocks are spread as before.
         const bool raster = nearRadar && !d.res->radar.view.empty();
         // beyond the loaded area: the whole mosaic, coarse (about 3 nm; map only, never sent to X-Plane), with the same light speckle
-        static std::vector<unsigned char> far;
-        far.assign(v.size(), 0);
+        static std::vector<unsigned char> farMask;
+        farMask.assign(v.size(), 0);
         const RadarMosaic* mos = nearRadar ? d.res->radar.mosaic.get() : nullptr;
         const double nearNm = d.cfg ? d.cfg->radarRangeNm : 120.0;
         if (mos || farRadar) {
@@ -1506,7 +1506,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     const double la = cLat + ny / 60.0, lo = cLon + ex / (60.0 * kx);
                     if (nearRadar && (raster ? d.res->radar.viewCovers(la, lo) : distNm(la, lo, d.res->centerLat, d.res->centerLon) <= nearNm)) continue;
                     const size_t q = (size_t)iy * n + ix;
-                    far[q] = 1;
+                    farMask[q] = 1;
                     float z = mos ? mos->at(la, lo) : 0.0f;
                     if (z < 8.0f && farRadar) z = farRadar->at(la, lo);
                     if (z < 8.0f) continue;
@@ -1521,7 +1521,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     const float z = d.res->radar.viewAt(cLat + ny / 60.0, cLon + ex / (60.0 * kx));
                     if (z < 8.0f) continue;
                     const size_t q = (size_t)iy * n + ix;
-                    if (far[q]) continue;
+                    if (farMask[q]) continue;
                     sw[q] = 1.0f; swv[q] = z; any = true;
                 }
         }
@@ -1547,7 +1547,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     float t = dd <= r0 ? 1.0f : 1.0f - (dd - r0) / (r1 - r0);
                     t = t * t * (3 - 2 * t);
                     const size_t c = (size_t)iy * n + ix;
-                    if (far[c]) continue;
+                    if (farMask[c]) continue;
                     sw[c] += t; swv[c] += t * dbz; any = true;
                 }
         }
@@ -1574,7 +1574,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     const double ex = (X * cr + Yp * sr) / px, ny = (-X * sr + Yp * cr) / px;
                     const double gx = (cLon * 60.0 * kx + ex), gy = (cLat * 60.0 + ny);
                     const float nz = 0.65f * (vnoise(gx / 1.6, gy / 1.6) - 0.5f) + 0.35f * (vnoise(gx / 0.6 + 17.3, gy / 0.6 - 4.1) - 0.5f);
-                    if (raster || far[c]) { v[c] = val + nz * 3.0f; continue; }   // the mosaic's own edges: only a fine speckle on top
+                    if (raster || farMask[c]) { v[c] = val + nz * 3.0f; continue; }   // the mosaic's own edges: only a fine speckle on top
                     val += nz * 9.0f * cov;
                     // the edge: weak and ragged where the coverage runs out
                     val *= 0.55f + 0.45f * cov;
@@ -1706,7 +1706,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             if (interactive && w.show > 0.5f && dm < 10.0f && dm < bestPt && !(onCircle && w.surface)) { bestPt = dm; hitKind = 4; hitKey = w.key; hitAt = q; }
         }
     }
-    if (showPireps() && (d.reports || d.far)) {
+    if (showPireps() && (d.reports || d.farView)) {
         for (const hz::Pirep* prp : pirepsAll(d)) {
             const hz::Pirep& pr = *prp;
             const ImVec2 q = at(pr.lat, pr.lon);

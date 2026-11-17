@@ -30,16 +30,17 @@ bool loadConfig(const std::string& path, Config& c) {
         if (eq == std::string::npos) continue;
         std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
         double d = std::atof(v.c_str());
+        // newer settings, each on its own (MSVC limits how long one if / else-if chain may be)
+        if (k == "world_metars") { c.worldMetars = toBool(v); continue; }
+        if (k == "detailed_log") { c.detailedLog = toBool(v); continue; }
+        if (k == "avitab_tab") { c.avitabTab = toBool(v); continue; }
+        if (k == "avitab_icon_x") { c.avitabIconX = d < 0 ? 0 : (d > 1 ? 1 : d); continue; }
+        if (k == "avitab_icon_y") { c.avitabIconY = d < 0 ? 0 : (d > 1 ? 1 : d); continue; }
         if (k == "config_version") version = (int)d;
         else if (k == "enabled") c.enabled = toBool(v);
         else if (k == "use_atis") c.useAtis = toBool(v);
         else if (k == "night_dim") c.nightDim = toBool(v);
         else if (k == "update_check") c.updateCheck = toBool(v);
-        else if (k == "world_metars") c.worldMetars = toBool(v);
-        else if (k == "detailed_log") c.detailedLog = toBool(v);
-        else if (k == "avitab_tab") c.avitabTab = toBool(v);
-        else if (k == "avitab_icon_x") c.avitabIconX = std::atof(v.c_str());
-        else if (k == "avitab_icon_y") c.avitabIconY = std::atof(v.c_str());
         else if (k == "frame_check") c.frameCheck = toBool(v);
         else if (k == "use_aloft") c.useAloft = toBool(v);
         else if (k == "update_minutes") c.updateMinutes = (int)(d < 1 ? 1 : d);

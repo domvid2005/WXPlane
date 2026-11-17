@@ -457,8 +457,8 @@ int main(int argc, char** argv) {
             std::printf("wrote %s\n", (out + "/ui_map_world.png").c_str());
         }
         // and the far field: model winds and cloud cover on a 10-degree grid, pilot reports, Europe's radar (pan east over the Atlantic)
-        auto far = std::make_shared<FarData>();
-        far->gridDeg = 10;
+        auto farData = std::make_shared<FarData>();
+        farData->gridDeg = 10;
         for (int la = 10; la <= 70; la += 10)
             for (int lo = -140; lo <= 40; lo += 10) {
                 AloftStation a; a.id = "m"; a.model = true; a.located = true; a.lat = la; a.lon = lo;
@@ -467,11 +467,11 @@ int main(int argc, char** argv) {
                     L.hasTemp = true; L.tempC = 15 - ft / 500.0;
                     a.levels.push_back(L);
                 }
-                far->aloft.push_back(a);
+                farData->aloft.push_back(a);
                 FarData::Cloud c; c.lat = la; c.lon = lo; c.low = 0.2 + 0.6 * std::fabs(std::sin(la * 0.3 + lo * 0.1)); c.mid = c.low * 0.7; c.high = 0.4;
-                far->clouds.push_back(c);
+                farData->clouds.push_back(c);
             }
-        for (int i = 0; i < 12; ++i) { hz::Pirep p; p.lat = 35 + i * 2; p.lon = -40 + i * 5; p.altFt = 35000; p.intensity = i % 3 ? "LGT" : "MOD"; p.raw = "UA /OV TEST" + std::to_string(i); p.obsTime = 1000 + i; p.urgent = i == 5; far->pireps.push_back(p); }
+        for (int i = 0; i < 12; ++i) { hz::Pirep p; p.lat = 35 + i * 2; p.lon = -40 + i * 5; p.altFt = 35000; p.intensity = i % 3 ? "LGT" : "MOD"; p.raw = "UA /OV TEST" + std::to_string(i); p.obsTime = 1000 + i; p.urgent = i == 5; farData->pireps.push_back(p); }
         {
             auto m = std::make_shared<RadarMosaic>();
             m->lat0 = 72; m->lon0 = -12; m->dLat = m->dLon = 0.03; m->ni = 1500; m->nj = 1000;
@@ -482,9 +482,9 @@ int main(int argc, char** argv) {
                     const double dd = std::hypot((la - 51) / 3.0, (lo - 5) / 5.0);
                     if (dd < 1) m->v[(size_t)j * m->ni + i] = (unsigned char)std::min(255.0, (45 * (1 - dd * dd)) * 3);
                 }
-            far->radar = m;
+            farData->radar = m;
         }
-        z.far = far;
+        z.farView = farData;
         z.forceAloftLayers = 3; z.forceLayers = 1 | 4; z.forceRange = 11; z.forcePanEastNm = 1700; z.forcePanNorthNm = 300; z.forceMapAltFt = 30000; z.forceMapMode = -1;
         {
             for (int fr = 0; fr < 40; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); z.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(z, f, W, H, false, act); ImGui::Render(); ++frames; }
