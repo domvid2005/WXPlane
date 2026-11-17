@@ -85,6 +85,7 @@ struct Inputs {
     std::shared_ptr<const GtgnCube> gtgn, gtgnPrev;   // newest analysis, and the one before (cross-faded over 3 min)
     std::time_t gtgnArrived = 0;                       // when the newest one was loaded
     std::shared_ptr<const EcCube> ecA, ecB;            // two forecast steps bracketing now
+    std::shared_ptr<const EcCube> ecGlobal;            // the whole world at 1 degree (the map beyond the loaded weather only)
 };
 struct Sample {
     double edr = 0;                // value used (EDR, or EDR-equivalent from ECMWF), before the realism scale

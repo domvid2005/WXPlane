@@ -29,6 +29,12 @@ typedef struct {
     XPLMWindowLayer layer;
     XPLMHandleMouseClick_f handleRightClickFunc;
 } XPLMCreateWindow_t;
+
+typedef int XPLMDrawingPhase;
+enum { xplm_Phase_FirstCockpit = 35, xplm_Phase_Panel = 40, xplm_Phase_Gauges = 45, xplm_Phase_Window = 50, xplm_Phase_LastCockpit = 55 };
+typedef int (*XPLMDrawCallback_f)(XPLMDrawingPhase inPhase, int inIsBefore, void* inRefcon);
+int XPLMRegisterDrawCallback(XPLMDrawCallback_f inCallback, XPLMDrawingPhase inPhase, int inWantsBefore, void* inRefcon);
+int XPLMUnregisterDrawCallback(XPLMDrawCallback_f inCallback, XPLMDrawingPhase inPhase, int inWantsBefore, void* inRefcon);
 XPLMWindowID XPLMCreateWindowEx(XPLMCreateWindow_t*);
 void XPLMDestroyWindow(XPLMWindowID);
 void XPLMGetScreenBoundsGlobal(int*, int*, int*, int*);

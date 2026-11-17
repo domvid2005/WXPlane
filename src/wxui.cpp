@@ -830,6 +830,7 @@ bool tzStdQuarterHours(double lat, double lon, int& q) {
 bool& showTimeZones() { static bool v = false; return v; }   // the map's "Time Zone" layer
 
 bool& showMap() { static bool v = true; return v; }
+struct MapView { double lat = 0, lon = 0, range = 0, at = 0; bool valid = false; } g_mapView;   // for uiMapView (the far-field fetch)
 bool& showTurb() { static bool v = false; return v; }
 bool& showPireps() { static bool v = false; return v; }
 
@@ -867,6 +868,19 @@ void selOpen(int kind, const std::string& key, ImVec2 at) {
     v.push_back(it);
 }
 std::string pirepKey(const hz::Pirep& p) { return p.raw + "|" + std::to_string((long long)p.obsTime); }
+// the loaded weather's pilot reports, then those of the map beyond it (display only), each once
+const std::vector<const hz::Pirep*>& pirepsAll(const UiData& d) {
+    static std::vector<const hz::Pirep*> v;
+    static std::shared_ptr<const hz::Snapshot> a0;   // held, so the pointers in v stay valid and a new snapshot never shares an address
+    static std::shared_ptr<const FarData> b0;
+    if (d.reports == a0 && d.far == b0) return v;
+    a0 = d.reports; b0 = d.far;
+    v.clear();
+    std::set<std::string> seen;
+    if (d.reports) for (const auto& p : d.reports->pireps) if (seen.insert(pirepKey(p)).second) v.push_back(&p);
+    if (d.far) for (const auto& p : d.far->pireps) if (seen.insert(pirepKey(p)).second) v.push_back(&p);
+    return v;
+}
 // mode 0: every column, a click opens the details under the row; 1: compact (no aircraft column, short ages), same clicks;
 // 2: compact, and a click glides the Map tab's map to the report and opens its window there
 void pirepTable(const UiData& d, const UiFonts& f, const char* id, ImVec2 size, std::vector<std::string>& open, int mode = 0);
@@ -1121,8 +1135,12 @@ void updateWinds(const UiData& d) {
             w->hasT = rp.hasTemp; w->gustKt = rp.gustKt > rp.windKt ? (float)rp.gustKt : 0.0f; w->rangeA = 1;
             w->u += (tu - w->u) * kE; w->v += (tv - w->v) * kE; w->tempC += ((float)rp.tempC - w->tempC) * kE;
         }
-    if (d.res && showWinds() && !surfaceWinds())
-        for (const auto& s : d.res->aloft) {
+    std::vector<const AloftStation*> aloftAll;
+    if (d.res) for (const auto& s : d.res->aloft) aloftAll.push_back(&s);
+    if (d.far) for (const auto& s : d.far->aloft) aloftAll.push_back(&s);   // beyond the loaded weather (display only)
+    if (showWinds() && !surfaceWinds())
+        for (const AloftStation* sp : aloftAll) {
+            const AloftStation& s = *sp;
             if (!s.located) continue;
             float dir = 0, kt = 0, tc = 0, edge = 0; bool hasT = false;
             bool have = false;
@@ -1233,6 +1251,7 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     const double cLat = aLat + pan.y / 60.0, cLon = aLon + pan.x / (60.0 * std::max(0.05, kx));
     (void)rangeNm;
     rangeNm = shownRange();   // eased zoom
+    if (interactive) { g_mapView.lat = cLat; g_mapView.lon = cLon; g_mapView.range = rangeNm; g_mapView.at = ImGui::GetTime(); g_mapView.valid = true; }
     const float px = (float)(R / rangeNm);   // pixels per nm
     // the map turns like the wind wheel: heading up in Heading Lock; in North Lock true north up, or magnetic north up with °M. The
     // north is the north at the map's centre: at the aircraft, or (moved off it) at the + in the middle, so the top of the + always
@@ -1330,6 +1349,37 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     }
     // clouds at the map's altitude: filled where a layer is (darker grey the deeper the layer), with its outline; drawn from the
     // grid's corners by marching squares, so the edges are smooth lines rather than steps
+    // beyond the loaded weather: the global model's cloud cover in the band of the map's altitude (low below ~6,500 ft, high above
+    // ~20,000 ft), as soft grey shading (display only; the outlined clouds below are the ones in the sim)
+    if (showClouds() && d.far && !d.far->clouds.empty() && d.far->gridDeg > 0) {
+        // shaded smoothly between the grid's points (each square's corners carry their own cover), like the radar picture
+        const float alt = mapAlt().shown;
+        const double g = d.far->gridDeg;
+        std::map<std::pair<long, long>, float> cov;
+        for (const auto& c : d.far->clouds) {
+            const double v = atSurface() ? c.low : alt < 6500 ? c.low : alt < 20000 ? c.mid : c.high;
+            cov[{std::lround(c.lat / g), std::lround(c.lon / g)}] = (float)v;
+        }
+        auto col = [&](float v) { return IM_COL32(170, 178, 190, (int)(std::max(0.0f, std::min(1.0f, (v - 0.1f) / 0.9f)) * 80)); };
+        const ImDrawListFlags fl = dl->Flags;
+        dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+        const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+        for (const auto& kv : cov) {
+            const long a = kv.first.first, o = kv.first.second;
+            auto e = cov.find({a, o + 1}), n = cov.find({a + 1, o}), ne = cov.find({a + 1, o + 1});
+            if (e == cov.end() || n == cov.end() || ne == cov.end()) continue;
+            const float v0 = kv.second, v1 = e->second, v2 = ne->second, v3 = n->second;
+            if (v0 < 0.1f && v1 < 0.1f && v2 < 0.1f && v3 < 0.1f) continue;
+            const ImVec2 p0 = at(a * g, o * g), p1 = at(a * g, (o + 1) * g), p2 = at((a + 1) * g, (o + 1) * g), p3 = at((a + 1) * g, o * g);
+            if (!inside(p0, (float)(g * 60 * px)) && !inside(p2, (float)(g * 60 * px))) continue;
+            dl->PrimReserve(6, 4);
+            const ImDrawIdx b = (ImDrawIdx)dl->_VtxCurrentIdx;
+            dl->PrimWriteVtx(p0, uv, col(v0)); dl->PrimWriteVtx(p1, uv, col(v1)); dl->PrimWriteVtx(p2, uv, col(v2)); dl->PrimWriteVtx(p3, uv, col(v3));
+            dl->PrimWriteIdx(b); dl->PrimWriteIdx((ImDrawIdx)(b + 1)); dl->PrimWriteIdx((ImDrawIdx)(b + 2));
+            dl->PrimWriteIdx(b); dl->PrimWriteIdx((ImDrawIdx)(b + 2)); dl->PrimWriteIdx((ImDrawIdx)(b + 3));
+        }
+        dl->Flags = fl;
+    }
     if (showClouds() && d.clouds && d.clouds->nx > 1 && d.clouds->ny > 1) {
         const UiCloudGrid& g = *d.clouds;
         const float alt = mapAlt().shown, th = 0.08f;
@@ -1405,6 +1455,22 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                 dl->AddQuadFilled(at(g.lat + hy, g.lon - hx), at(g.lat + hy, g.lon + hx), at(g.lat - hy, g.lon + hx), at(g.lat - hy, g.lon - hx), edrColor(g.edr, (int)(64 * a)));
             }
         };
+        // beyond the near grid: the ECMWF index for the whole world, 1 degree squares (display only)
+        if (d.turbWorld && !atSurface()) {
+            double la0 = 1e9, la1 = -1e9, lo0 = 1e9, lo1 = -1e9;   // the near grid's box
+            for (const UiTurbCell& g : cur) { la0 = std::min(la0, g.lat); la1 = std::max(la1, g.lat); lo0 = std::min(lo0, g.lon); lo1 = std::max(lo1, g.lon); }
+            const double span = rangeNm * 1.5 / 60.0, spanLon = span / std::max(0.1, kx);
+            const float alt = mapAlt().shown;
+            for (double la = std::floor(cLat - span) + 0.5; la <= cLat + span; la += 1.0)
+                for (double lo = std::floor(cLon - spanLon) + 0.5; lo <= cLon + spanLon; lo += 1.0) {
+                    if (la >= la0 - 0.5 && la <= la1 + 0.5 && lo >= lo0 - 0.5 && lo <= lo1 + 0.5) continue;
+                    double ti = 0;
+                    if (!d.turbWorld->sampleTi(la, lo, alt, ti)) continue;
+                    const double e = turb::ellrodToEdrEquivalent(ti);
+                    if (e < 0.08) continue;
+                    dl->AddQuadFilled(at(la + 0.5, lo - 0.5), at(la + 0.5, lo + 0.5), at(la - 0.5, lo + 0.5), at(la - 0.5, lo - 0.5), edrColor(e, 56));
+                }
+        }
         if (fade < 1.0f) drawGrid(prev, pdLat, pdLon, 1.0f - fade);
         drawGrid(cur, cdLat, cdLon, fade);
         dl->Flags = fl;
@@ -1412,7 +1478,9 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
     // echoes, drawn like a radar picture rather than as dots: every cell is spread onto a fine screen grid (full strength in its
     // core, fading out towards its edge, the strongest cell winning where they overlap), and the grid is drawn with the colours
     // blended between its points, so the echoes have soft edges and run from green rims into yellow, orange and red cores
-    if (showRadar() && d.res && d.res->radar.ok) {
+    const RadarMosaic* farRadar = d.far && d.far->radar ? d.far->radar.get() : nullptr;   // Europe beyond the loaded weather
+    const bool nearRadar = d.res && d.res->radar.ok;
+    if (showRadar() && (nearRadar || farRadar)) {
         const double cell = d.cfg ? d.cfg->radarCellNm : 6.0;
         const float step = std::max(4.0f, size / 120.0f);
         const int n = (int)std::ceil(size / step) + 1;
@@ -1424,22 +1492,23 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
         bool any = false;
         // With the natural picture the map shows the radar mosaic itself (1 nm, lightly smoothed), not the records' squares: the real
         // shapes of the echoes at every zoom ("radar too blocky", 2026-11-12). Without it, the blocks are spread as before.
-        const bool raster = !d.res->radar.view.empty();
+        const bool raster = nearRadar && !d.res->radar.view.empty();
         // beyond the loaded area: the whole mosaic, coarse (about 3 nm; map only, never sent to X-Plane), with the same light speckle
         static std::vector<unsigned char> far;
         far.assign(v.size(), 0);
-        const RadarMosaic* mos = d.res->radar.mosaic.get();
+        const RadarMosaic* mos = nearRadar ? d.res->radar.mosaic.get() : nullptr;
         const double nearNm = d.cfg ? d.cfg->radarRangeNm : 120.0;
-        if (mos) {
+        if (mos || farRadar) {
             for (int iy = 0; iy < n; ++iy)
                 for (int ix = 0; ix < n; ++ix) {
                     const float X = ix * step + p.x - c.x, Yp = c.y - (iy * step + p.y);
                     const double ex = (X * cr + Yp * sr) / px, ny = (-X * sr + Yp * cr) / px;
                     const double la = cLat + ny / 60.0, lo = cLon + ex / (60.0 * kx);
-                    if (raster ? d.res->radar.viewCovers(la, lo) : distNm(la, lo, d.res->centerLat, d.res->centerLon) <= nearNm) continue;
+                    if (nearRadar && (raster ? d.res->radar.viewCovers(la, lo) : distNm(la, lo, d.res->centerLat, d.res->centerLon) <= nearNm)) continue;
                     const size_t q = (size_t)iy * n + ix;
                     far[q] = 1;
-                    const float z = mos->at(la, lo);
+                    float z = mos ? mos->at(la, lo) : 0.0f;
+                    if (z < 8.0f && farRadar) z = farRadar->at(la, lo);
                     if (z < 8.0f) continue;
                     sw[q] = 1.0f; swv[q] = z; any = true;
                 }
@@ -1456,7 +1525,8 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
                     sw[q] = 1.0f; swv[q] = z; any = true;
                 }
         }
-        for (const auto& k : d.res->radar.cells) {
+        static const std::vector<RadarCell> kNoCells;
+        for (const auto& k : nearRadar ? d.res->radar.cells : kNoCells) {
             if (raster) break;
             if (k.dbz < 10) continue;
             const double sz = k.natural && k.sizeNm > 0 ? k.sizeNm : cell;
@@ -1636,12 +1706,13 @@ void radarCanvas(const UiData& d, const UiFonts& f, float size, double rangeNm, 
             if (interactive && w.show > 0.5f && dm < 10.0f && dm < bestPt && !(onCircle && w.surface)) { bestPt = dm; hitKind = 4; hitKey = w.key; hitAt = q; }
         }
     }
-    if (showPireps() && d.reports) {
-        for (const auto& pr : d.reports->pireps) {
+    if (showPireps() && (d.reports || d.far)) {
+        for (const hz::Pirep* prp : pirepsAll(d)) {
+            const hz::Pirep& pr = *prp;
             const ImVec2 q = at(pr.lat, pr.lon);
             if (!inside(q, 6)) continue;
             const ImU32 col = pr.urgent ? IM_COL32(235, 64, 64, 255) : IM_COL32(240, 150, 40, 255);   // UUA red, UA orange
-            if (interactive && d.forcePirep >= 0 && &pr == &d.reports->pireps[(size_t)std::min<int>(d.forcePirep, (int)d.reports->pireps.size() - 1)]) selOpen(1, pirepKey(pr), q);
+            if (interactive && d.forcePirep >= 0 && d.reports && !d.reports->pireps.empty() && &pr == &d.reports->pireps[(size_t)std::min<int>(d.forcePirep, (int)d.reports->pireps.size() - 1)]) selOpen(1, pirepKey(pr), q);
             if (interactive && !panGliding() && !pendingPirep().empty() && pendingPirep() == pirepKey(pr)) { selOpen(1, pirepKey(pr), q); pendingPirep().clear(); }
             const bool sel = isSel(1, pirepKey(pr));
             if (sel) { selAt(1, pirepKey(pr), q); dl->AddCircle(q, 10.0f, IM_COL32(255, 255, 255, 220), 20, 1.5f); }
@@ -1832,7 +1903,7 @@ ImVec2 keepClear(ImVec2 pos, ImVec2 sz, ImVec2 mn, ImVec2 mx, ImVec2 oMin, ImVec
 using Rect = std::pair<ImVec2, ImVec2>;
 bool infoWindowOne(const UiData& d, const UiFonts& f, SelItem& sel, const std::vector<Rect>& others, const std::vector<ImVec2>& otherPts) {
     const hz::Pirep* p = nullptr; const Station* st = nullptr; const hz::Advisory* av = nullptr;
-    if (sel.kind == 1 && d.reports && showPireps()) for (const auto& q : d.reports->pireps) if (pirepKey(q) == sel.key) p = &q;
+    if (sel.kind == 1 && showPireps()) for (const hz::Pirep* q : pirepsAll(d)) if (pirepKey(*q) == sel.key) p = q;
     if (sel.kind == 2 && d.res && showAirports()) for (const auto& q : d.res->stations) if (q.icao == sel.key) st = &q;
     bool worldOnly = false;   // an airport from the world METARs: shown on the map, not loaded into X-Plane
     if (sel.kind == 2 && !st && d.worldStations && showAirports()) for (const auto& q : *d.worldStations) if (q.icao == sel.key) { st = &q; worldOnly = true; break; }
@@ -3530,6 +3601,9 @@ void tabSettings(const UiData& d, const UiFonts& f, UiActions& act) {
         sectionTitle(f, "Window");
         settingRow("Dim at night", d.cfg->nightDim, "The window dims as the daylight goes (from sunset to dusk), and brightens again as it comes back. At night X-Plane's auto exposure counts the window, and darkens the cockpit while it is open. A popped-out window is never dimmed.", act.toggleNightDim);
         ImGui::Separator(); ImGui::Spacing();
+        sectionTitle(f, "Log");
+        settingRow("Detailed log", d.cfg->detailedLog, "On: X-Plane's Log.txt gets WXPlane's detail lines too (every record sent, the weather watch, blend, frame and visibility checks), for finding problems. Off: only the main events, warnings and errors.", act.toggleDetailedLog);
+        ImGui::Separator(); ImGui::Spacing();
         sectionTitle(f, "Status");
         mutedWrapped(d.status1 + (d.status2.empty() ? "" : "  ·  " + d.status2));
         mutedWrapped("Advanced settings are in WXPlane.cfg (X-Plane's Output/preferences folder).");
@@ -3997,4 +4071,41 @@ void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool p
     finish();
 }
 
+} // namespace wx
+
+namespace wx {
+bool uiMapView(double& lat, double& lon, double& rangeNm, double& drawnAt) {
+    if (!g_mapView.valid) return false;
+    lat = g_mapView.lat; lon = g_mapView.lon; rangeNm = g_mapView.range; drawnAt = g_mapView.at;
+    return true;
+}
+} // namespace wx
+
+namespace wx {
+void uiDrawTablet(const UiData& d, const UiFonts& f, float width, float height, UiActions& act) {
+    s_drawData = &d;
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    const ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
+                                ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::Begin("WXPlane tablet", nullptr, wf);
+    updateViewRot(d);
+    updateShownRange();
+    updateMapAlt(d);
+    updateWinds(d);
+    act.mapAltFt = !showTurb() ? -1.0 : (composite() ? -2.0 : mapAlt().shown);
+    if (!d.haveData || !d.res) {
+        ImGui::Dummy(ImVec2(0, height * 0.4f));
+        const char* t = "WXPlane: waiting for the first weather";
+        ImGui::SetCursorPosX((width - ImGui::CalcTextSize(t).x) * 0.5f);
+        muted(t);
+    } else {
+        if (panelBegin("tabletmap", ImVec2(0, 0), ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) radarPanel(d, f, true);
+        panelEnd();
+        UnitScope us(g_unitsAir);
+        infoWindow(d, f);
+    }
+    ImGui::End();
+}
 } // namespace wx

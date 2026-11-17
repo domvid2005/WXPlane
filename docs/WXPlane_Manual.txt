@@ -199,6 +199,15 @@ MAP
     "Map - Europe" (EUMETNET OPERA). There is no radar elsewhere.
   * The list next to the map shows the strongest storm cells (strength,
     rain rate, top, distance and bearing).
+  * Beyond the weather loaded into X-Plane the map still shows, for the
+    part in view (display only, never sent to X-Plane): global-model winds
+    aloft (Winds) and cloud cover as grey shading (Clouds), pilot reports,
+    ECMWF turbulence for the whole world (Turb, with realistic turbulence
+    on), the whole US radar mosaic and Europe's radar.
+  * AviTab: with AviTab in the 3D cockpit, its home screen gets a WXPlane
+    icon. Tap it and the WXPlane map fills the tablet; AviTab's Home button
+    goes back. It works alongside AviTab Browser. If the icon lands on one
+    of AviTab's own, move it with avitab_icon_x / avitab_icon_y.
 
 AIRPORTS
   * Search: type any ICAO code in the world (for example EGLL, KJFK, RJTT),
@@ -336,6 +345,13 @@ SETTINGS
                                        the radar's echo tops)
       update_check              (1)    at start-up, check whether a newer
                                        WXPlane is out (0 = never check)
+      detailed_log              (1)    WXPlane's detail lines in Log.txt (0 =
+                                       main events, warnings and errors only;
+                                       also in Settings)
+      avitab_tab                (1)    the WXPlane icon on AviTab's home screen
+      avitab_icon_x / _y  (0.357 / 0.568) where that icon sits on AviTab's
+                                       home screen (0..1 from the left / from
+                                       the bottom)
       world_metars              (1)    show every current METAR in the world
                                        on the map (display only, never sent
                                        to X-Plane; 0 = off, no download)

@@ -140,12 +140,38 @@ Clock::time_point g_lastRequest{};
 bool g_everRequested = false;
 std::string g_lastGoodStatus;
 
+// The detail lines Log.txt leaves out when "Detailed log" is off: dumps (indented lines) and the checks and watches; anything that
+// reports a problem is always written.
+bool logIsProblem(const char* s) {
+    std::string low(s ? s : "");
+    for (char& c : low) c = (char)std::tolower((unsigned char)c);
+    for (const char* w : {"fail", "error", "unavailable", "missing", "stalled", "not found", "warning", "could not", "would not"})
+        if (low.find(w) != std::string::npos) return true;
+    return false;
+}
+bool logIsDetail(const char* s) {
+    if (!s || !*s || logIsProblem(s)) return false;
+    if (s[0] == ' ') return true;
+    static const char* const kDetail[] = {
+        "weather watch", "frame check", "blend:", "first load", "visibility check", "dry runway", "altitude watch", "wind reference",
+        "magnetic variation", "region ", "station elevations", "NOAA crosscheck", "building this update", "weather update took",
+        "storm intensity outlines", "overcast tops", "submitted weather", "full weather picture", "radar: natural picture", "downloads:",
+        "writing winds aloft", "writing temperatures aloft", "map beyond the loaded weather", "world METARs (", "all weather records handed",
+        "countdown:", "%zu airport", "update check: up to date"};
+    for (const char* p : kDetail) if (std::strncmp(s, p, std::strlen(p)) == 0) return true;
+    if (std::strstr(s, " airport(s) left range")) return true;
+    if (std::strstr(s, ": X-Plane's region winds")) return true;
+    if (std::strstr(s, "): IAS ")) return true;
+    return false;
+}
+
 void logf(const char* fmt, ...) {
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
+    if (!g_cfg.detailedLog && logIsDetail(buf)) return;
     std::string line = std::string("[WXPlane] ") + buf + "\n";
     XPLMDebugString(line.c_str());
 }
@@ -158,6 +184,10 @@ std::string configPath() {
 }
 
 bool g_uiOpen = false;     // the weather window is open (the radar map's turbulence layer is only built then)
+bool g_tabletShown = false;   // the map is on AviTab's screen
+#ifndef WX_HARNESS
+void uiBuildTablet(const wx::UiFonts& fonts, float w, float h);
+#endif
 bool g_xpRealWx = false;   // X-Plane's own real-world weather is on (it should be off while WXPlane runs)
 std::string g_status1, g_status2;
 void setStatus(const std::string& l1, const std::string& l2) {
@@ -702,6 +732,7 @@ void eraseRec(const std::string& k) {
 double awGet(XPLMDataRef r);
 wx::turb::Fetcher g_turbFetch;
 wx::WorldMetars g_worldMetars;   // every current METAR in the world, for the map only (never sent to X-Plane)
+wx::FarField g_farField;         // winds, clouds and pilot reports for the map beyond the loaded weather (never sent to X-Plane)
 std::shared_ptr<const wx::hz::Snapshot> g_mapReports;   // latest pilot reports, for the map, the turbulence floor and windshear odds
 struct TurbState {
     XPLMDataRef arr = nullptr, alts = nullptr, gN = nullptr, simT = nullptr, elev = nullptr;
@@ -732,6 +763,7 @@ struct UiTurbState {
 
 void turbLog(const char* fmt, ...) {
     char buf[900]; va_list ap; va_start(ap, fmt); std::vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
+    if (!g_cfg.detailedLog && !logIsProblem(buf)) return;   // the turbulence's own lines are all detail
     XPLMDebugString((std::string("[WXPlane Turbulence] ") + buf + "\n").c_str());
 }
 
@@ -877,13 +909,27 @@ void turbRestore(const char* why) {
     turbLog("%s: X-Plane's region turbulence put back", why);
 }
 
+double steadyS();
 void turbulenceTick() {
     for (const auto& s : g_turbFetch.takeLog()) turbLog("%s", s.c_str());
     // after the first weather is in (nothing else is downloaded while X-Plane loads scenery, and the start-up load goes first)
     g_worldMetars.want(g_cfg.enabled && g_cfg.worldMetars && g_firstApplyDone);
     for (const auto& s : g_worldMetars.takeLog()) logf("%s", s.c_str());
+    {   // the map's view, while it is being drawn: the far field fetches for it
+        static double lastAt = -1, seenAt = -1e9;
+        double la = 0, lo = 0, rng = 0, at = 0;
+        const double t = steadyS();
 #ifndef WX_HARNESS
-    g_uiOpen = wx::xpui::isOpen();
+        if (wx::uiMapView(la, lo, rng, at) && at != lastAt) { lastAt = at; seenAt = t; }
+#else
+        (void)lastAt;
+#endif
+        const bool shown = g_cfg.enabled && t - seenAt < 3.0 && !g_lastRes.stations.empty();
+        g_farField.view(la, lo, shown ? rng : 0.0, g_lastRes.centerLat, g_lastRes.centerLon, std::max(g_cfg.searchNm, g_cfg.radarRangeNm));
+        for (const auto& s : g_farField.takeLog()) logf("%s", s.c_str());
+    }
+#ifndef WX_HARNESS
+    g_uiOpen = wx::xpui::isOpen() || g_tabletShown;
 #endif
     TurbState& t = g_ts;
     if (!t.init) {
@@ -1353,6 +1399,7 @@ void wsLog(const char* fmt, ...) {
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
+    if (!g_cfg.detailedLog && !logIsProblem(buf)) return;   // the windshear's own lines are all detail
     XPLMDebugString((std::string("[WXPlane Windshear] ") + buf + "\n").c_str());
 }
 
@@ -3177,6 +3224,14 @@ float flightLoop(float, float, int, void*) {
     const auto nowT = Clock::now();
 #ifndef WX_HARNESS
     wx::xpui::tick();   // a pending pop-out / pop-in of the weather window, made here and never inside the window's own drawing
+    {   // the AviTab tab
+        static bool started = false;
+        if (g_cfg.avitabTab && !started) { wx::xpui::tabletStart(uiBuildTablet, (float)g_cfg.avitabIconX, (float)g_cfg.avitabIconY); started = true; logf("AviTab tab: icon at %.3f, %.3f of AviTab's home screen", g_cfg.avitabIconX, g_cfg.avitabIconY); }
+        else if (!g_cfg.avitabTab && started) { wx::xpui::tabletStop(); started = false; }
+        const bool was = g_tabletShown;
+        g_tabletShown = started && wx::xpui::tabletTick();
+        if (g_tabletShown != was) logf("AviTab tab: the map %s", g_tabletShown ? "is on the tablet" : "left the tablet");
+    }
 #endif
     realWeatherCheck();
     if (g_firstApplyDone) altitudeWatch();
@@ -3629,12 +3684,18 @@ void startSearch(const std::string& icao) {
 }
 void stopSearch() { if (g_search.th.joinable()) g_search.th.join(); }
 
-// The weather window (4.0): fills the window's data from what the plugin already has, and acts on its buttons.
-void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
+// The weather window (4.0): fills the window's data from what the plugin already has, and acts on its buttons. `tablet`: the map
+// alone, on AviTab's screen.
+void uiBuildAny(const wx::UiFonts& fonts, float w, float h, bool poppedOut, bool tablet);
+void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) { uiBuildAny(fonts, w, h, poppedOut, false); }
+void uiBuildTablet(const wx::UiFonts& fonts, float w, float h) { uiBuildAny(fonts, w, h, false, true); }
+void uiBuildAny(const wx::UiFonts& fonts, float w, float h, bool poppedOut, bool tablet) {
     wx::UiData d;
     d.res = &g_lastRes; d.haveData = g_haveLast; d.cfg = &g_cfg; d.now = std::time(nullptr);
     d.extraServices = g_turbFetch.services(d.now);
     d.worldStations = g_worldMetars.stations();
+    d.far = g_farField.data();
+    d.turbWorld = g_turbFetch.inputs().ecGlobal;
     if (g_drLat && g_drLon) { d.lat = XPLMGetDatad(g_drLat); d.lon = XPLMGetDatad(g_drLon); d.havePos = !(d.lat == 0 && d.lon == 0); }
     if (g_drElev) d.altFt = XPLMGetDatad(g_drElev) / 0.3048;
     if (g_drTrkFetch) d.trackDeg = XPLMGetDataf(g_drTrkFetch);
@@ -3683,7 +3744,8 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
         d.searchBusy = g_search.busy; d.searchError = g_search.error; d.searchResult = g_search.result;
     }
     wx::UiActions act;
-    wx::uiDraw(d, fonts, w, h, poppedOut, act);
+    if (tablet) wx::uiDrawTablet(d, fonts, w, h, act);
+    else wx::uiDraw(d, fonts, w, h, poppedOut, act);
     if (!act.search.empty()) startSearch(act.search);
     uiTurbGridTick(act.mapAltFt);
     if (act.refresh) menuHandler(nullptr, (void*)(intptr_t)kRefresh);
@@ -3700,6 +3762,7 @@ void uiBuild(const wx::UiFonts& fonts, float w, float h, bool poppedOut) {
     if (act.toggleAtis) menuHandler(nullptr, (void*)(intptr_t)kAtis);
     if (act.toggleNightDim) { g_cfg.nightDim = !g_cfg.nightDim; wx::saveConfig(g_cfgPath, g_cfg); }
     if (act.dismissUpdate && !g_updDismissed) { g_updDismissed = true; logf("update check: notice dismissed"); }
+    if (act.toggleDetailedLog) { g_cfg.detailedLog = !g_cfg.detailedLog; wx::saveConfig(g_cfgPath, g_cfg); }
     if (act.toggleTurbWithXpr) { g_cfg.turbWithXPRealistic = !g_cfg.turbWithXPRealistic; wx::saveConfig(g_cfgPath, g_cfg); turbConflictCheck(true); }
 #ifndef WX_HARNESS
     wx::xpui::setNightDim(g_cfg.nightDim);
@@ -3871,6 +3934,7 @@ PLUGIN_API void XPluginStop(void) {
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
 #ifndef WX_HARNESS
     stopSearch();
+    wx::xpui::tabletStop();
     wx::xpui::destroy();
     if (g_cmdWindow) XPLMUnregisterCommandHandler(g_cmdWindow, cmdHandler, 1, (void*)(intptr_t)1);
     if (g_cmdRefresh) XPLMUnregisterCommandHandler(g_cmdRefresh, cmdHandler, 1, (void*)(intptr_t)2);
@@ -3887,6 +3951,7 @@ PLUGIN_API int XPluginEnable(void) {
     g_fetcher.start();
     g_turbFetch.start();
     g_worldMetars.start();
+    g_farField.start();
     if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayers();
     {   static bool hooked = false; if (!hooked) { hooked = true; XPLMRegisterMapCreationHook(mapCreated, nullptr); } }
     g_enabledAt = Clock::now();
@@ -3935,6 +4000,7 @@ PLUGIN_API void XPluginDisable(void) {
     g_fetcher.stop();
     g_turbFetch.stop();
     g_worldMetars.stop();
+    g_farField.stop();
     updateCheckStop();   // before the HTTP clean-up below
     turbRestore("plugin disabled");
     regionRestore("plugin disabled");

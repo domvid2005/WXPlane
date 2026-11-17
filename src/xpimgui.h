@@ -19,5 +19,12 @@ void togglePopOut();        // its own OS window, or back into the sim (asked fo
 void tick();                // from the flight loop: makes a pending pop-out / pop-in (never inside the window's own drawing)
 void destroy();             // plugin stop: the window, the ImGui context and the font texture
 
+// The AviTab tab (3D cockpit AviTab): a WXPlane icon on AviTab's home screen; tapped, the map over AviTab's screen until AviTab's
+// Home. iconX/iconY: the icon's centre on AviTab's home screen, 0..1 from the left and from the bottom.
+using TabletBuildFn = void (*)(const UiFonts& fonts, float width, float height);
+void tabletStart(TabletBuildFn build, float iconX, float iconY);
+bool tabletTick();          // from the flight loop: AviTab's state; true while the map is shown on the tablet
+void tabletStop();
+
 } // namespace xpui
 } // namespace wx

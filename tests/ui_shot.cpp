@@ -449,11 +449,61 @@ int main(int argc, char** argv) {
         }
         z.res = &r2;
         z.forceAloftLayers = 0; z.forceRange = 10; z.forcePanEastNm = 0; z.forcePanNorthNm = 0; z.forceLocalTime = 0;
-        for (int fr = 0; fr < 40; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); z.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(z, f, W, H, false, act); ImGui::Render(); ++frames; }
-        Canvas cv((int)(W * scale), (int)(H * scale));
-        raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
-        if (!writePng(cv, out + "/ui_map_world.png")) return 1;
-        std::printf("wrote %s\n", (out + "/ui_map_world.png").c_str());
+        {
+            for (int fr = 0; fr < 40; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); z.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(z, f, W, H, false, act); ImGui::Render(); ++frames; }
+            Canvas cv((int)(W * scale), (int)(H * scale));
+            raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+            if (!writePng(cv, out + "/ui_map_world.png")) return 1;
+            std::printf("wrote %s\n", (out + "/ui_map_world.png").c_str());
+        }
+        // and the far field: model winds and cloud cover on a 10-degree grid, pilot reports, Europe's radar (pan east over the Atlantic)
+        auto far = std::make_shared<FarData>();
+        far->gridDeg = 10;
+        for (int la = 10; la <= 70; la += 10)
+            for (int lo = -140; lo <= 40; lo += 10) {
+                AloftStation a; a.id = "m"; a.model = true; a.located = true; a.lat = la; a.lon = lo;
+                for (int ft = 3000; ft <= 45000; ft += 3000) {
+                    AloftLevel L; L.altFt = ft; L.hasWind = true; L.dirDeg = std::fmod(250 + la * 2 + lo * 0.5 + 360, 360); L.speedKt = 10 + ft / 600.0 + (la % 20);
+                    L.hasTemp = true; L.tempC = 15 - ft / 500.0;
+                    a.levels.push_back(L);
+                }
+                far->aloft.push_back(a);
+                FarData::Cloud c; c.lat = la; c.lon = lo; c.low = 0.2 + 0.6 * std::fabs(std::sin(la * 0.3 + lo * 0.1)); c.mid = c.low * 0.7; c.high = 0.4;
+                far->clouds.push_back(c);
+            }
+        for (int i = 0; i < 12; ++i) { hz::Pirep p; p.lat = 35 + i * 2; p.lon = -40 + i * 5; p.altFt = 35000; p.intensity = i % 3 ? "LGT" : "MOD"; p.raw = "UA /OV TEST" + std::to_string(i); p.obsTime = 1000 + i; p.urgent = i == 5; far->pireps.push_back(p); }
+        {
+            auto m = std::make_shared<RadarMosaic>();
+            m->lat0 = 72; m->lon0 = -12; m->dLat = m->dLon = 0.03; m->ni = 1500; m->nj = 1000;
+            m->v.assign((size_t)m->ni * m->nj, 0);
+            for (int j = 0; j < m->nj; ++j)
+                for (int i = 0; i < m->ni; ++i) {
+                    const double la = m->lat0 - j * m->dLat, lo = m->lon0 + i * m->dLon;
+                    const double dd = std::hypot((la - 51) / 3.0, (lo - 5) / 5.0);
+                    if (dd < 1) m->v[(size_t)j * m->ni + i] = (unsigned char)std::min(255.0, (45 * (1 - dd * dd)) * 3);
+                }
+            far->radar = m;
+        }
+        z.far = far;
+        z.forceAloftLayers = 3; z.forceLayers = 1 | 4; z.forceRange = 11; z.forcePanEastNm = 1700; z.forcePanNorthNm = 300; z.forceMapAltFt = 30000; z.forceMapMode = -1;
+        {
+            for (int fr = 0; fr < 40; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); z.forceTab = fr == 0 ? 2 : -1; UiActions act; uiDraw(z, f, W, H, false, act); ImGui::Render(); ++frames; }
+            Canvas cv((int)(W * scale), (int)(H * scale));
+            raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+            if (!writePng(cv, out + "/ui_map_far.png")) return 1;
+            std::printf("wrote %s\n", (out + "/ui_map_far.png").c_str());
+        }
+        {   // the AviTab tab: the map alone on AviTab's screen (1000 units across, below AviTab's header)
+            const float TW = 1000, TH = 1000 * 0.6f * (1 - 0.068f);
+            z.forceRange = 9;
+            for (int fr = 0; fr < 40; ++fr) { io.DeltaTime = 1.0f / 30.0f; io.DisplaySize = ImVec2(TW, TH); ImGui::NewFrame(); UiActions act; uiDrawTablet(z, f, TW, TH, act); ImGui::Render(); ++frames; }
+            Canvas cv((int)(TW * scale), (int)(TH * scale));
+            raster(cv, ImGui::GetDrawData(), tex, tw, th, scale);
+            io.DisplaySize = ImVec2(W, H);
+            if (!writePng(cv, out + "/ui_tablet.png")) return 1;
+            std::printf("wrote %s\n", (out + "/ui_tablet.png").c_str());
+        }
+        z.forceLayers = -1; z.forceMapAltFt = -1;
     }
     d.forceAloftLayers = 0; d.forceRange = 6; d.forcePanEastNm = d.forcePanNorthNm = 0; d.forceLocalTime = 0;   // back to 80 nm, on the aircraft
     for (int fr = 0; fr < 2; ++fr) { io.DeltaTime = 1.0f / 30.0f; ImGui::NewFrame(); UiActions act; uiDraw(d, f, W, H, false, act); ImGui::Render(); ++frames; }

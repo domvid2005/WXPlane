@@ -466,5 +466,332 @@ void destroy() {
     g_fontsDirty = true;
 }
 
+
+// ---- the AviTab tab ---------------------------------------------------------------------------------------------------------------
+// AviTab has no add-on interface; like AviTab Browser, WXPlane draws on AviTab's own screen in the 3D cockpit: an icon on its home
+// screen, and, once that is tapped (AviTab is sent to its About page underneath), the WXPlane map over the screen below AviTab's
+// header, so AviTab's own Home button still takes the tablet back. Taps come from X-Plane's 3D click position (click_3d_*_pixels,
+// panel pixels) through an invisible full-screen window that passes on every click it does not use. AviTab publishes where its
+// screen is on the panel (avitab/panel_left/bottom/width/height); its 800 x 480 picture is centred in that rectangle.
+namespace tab {
+struct Refs {
+    XPLMDataRef l = nullptr, b = nullptr, w = nullptr, h = nullptr, pow = nullptr, en = nullptr, menu = nullptr, bright = nullptr;
+    XPLMDataRef cx = nullptr, cy = nullptr, vr = nullptr, browser = nullptr;
+    XPLMCommandRef about = nullptr;
+    bool ok() const { return l && b && w && h && pow && en && menu && cx && cy; }
+} R;
+TabletBuildFn g_tbuild = nullptr;
+ImGuiContext* g_tctx = nullptr;
+UiFonts g_tfonts;
+int g_tfontTex = 0;
+float g_tfontScale = 0;
+XPLMWindowID g_cap = nullptr;
+bool g_registered = false, g_shown = false, g_wantShow = false, g_down = false;
+float g_iconX = 0.357f, g_iconY = 0.568f;   // the icon's centre on AviTab's home screen (0..1 from the left / the bottom)
+std::chrono::steady_clock::time_point g_tlast{};
+float g_nx = -1, g_ny = -1;   // the last tap position on the tablet (0..1)
+constexpr float kLogicalW = 1000.0f;   // the tablet's picture is laid out 1000 units wide
+constexpr float kHeaderFrac = 0.068f;  // AviTab's header (clock, Home) at the top of its screen: left to AviTab
+
+void findRefs() {
+    if (R.ok()) return;
+    R.l = XPLMFindDataRef("avitab/panel_left"); R.b = XPLMFindDataRef("avitab/panel_bottom");
+    R.w = XPLMFindDataRef("avitab/panel_width"); R.h = XPLMFindDataRef("avitab/panel_height");
+    R.pow = XPLMFindDataRef("avitab/panel_powered"); R.en = XPLMFindDataRef("avitab/panel_enabled");
+    R.menu = XPLMFindDataRef("avitab/is_in_menu"); R.bright = XPLMFindDataRef("avitab/brightness");
+    R.cx = XPLMFindDataRef("sim/graphics/view/click_3d_x_pixels"); R.cy = XPLMFindDataRef("sim/graphics/view/click_3d_y_pixels");
+    R.vr = XPLMFindDataRef("sim/graphics/VR/enabled");
+    R.browser = XPLMFindDataRef("avitab_browser/visible");
+    R.about = XPLMFindCommand("AviTab/app_about");
+}
+// AviTab's 800 x 480 screen on the panel (pixels), centred in its rectangle
+bool screen(float& x, float& y, float& w, float& h) {
+    if (!R.ok()) return false;
+    x = (float)XPLMGetDatai(R.l); y = (float)XPLMGetDatai(R.b); w = (float)XPLMGetDatai(R.w); h = (float)XPLMGetDatai(R.h);
+    if (w < 50 || h < 30) return false;
+    const float ah = w * 0.6f;
+    if (h > ah) { y += (h - ah) * 0.5f; h = ah; }
+    return true;
+}
+bool powered() { return R.ok() && XPLMGetDatai(R.pow) && XPLMGetDatai(R.en); }
+bool inMenu() { return R.ok() && XPLMGetDatai(R.menu) != 0; }
+bool browserShown() { return R.browser && XPLMGetDatai(R.browser) != 0; }
+// the tap, as 0..1 across AviTab's screen (from the left, from the bottom)
+bool tapPos(float& nx, float& ny) {
+    float x, y, w, h;
+    if (!screen(x, y, w, h)) return false;
+    const float px = XPLMGetDataf(R.cx), py = XPLMGetDataf(R.cy);
+    if (px < 0 || py < 0) return false;
+    nx = (px - x) / w; ny = (py - y) / h;
+    return nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1;
+}
+void iconRect(float w, float h, float& x0, float& y0, float& x1, float& y1) {   // in screen pixels from its bottom-left
+    const float iw = w * 0.125f, ih = iw * 1.12f;
+    x0 = g_iconX * w - iw * 0.5f; x1 = x0 + iw; y0 = g_iconY * h - ih * 0.5f; y1 = y0 + ih;
+}
+bool onIcon(float nx, float ny) {
+    float x, y, w, h, x0, y0, x1, y1;
+    if (!screen(x, y, w, h)) return false;
+    iconRect(w, h, x0, y0, x1, y1);
+    return nx * w >= x0 && nx * w <= x1 && ny * h >= y0 && ny * h <= y1;
+}
+
+void buildTabletFonts(float scale) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    g_tfonts = uiLoadFonts(scale);
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    if (!g_tfontTex) XPLMGenerateTextureNumbers(&g_tfontTex, 1);
+    XPLMBindTexture2d(g_tfontTex, 0);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (GLint)GL_LINEAR);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (GLint)GL_LINEAR);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (GLint)GL_CLAMP_TO_EDGE);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (GLint)GL_CLAMP_TO_EDGE);
+    gl.PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    gl.TexImage2D(GL_TEXTURE_2D, 0, (GLint)GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    io.Fonts->SetTexID((ImTextureID)(intptr_t)g_tfontTex);
+    io.Fonts->ClearTexData();
+    g_tfonts.logo = nullptr;
+    g_tfontScale = scale;
+}
+
+// ImGui output onto the panel: `ox, oy` the top-left corner of the picture in panel pixels, `k` panel pixels per unit (y up on the
+// panel, down in ImGui). Clipping with the GL matrices of the panel pass (the panel texture's own pixels).
+void renderOnPanel(ImDrawData* dd, float ox, float oy, float k) {
+    float mv[16], pr[16];
+    GLint vp[4];
+    gl.GetFloatv(GL_MODELVIEW_MATRIX, mv);
+    gl.GetFloatv(GL_PROJECTION_MATRIX, pr);
+    gl.GetIntegerv(GL_VIEWPORT, vp);
+    Xform xf;
+    std::memcpy(xf.mv, mv, sizeof mv); std::memcpy(xf.pr, pr, sizeof pr);
+    xf.vp[0] = vp[0]; xf.vp[1] = vp[1]; xf.vp[2] = vp[0] + vp[2]; xf.vp[3] = vp[1] + vp[3]; xf.ok = true;
+    XPLMSetGraphicsState(0, 1, 0, 0, 1, 0, 0);
+    gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    const bool cull = gl.IsEnabled(GL_CULL_FACE) != 0, sc = gl.IsEnabled(GL_SCISSOR_TEST) != 0;
+    GLint oldBox[4] = {0, 0, 0, 0};
+    if (sc) gl.GetIntegerv(GL_SCISSOR_BOX, oldBox);
+    gl.Disable(GL_CULL_FACE);
+    gl.Enable(GL_SCISSOR_TEST);
+    gl.PushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+    gl.EnableClientState(GL_VERTEX_ARRAY);
+    gl.EnableClientState(GL_TEXTURE_COORD_ARRAY);
+    gl.EnableClientState(GL_COLOR_ARRAY);
+    gl.MatrixMode(GL_MODELVIEW);
+    gl.PushMatrix();
+    gl.Translatef(ox, oy, 0.0f);
+    gl.Scalef(k, -k, 1.0f);
+    gl.Color4f(1, 1, 1, 1);
+    int boundTex = -1;
+    for (int n = 0; n < dd->CmdListsCount; ++n) {
+        const ImDrawList* cl = dd->CmdLists[n];
+        const ImDrawVert* vb = cl->VtxBuffer.Data;
+        const ImDrawIdx* ib = cl->IdxBuffer.Data;
+        for (const ImDrawCmd& cmd : cl->CmdBuffer) {
+            if (cmd.UserCallback) continue;
+            if (cmd.ClipRect.z <= cmd.ClipRect.x || cmd.ClipRect.w <= cmd.ClipRect.y) continue;
+            float x0, y0, x1, y1;
+            toNative(xf, ox + cmd.ClipRect.x * k, oy - cmd.ClipRect.w * k, x0, y0);
+            toNative(xf, ox + cmd.ClipRect.z * k, oy - cmd.ClipRect.y * k, x1, y1);
+            int sx = (int)std::floor(std::min(x0, x1)), sy = (int)std::floor(std::min(y0, y1));
+            int ex = (int)std::ceil(std::max(x0, x1)), ey = (int)std::ceil(std::max(y0, y1));
+            if (sc) { sx = std::max(sx, oldBox[0]); sy = std::max(sy, oldBox[1]); ex = std::min(ex, oldBox[0] + oldBox[2]); ey = std::min(ey, oldBox[1] + oldBox[3]); }
+            if (ex <= sx || ey <= sy) continue;
+            gl.Scissor(sx, sy, ex - sx, ey - sy);
+            const int tex = (int)(intptr_t)cmd.GetTexID();
+            if (tex != boundTex) { XPLMBindTexture2d(tex, 0); boundTex = tex; }
+            const ImDrawVert* v = vb + cmd.VtxOffset;
+            gl.VertexPointer(2, GL_FLOAT, sizeof(ImDrawVert), (const void*)((const char*)v + offsetof(ImDrawVert, pos)));
+            gl.TexCoordPointer(2, GL_FLOAT, sizeof(ImDrawVert), (const void*)((const char*)v + offsetof(ImDrawVert, uv)));
+            gl.ColorPointer(4, GL_UNSIGNED_BYTE, sizeof(ImDrawVert), (const void*)((const char*)v + offsetof(ImDrawVert, col)));
+            gl.DrawElements(GL_TRIANGLES, (GLsizei)cmd.ElemCount, sizeof(ImDrawIdx) == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, ib + cmd.IdxOffset);
+        }
+    }
+    gl.PopMatrix();
+    gl.PopClientAttrib();
+    gl.Color4f(1, 1, 1, 1);
+    XPLMBindTexture2d(0, 0);
+    if (sc) gl.Scissor(oldBox[0], oldBox[1], oldBox[2], oldBox[3]); else gl.Disable(GL_SCISSOR_TEST);
+    if (cull) gl.Enable(GL_CULL_FACE);
+}
+
+// the tablet's own ImGui context (current on return) with its fonts for `sw` panel pixels across
+void ensureContext(float sw) {
+    if (!g_tctx) {
+        g_tctx = ImGui::CreateContext();
+        ImGui::SetCurrentContext(g_tctx);
+        ImGui::GetIO().IniFilename = nullptr;
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+        uiStyle();
+    }
+    ImGui::SetCurrentContext(g_tctx);
+    const float scale = std::max(1.0f, std::min(3.0f, sw / kLogicalW * 1.5f));
+    if (std::fabs(scale - g_tfontScale) > 0.05f) buildTabletFonts(scale);
+}
+
+// one ImGui frame on the tablet: the map over AviTab's About page
+void frame(float sx, float sy, float sw, float sh) {
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ensureContext(sw);
+    const float areaH = sh * (1.0f - kHeaderFrac);   // below AviTab's header
+    const float k = sw / kLogicalW;                   // panel pixels per unit
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = kLogicalW, H = areaH / k;
+    io.DisplaySize = ImVec2(W, H);
+    const auto now = std::chrono::steady_clock::now();
+    float dt = g_tlast.time_since_epoch().count() ? std::chrono::duration<float>(now - g_tlast).count() : 1.0f / 30.0f;
+    io.DeltaTime = std::max(1e-4f, std::min(0.5f, dt));
+    g_tlast = now;
+    if (g_nx >= 0) io.AddMousePosEvent(g_nx * W, (1.0f - g_ny / (1.0f - kHeaderFrac)) * H);
+    else io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+    ImGui::NewFrame();
+    if (g_tbuild) g_tbuild(g_tfonts, W, H);
+    ImGui::Render();
+    const float bright = R.bright ? std::max(0.15f, std::min(1.0f, XPLMGetDataf(R.bright))) : 1.0f;
+    dimVertices(ImGui::GetDrawData(), bright);
+    renderOnPanel(ImGui::GetDrawData(), sx, sy + areaH, k);
+    if (prev) ImGui::SetCurrentContext(prev);
+}
+
+void drawIcon(float sx, float sy, float sw, float sh) {
+    float x0, y0, x1, y1;
+    iconRect(sw, sh, x0, y0, x1, y1);
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ensureContext(sw);
+    // drawn with ImGui too: a rounded square with "WX" and a label, the size of AviTab's own icons
+    const float k = sw / kLogicalW;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(kLogicalW, sh / k);
+    io.DeltaTime = 1.0f / 30.0f;
+    ImGui::NewFrame();
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 a(x0 / k, (sh - y1) / k), b(x1 / k, (sh - y0) / k);
+    const float r = (b.x - a.x) * 0.16f;
+    const float iconH = (b.x - a.x);
+    dl->AddRectFilled(a, ImVec2(b.x, a.y + iconH), IM_COL32(20, 34, 52, 255), r);
+    dl->AddRect(a, ImVec2(b.x, a.y + iconH), IM_COL32(110, 168, 255, 255), r, 0, 2.0f);
+    const float fs = iconH * 0.42f;
+    const ImVec2 ts = g_tfonts.title->CalcTextSizeA(fs, FLT_MAX, 0, "WX");
+    dl->AddText(g_tfonts.title, fs, ImVec2((a.x + b.x - ts.x) * 0.5f, a.y + (iconH - ts.y) * 0.5f), IM_COL32(255, 255, 255, 255), "WX");
+    const float ls = iconH * 0.16f;
+    const ImVec2 lsz = g_tfonts.body->CalcTextSizeA(ls, FLT_MAX, 0, "WXPlane");
+    dl->AddText(g_tfonts.body, ls, ImVec2((a.x + b.x - lsz.x) * 0.5f, a.y + iconH + 2), IM_COL32(255, 255, 255, 255), "WXPlane");
+    ImGui::Render();
+    renderOnPanel(ImGui::GetDrawData(), sx, sy + sh, k);
+    if (prev) ImGui::SetCurrentContext(prev);
+}
+
+int drawCb(XPLMDrawingPhase, int, void*) {
+    if (!g_tbuild || !loadGl()) return 1;
+    findRefs();
+    float x, y, w, h;
+    if (!powered() || !screen(x, y, w, h)) return 1;
+    if (g_shown) frame(x, y, w, h);
+    else if (inMenu() && !browserShown()) drawIcon(x, y, w, h);
+    return 1;
+}
+
+void imguiMouse(bool down) {
+    if (!g_tctx) return;
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(g_tctx);
+    ImGui::GetIO().AddMouseButtonEvent(0, down);
+    if (prev) ImGui::SetCurrentContext(prev);
+}
+
+int capClick(XPLMWindowID, int, int, XPLMMouseStatus st, void*) {
+    findRefs();
+    if (!powered()) return 0;
+    float nx, ny;
+    const bool on = tapPos(nx, ny);
+    if (st == xplm_MouseDown) {
+        if (!on) return 0;
+        if (!g_shown) {
+            if (inMenu() && !browserShown() && onIcon(nx, ny)) {   // the icon: AviTab to its About page, the map over it
+                if (R.about) XPLMCommandOnce(R.about);
+                g_wantShow = true;
+                return 1;
+            }
+            return 0;
+        }
+        if (ny > 1.0f - kHeaderFrac) return 0;   // AviTab's header (its Home button): AviTab's
+        g_nx = nx; g_ny = ny; g_down = true;
+        imguiMouse(true);
+        return 1;
+    }
+    if (!g_down) return 0;
+    if (on) { g_nx = nx; g_ny = std::min(ny, 1.0f - kHeaderFrac); }
+    if (st == xplm_MouseUp) { g_down = false; imguiMouse(false); }
+    return 1;
+}
+int capWheel(XPLMWindowID, int, int, int axis, int clicks, void*) {
+    if (!g_shown || !g_tctx) return 0;
+    float nx, ny;
+    if (!tapPos(nx, ny) || ny > 1.0f - kHeaderFrac) return 0;
+    g_nx = nx; g_ny = ny;
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(g_tctx);
+    ImGui::GetIO().AddMouseWheelEvent(axis == 1 ? (float)clicks : 0.0f, axis == 0 ? (float)clicks : 0.0f);
+    if (prev) ImGui::SetCurrentContext(prev);
+    return 1;
+}
+XPLMCursorStatus capCursor(XPLMWindowID, int, int, void*) {
+    if (g_shown && !g_down) { float nx, ny; if (tapPos(nx, ny)) { g_nx = nx; g_ny = std::min(ny, 1.0f - kHeaderFrac); } }
+    return xplm_CursorDefault;
+}
+
+void makeCaptureWindow() {
+    if (g_cap) return;
+    if (R.vr && XPLMGetDatai(R.vr)) return;
+    int l, t, r, b;
+    XPLMGetScreenBoundsGlobal(&l, &t, &r, &b);
+    XPLMCreateWindow_t p{};
+    p.structSize = sizeof p;
+    p.left = l; p.top = t; p.right = r; p.bottom = b;
+    p.visible = 1;
+    p.drawWindowFunc = [](XPLMWindowID, void*) {};
+    p.handleMouseClickFunc = capClick;
+    p.handleRightClickFunc = [](XPLMWindowID, int, int, XPLMMouseStatus, void*) { return 0; };
+    p.handleMouseWheelFunc = capWheel;
+    p.handleKeyFunc = [](XPLMWindowID, char, XPLMKeyFlags, char, void*, int) {};
+    p.handleCursorFunc = capCursor;
+    p.layer = xplm_WindowLayerFlightOverlay;
+    p.decorateAsFloatingWindow = xplm_WindowDecorationNone;
+    g_cap = XPLMCreateWindowEx(&p);
+    XPLMSetWindowPositioningMode(g_cap, xplm_WindowFullScreenOnMonitor, -1);
+}
+} // namespace tab
+
+void tabletStart(TabletBuildFn build, float iconX, float iconY) {
+    tab::g_tbuild = build;
+    tab::g_iconX = iconX; tab::g_iconY = iconY;
+    if (!tab::g_registered) { XPLMRegisterDrawCallback(tab::drawCb, xplm_Phase_Gauges, 0, nullptr); tab::g_registered = true; }
+}
+
+bool tabletTick() {
+    using namespace tab;
+    if (!g_tbuild) return false;
+    findRefs();
+    if (!R.ok()) { g_shown = false; return false; }   // AviTab is not installed (or not loaded yet)
+    makeCaptureWindow();
+    if (g_wantShow && !inMenu()) { g_shown = true; g_wantShow = false; }
+    if (g_shown && (inMenu() || !powered() || browserShown())) { g_shown = false; g_down = false; g_nx = -1; }
+    return g_shown;
+}
+
+void tabletStop() {
+    using namespace tab;
+    if (g_registered) { XPLMUnregisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, nullptr); g_registered = false; }
+    if (g_cap) { XPLMDestroyWindow(g_cap); g_cap = nullptr; }
+    if (g_tctx) { ImGuiContext* prev = ImGui::GetCurrentContext(); ImGui::DestroyContext(g_tctx); g_tctx = nullptr; if (prev && prev != g_tctx) ImGui::SetCurrentContext(prev); }
+    if (g_tfontTex && gl.DeleteTextures) { const unsigned int t = (unsigned int)g_tfontTex; gl.DeleteTextures(1, &t); }
+    g_tfontTex = 0; g_tfontScale = 0;
+    g_shown = g_wantShow = false;
+    g_tbuild = nullptr;
+}
+
 } // namespace xpui
 } // namespace wx

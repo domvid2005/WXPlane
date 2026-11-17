@@ -36,6 +36,10 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "night_dim") c.nightDim = toBool(v);
         else if (k == "update_check") c.updateCheck = toBool(v);
         else if (k == "world_metars") c.worldMetars = toBool(v);
+        else if (k == "detailed_log") c.detailedLog = toBool(v);
+        else if (k == "avitab_tab") c.avitabTab = toBool(v);
+        else if (k == "avitab_icon_x") c.avitabIconX = std::atof(v.c_str());
+        else if (k == "avitab_icon_y") c.avitabIconY = std::atof(v.c_str());
         else if (k == "frame_check") c.frameCheck = toBool(v);
         else if (k == "use_aloft") c.useAloft = toBool(v);
         else if (k == "update_minutes") c.updateMinutes = (int)(d < 1 ? 1 : d);
@@ -204,6 +208,10 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "night_dim = " << (c.nightDim ? 1 : 0) << "\n"
       << "update_check = " << (c.updateCheck ? 1 : 0) << "\n"
       << "world_metars = " << (c.worldMetars ? 1 : 0) << "\n"
+      << "detailed_log = " << (c.detailedLog ? 1 : 0) << "\n"
+      << "avitab_tab = " << (c.avitabTab ? 1 : 0) << "\n"
+      << "avitab_icon_x = " << c.avitabIconX << "\n"
+      << "avitab_icon_y = " << c.avitabIconY << "\n"
       << "frame_check = " << (c.frameCheck ? 1 : 0) << "\n"
       << "use_aloft = " << (c.useAloft ? 1 : 0) << "\n"
       << "update_minutes = " << c.updateMinutes << "\n"

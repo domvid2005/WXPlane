@@ -68,6 +68,7 @@ private:
         std::time_t valid = 0;
         std::map<std::string, std::string> raw;   // "u700" -> GRIB message
         std::shared_ptr<const EcCube> cube;
+        std::shared_ptr<const EcCube> global;   // the whole world at 1 degree, for the map only
     };
     std::time_t eRun_ = 0, eNextRunCheck_ = 0, eNextTry_ = 0;
     std::map<std::string, EStep> eSteps_;

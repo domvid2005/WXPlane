@@ -492,6 +492,56 @@ void Fetcher::ecStep(double lat, double lon, double alt, std::time_t now) {
             changed = true;
         }
         cubes[s] = E.cube;
+        if (s == 0 && !E.global && !stop_) {
+            // the whole world at 1 degree for the map beyond the loaded weather (display only): each 0.25-degree field averaged in
+            // 4 x 4 blocks, level by level, so only one global field is held at a time
+            std::vector<std::vector<float>> us, vs;
+            std::vector<int> levs;
+            gribx::Grid g1;
+            bool ok = true;
+            for (int lev : ecmwfLevels()) {
+                auto iu = E.raw.find("u" + std::to_string(lev)), iv = E.raw.find("v" + std::to_string(lev));
+                if (iu == E.raw.end() || iv == E.raw.end()) continue;
+                gribx::Message mu, mv;
+                std::vector<float> fu, fv;
+                if (!gribx::decode((const uint8_t*)iu->second.data(), iu->second.size(), mu, fu) ||
+                    !gribx::decode((const uint8_t*)iv->second.data(), iv->second.size(), mv, fv)) { ok = false; break; }
+                const gribx::Grid& g = mu.grid;
+                if (g.tmpl != 0 || g.di <= 0 || (g.scan & 0x40) || fu.size() != (size_t)g.nx * g.ny || fv.size() != fu.size()) { ok = false; break; }
+                const int fct = std::max(1, (int)std::lround(1.0 / g.di));
+                const int nx2 = g.nx / fct, ny2 = (g.ny - 1) / fct + 1;
+                std::vector<float> cu((size_t)nx2 * ny2), cv(cu.size());
+                for (int j2 = 0; j2 < ny2; ++j2)
+                    for (int i2 = 0; i2 < nx2; ++i2) {
+                        double su = 0, sv = 0;
+                        int n = 0;
+                        for (int b = -fct / 2; b <= fct / 2; ++b)
+                            for (int a = -fct / 2; a <= fct / 2; ++a) {
+                                const int j = j2 * fct + b, i = ((i2 * fct + a) % g.nx + g.nx) % g.nx;
+                                if (j < 0 || j >= g.ny) continue;
+                                const float x = fu[(size_t)j * g.nx + i], y = fv[(size_t)j * g.nx + i];
+                                if (!std::isfinite(x) || !std::isfinite(y)) continue;
+                                su += x; sv += y; ++n;
+                            }
+                        cu[(size_t)j2 * nx2 + i2] = n ? (float)(su / n) : 0.0f;
+                        cv[(size_t)j2 * nx2 + i2] = n ? (float)(sv / n) : 0.0f;
+                    }
+                g1 = g; g1.nx = nx2; g1.ny = ny2; g1.di = g.di * fct; g1.dj = g.dj * fct;
+                us.push_back(std::move(cu)); vs.push_back(std::move(cv)); levs.push_back(lev);
+            }
+            if (ok && levs.size() >= 2) {
+                std::vector<EcLevelField> f;
+                for (size_t k = 0; k < levs.size(); ++k) f.push_back({levs[k], &us[k], &vs[k]});
+                auto gc = std::make_shared<EcCube>();
+                std::string problem;
+                if (buildEcCube(g1, f, 0.0, 0.0, 179.0, *gc, problem)) {
+                    gc->valid = E.valid; gc->run = E.cube ? E.cube->run : std::string();
+                    E.global = gc;
+                    changed = true;
+                    log("ECMWF: the whole world at 1 degree for the map (display only)");
+                } else log("ECMWF: world map field failed: " + problem);
+            }
+        }
     }
     // Steps no longer needed are dropped.
     for (auto it = eSteps_.begin(); it != eSteps_.end();) {
@@ -504,6 +554,7 @@ void Fetcher::ecStep(double lat, double lon, double alt, std::time_t now) {
         std::lock_guard<std::mutex> l(mx_);
         pub_.ecA = cubes[0];
         pub_.ecB = cubes[1] != cubes[0] ? cubes[1] : nullptr;
+        for (const auto& kv : eSteps_) if (kv.second.global && kv.second.cube == cubes[0]) pub_.ecGlobal = kv.second.global;
     }
 }
 

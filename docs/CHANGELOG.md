@@ -4,6 +4,9 @@
 - Map: every airport in the world with a current METAR (aviationweather.gov, every 10 minutes), as smaller dots by flight category; click for the METAR. Display only, never sent to X-Plane (world_metars)
 - Map: in the US, the whole NOAA radar mosaic beyond the weather loaded into X-Plane (about 3 nm detail), display only
 - Map: zoom out to 640, 1280 and 2500 nm
+- Map beyond the weather loaded into X-Plane (display only): global-model winds aloft and cloud cover for the part of the map in view, pilot reports there, ECMWF turbulence for the whole world (1 degree), and Europe's radar (OPERA)
+- AviTab tab: a WXPlane icon on AviTab's home screen (3D cockpit AviTab); tapped, the WXPlane map fills the tablet until AviTab's Home. Works alongside AviTab Browser (avitab_tab, avitab_icon_x / avitab_icon_y)
+- Settings: Detailed log, off for a shorter Log.txt (main events, warnings and errors only) (detailed_log)
 
 ## 5.1.2
 - Overcast (OVC) at a steady 97% coverage

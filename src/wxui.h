@@ -9,6 +9,8 @@
 
 #include "config.h"
 #include "fetcher.h"
+#include "turbulence.h"
+#include "worldfetch.h"
 #include "hazards.h"
 #include "status.h"
 
@@ -65,6 +67,7 @@ struct UiData {
     double turbGridDLat = 0.2, turbGridDLon = 0.27;   // the grid's spacing (degrees), so neighbouring squares share their corners exactly
     double turbGridAltFt = 0;           // the altitude the turbulence grid was sampled at (the map's altitude slider)
     long turbGridSeq = 0;               // changes whenever the turbulence grid is rebuilt (the map cross-fades old and new)
+    std::shared_ptr<const turb::EcCube> turbWorld;   // ECMWF turbulence for the whole world at 1 degree (the map beyond the loaded weather)
     std::shared_ptr<const UiCloudGrid> clouds;   // clouds around the aircraft (map layer), nullptr: none yet
     // the weather is being (re)built from scratch: start-up, switched back on, a jump to a new place (header countdown)
     double loadingS = -1;               // seconds until it should all be in, -1: not loading
@@ -72,6 +75,7 @@ struct UiData {
     std::string loadingWhat;            // e.g. "Loading weather", "New location"
     std::shared_ptr<const hz::Snapshot> reports;
     std::shared_ptr<const std::vector<Station>> worldStations;   // every current METAR in the world (map only, never sent to X-Plane)
+    std::shared_ptr<const FarData> far;   // winds, clouds and pilot reports for the map beyond the loaded weather (display only)
     // windshear
     bool wsOn = false;
     int wsSources = 0, wsHigh = 0, wsMed = 0, wsLow = 0;
@@ -106,6 +110,7 @@ struct UiActions {
     // the settings (the plugin's former menu toggles): flip these
     bool toggleNightDim = false;
     bool dismissUpdate = false;         // the yellow update notice's Dismiss button
+    bool toggleDetailedLog = false;     // Log.txt detail lines on / off
     bool toggleTurbWithXpr = false;     // XPRealistic for its sounds only: WXPlane does the turbulence anyway
     bool toggleEnabled = false, toggleAtis = false, toggleAloft = false, toggleTurbulence = false, toggleWindshear = false;
     // the one "Realistic turbulence & windshear" switch: set both to this (-1: untouched)
@@ -139,5 +144,9 @@ void uiStyle();
 UiFonts uiLoadFonts(float pixelScale);
 // Draws the whole window into the current ImGui frame, filling `size` (window units) from the top-left corner.
 void uiDraw(const UiData& d, const UiFonts& f, float width, float height, bool poppedOut, UiActions& act);
+// The AviTab tab: the map alone (layers, range, altitude, the info windows), filling width x height (window units).
+void uiDrawTablet(const UiData& d, const UiFonts& f, float width, float height, UiActions& act);
+// The map's view as last drawn (centre, range in nm) and when (ImGui time); false before the map was ever shown.
+bool uiMapView(double& lat, double& lon, double& rangeNm, double& drawnAt);
 
 } // namespace wx
