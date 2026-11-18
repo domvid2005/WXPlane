@@ -12,6 +12,7 @@
 #include "XPLMDataAccess.h"
 #include "XPLMDisplay.h"
 #include "XPLMGraphics.h"
+#include "XPLMProcessing.h"
 #include "XPLMUtilities.h"
 #include "imgui.h"
 #include "version.h"
@@ -709,8 +710,25 @@ void drawIcon(float sx, float sy, float sw, float sh) {
     if (prev) ImGui::SetCurrentContext(prev);
 }
 
-int drawCb(XPLMDrawingPhase, int, void*) {
+// Which of the plugins drawing on the panel draws last is not documented (2026-11-17, ToLiss A320: the icon was drawn in the right
+// place every frame and never seen, AviTab drew over it). AviTab registers its drawing when an aircraft loads, so WXPlane has two
+// callbacks: one from before (plugin enable) and one re-registered after every aircraft load. Whatever X-Plane's order, one of them
+// runs after AviTab's: of each pair called in a frame, only the second one draws.
+bool g_lateRegistered = false;
+int g_pairCycle = -1, g_pairFirst = -1;
+bool turnToDraw(int who) {
+    if (!g_lateRegistered) return true;   // only one callback: it draws
+    const int c = XPLMGetCycleNumber();
+    if (c != g_pairCycle || g_pairFirst < 0) { g_pairCycle = c; g_pairFirst = who; return false; }   // the first of the pair
+    if (who == g_pairFirst) return false;   // the same one again (another panel pass): still the first
+    g_pairFirst = -1;
+    static int told = -1;
+    if (told != who) { told = who; XPLMDebugString(who == 1 ? "[WXPlane] AviTab tab: drawing from the callback registered after the aircraft loaded\n" : "[WXPlane] AviTab tab: drawing from the callback registered at start-up\n"); }
+    return true;
+}
+int drawCb(XPLMDrawingPhase, int, void* ref) {
     if (!g_tbuild || !loadGl()) return 1;
+    if (!turnToDraw((int)(intptr_t)ref)) return 1;
     findRefs();
     if (!R.ok()) { note("AviTab's datarefs not found (is AviTab installed and loaded?)"); return 1; }
     float x, y, w, h;
@@ -799,12 +817,29 @@ void makeCaptureWindow() {
 void tabletStart(TabletBuildFn build, float iconX, float iconY) {
     tab::g_tbuild = build;
     tab::g_iconX = iconX; tab::g_iconY = iconY;
-    if (!tab::g_registered) { XPLMRegisterDrawCallback(tab::drawCb, xplm_Phase_Gauges, 0, nullptr); tab::g_registered = true; }
+    if (!tab::g_registered) { XPLMRegisterDrawCallback(tab::drawCb, xplm_Phase_Gauges, 0, (void*)(intptr_t)0); tab::g_registered = true; }
+}
+
+namespace tab { double g_reRegisterAt = -1; }
+void tabletPlaneLoaded() {   // AviTab sets up its drawing again: the late callback follows it now, and once more a few seconds later
+    using namespace tab;
+    if (!g_registered) return;
+    if (g_lateRegistered) XPLMUnregisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, (void*)(intptr_t)1);
+    XPLMRegisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, (void*)(intptr_t)1);
+    g_lateRegistered = true;
+    g_pairFirst = -1;
+    g_reRegisterAt = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() + 5.0;
 }
 
 bool tabletTick() {
     using namespace tab;
     if (!g_tbuild) return false;
+    if (g_reRegisterAt > 0 && std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() >= g_reRegisterAt) {
+        g_reRegisterAt = -1;
+        XPLMUnregisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, (void*)(intptr_t)1);
+        XPLMRegisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, (void*)(intptr_t)1);
+        g_pairFirst = -1;
+    }
     findRefs();
     if (!R.ok()) { g_shown = false; return false; }   // AviTab is not installed (or not loaded yet)
     makeCaptureWindow();
@@ -815,7 +850,9 @@ bool tabletTick() {
 
 void tabletStop() {
     using namespace tab;
-    if (g_registered) { XPLMUnregisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, nullptr); g_registered = false; }
+    if (g_registered) { XPLMUnregisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, (void*)(intptr_t)0); g_registered = false; }
+    if (g_lateRegistered) { XPLMUnregisterDrawCallback(drawCb, xplm_Phase_Gauges, 0, (void*)(intptr_t)1); g_lateRegistered = false; }
+    g_reRegisterAt = -1;
     if (g_cap) { XPLMDestroyWindow(g_cap); g_cap = nullptr; }
     if (g_tctx) { ImGuiContext* prev = ImGui::GetCurrentContext(); ImGui::DestroyContext(g_tctx); g_tctx = nullptr; if (prev && prev != g_tctx) ImGui::SetCurrentContext(prev); }
     if (g_tfontTex && gl.DeleteTextures) { const unsigned int t = (unsigned int)g_tfontTex; gl.DeleteTextures(1, &t); }

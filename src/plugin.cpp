@@ -185,6 +185,7 @@ std::string configPath() {
 
 bool g_uiOpen = false;     // the weather window is open (the radar map's turbulence layer is only built then)
 bool g_tabletShown = false;   // the map is on AviTab's screen
+bool g_tabletStarted = false; // the AviTab tab was set up at plugin enable
 #ifndef WX_HARNESS
 void uiBuildTablet(const wx::UiFonts& fonts, float w, float h);
 #endif
@@ -3226,8 +3227,9 @@ float flightLoop(float, float, int, void*) {
     wx::xpui::tick();   // a pending pop-out / pop-in of the weather window, made here and never inside the window's own drawing
     {   // the AviTab tab
         static bool started = false;
+        started = started || g_tabletStarted;
         if (g_cfg.avitabTab && !started) { wx::xpui::tabletStart(uiBuildTablet, (float)g_cfg.avitabIconX, (float)g_cfg.avitabIconY); started = true; logf("AviTab tab: icon at %.3f, %.3f of AviTab's home screen", g_cfg.avitabIconX, g_cfg.avitabIconY); }
-        else if (!g_cfg.avitabTab && started) { wx::xpui::tabletStop(); started = false; }
+        else if (!g_cfg.avitabTab && started) { wx::xpui::tabletStop(); started = false; g_tabletStarted = false; }
         const bool was = g_tabletShown;
         g_tabletShown = started && wx::xpui::tabletTick();
         if (g_tabletShown != was) logf("AviTab tab: the map %s", g_tabletShown ? "is on the tablet" : "left the tablet");
@@ -3952,6 +3954,13 @@ PLUGIN_API int XPluginEnable(void) {
     g_turbFetch.start();
     g_worldMetars.start();
     g_farField.start();
+#ifndef WX_HARNESS
+    if (g_cfg.avitabTab && !g_tabletStarted) {   // before any aircraft loads: see turnToDraw (xpimgui.cpp)
+        wx::xpui::tabletStart(uiBuildTablet, (float)g_cfg.avitabIconX, (float)g_cfg.avitabIconY);
+        g_tabletStarted = true;
+        logf("AviTab tab: icon at %.3f, %.3f of AviTab's home screen", g_cfg.avitabIconX, g_cfg.avitabIconY);
+    }
+#endif
     if (XPLMMapExists(XPLM_MAP_USER_INTERFACE)) createMapLayers();
     {   static bool hooked = false; if (!hooked) { hooked = true; XPLMRegisterMapCreationHook(mapCreated, nullptr); } }
     g_enabledAt = Clock::now();
@@ -4014,4 +4023,13 @@ PLUGIN_API void XPluginDisable(void) {
     if (g_loop) XPLMScheduleFlightLoop(g_loop, -1.0f, 1);   // negative = every frame; the callback stops itself after the erase
 }
 
-PLUGIN_API void XPluginReceiveMessage(XPLMPluginID, int, void*) {}
+#ifndef XPLM_MSG_PLANE_LOADED
+#define XPLM_MSG_PLANE_LOADED 102
+#endif
+PLUGIN_API void XPluginReceiveMessage(XPLMPluginID, int msg, void* param) {
+#ifndef WX_HARNESS
+    if (msg == XPLM_MSG_PLANE_LOADED && (intptr_t)param == 0) wx::xpui::tabletPlaneLoaded();   // the AviTab tab keeps drawing over AviTab
+#else
+    (void)msg; (void)param;
+#endif
+}

@@ -24,6 +24,7 @@ void destroy();             // plugin stop: the window, the ImGui context and th
 using TabletBuildFn = void (*)(const UiFonts& fonts, float width, float height);
 void tabletStart(TabletBuildFn build, float iconX, float iconY);
 bool tabletTick();          // from the flight loop: AviTab's state; true while the map is shown on the tablet
+void tabletPlaneLoaded();   // the user's aircraft (re)loaded: AviTab sets up its drawing again
 void tabletStop();
 
 } // namespace xpui

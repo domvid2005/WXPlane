@@ -7,4 +7,5 @@ typedef float (*XPLMFlightLoop_f)(float, float, int, void*);
 typedef struct { int structSize; XPLMFlightLoopPhaseType phase; XPLMFlightLoop_f callbackFunc; void* refcon; } XPLMCreateFlightLoop_t;
 XPLMFlightLoopID XPLMCreateFlightLoop(XPLMCreateFlightLoop_t*);
 void XPLMDestroyFlightLoop(XPLMFlightLoopID);
+int XPLMGetCycleNumber(void);
 void XPLMScheduleFlightLoop(XPLMFlightLoopID, float, int);
