@@ -1,5 +1,5 @@
 ================================================================================
-  WXPlane 5.1.2 for X-Plane 12  -  User Manual
+  WXPlane 5.1.3 for X-Plane 12  -  User Manual
 ================================================================================
 
 WXPlane replaces X-Plane 12's weather with live, real-world data: airport
@@ -108,7 +108,7 @@ OVERVIEW
 MAP
   A larger map around your aircraft.
   * Zoom with the mouse wheel or the - / + buttons: 1, 2, 5, 10, 20, 40, 80,
-    160 and 320 nm. The zoom eases smoothly between steps.
+    160, 320, 640, 1280 and 2500 nm. The zoom eases smoothly between steps.
   * Drag to pan. "Center On Aircraft" glides back to you. While the map is
     moved off the aircraft a small dark + marks its centre, and the LOCAL
     time bubble shows the local time at the +. In North Lock the top of the +
@@ -118,10 +118,17 @@ MAP
     wind dial).
   * Layer buttons:
         Radar     - real radar echoes, coloured by strength (US and Europe).
+                    In the US the map shows the whole NOAA mosaic, also
+                    beyond the weather loaded into X-Plane (about 3 nm
+                    detail out there; display only).
         Map       - coastlines, borders, state/province lines and lakes.
                     The map is built in, so nothing is downloaded for it.
         Airports  - stations coloured by flight category. Click one to see
-                    its METAR and ATIS.
+                    its METAR and ATIS. Every other airport in the world
+                    with a current METAR shows as a smaller dot (updated
+                    every 10 minutes): for planning far ahead. These are
+                    display only and never loaded into X-Plane; their
+                    METAR window says "Map only". (world_metars)
         Turb      - turbulence on a 12 nm grid, at the altitude slider's
                     level.
         Winds     - wind barbs at the slider's level (NOAA winds aloft
@@ -192,6 +199,15 @@ MAP
     "Map - Europe" (EUMETNET OPERA). There is no radar elsewhere.
   * The list next to the map shows the strongest storm cells (strength,
     rain rate, top, distance and bearing).
+  * Beyond the weather loaded into X-Plane the map still shows, for the
+    part in view (display only, never sent to X-Plane): global-model winds
+    aloft (Winds) and cloud cover as grey shading (Clouds), pilot reports,
+    ECMWF turbulence for the whole world (Turb, with realistic turbulence
+    on), the whole US radar mosaic and Europe's radar.
+  * AviTab: with AviTab in the 3D cockpit, its home screen gets a WXPlane
+    icon. Tap it and the WXPlane map fills the tablet; AviTab's Home button
+    goes back. It works alongside AviTab Browser. If the icon lands on one
+    of AviTab's own, move it with avitab_icon_x / avitab_icon_y.
 
 AIRPORTS
   * Search: type any ICAO code in the world (for example EGLL, KJFK, RJTT),
@@ -329,6 +345,16 @@ SETTINGS
                                        the radar's echo tops)
       update_check              (1)    at start-up, check whether a newer
                                        WXPlane is out (0 = never check)
+      detailed_log              (1)    WXPlane's detail lines in Log.txt (0 =
+                                       main events, warnings and errors only;
+                                       also in Settings)
+      avitab_tab                (1)    the WXPlane icon on AviTab's home screen
+      avitab_icon_x / _y  (0.357 / 0.568) where that icon sits on AviTab's
+                                       home screen (0..1 from the left / from
+                                       the bottom)
+      world_metars              (1)    show every current METAR in the world
+                                       on the map (display only, never sent
+                                       to X-Plane; 0 = off, no download)
 
   The README in the source repository lists every key. If something goes
   wrong, delete WXPlane.cfg and WXPlane writes a fresh one with the
