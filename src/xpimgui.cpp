@@ -12,6 +12,7 @@
 #include "XPLMDataAccess.h"
 #include "XPLMDisplay.h"
 #include "XPLMGraphics.h"
+#include "XPLMPlugin.h"
 #include "XPLMProcessing.h"
 #include "XPLMUtilities.h"
 #include "imgui.h"
@@ -521,7 +522,31 @@ bool screen(float& x, float& y, float& w, float& h) {
     if (h > ah) { y += (h - ah) * 0.5f; h = ah; }
     return true;
 }
-bool powered() { return R.ok() && XPLMGetDatai(R.pow) && XPLMGetDatai(R.en); }
+// The tab is only for AviTab itself: not when AviTab is missing (another tablet can publish the same avitab/ datarefs), and not
+// while Alpine Aviation's XPTablet runs (it has WXPlane built in; 2026-11-17: the WX icon was drawn over XPTablet's home screen).
+bool hostIsAviTab() {
+    static double nextCheck = 0;
+    static bool ok = false;
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (t < nextCheck) return ok;
+    nextCheck = t + 2.0;
+    const XPLMPluginID av = XPLMFindPluginBySignature("org.solhost.folko.avitab");
+    const XPLMPluginID xpt = XPLMFindPluginBySignature("com.alpineaviation.xptablet");
+    const bool avOn = av != XPLM_NO_PLUGIN_ID && XPLMIsPluginEnabled(av);
+    const bool xptOn = xpt != XPLM_NO_PLUGIN_ID && XPLMIsPluginEnabled(xpt);
+    const bool now = avOn && !xptOn;
+    static int told = -1;
+    const int state = !avOn ? 0 : xptOn ? 1 : 2;
+    if (state != told) {
+        told = state;
+        XPLMDebugString(state == 0 ? "[WXPlane] AviTab tab: AviTab is not running - no WX icon\n"
+                        : state == 1 ? "[WXPlane] AviTab tab: XPTablet is running (it has WXPlane built in) - no WX icon on AviTab\n"
+                                     : "[WXPlane] AviTab tab: AviTab is running\n");
+    }
+    ok = now;
+    return ok;
+}
+bool powered() { return R.ok() && hostIsAviTab() && XPLMGetDatai(R.pow) && XPLMGetDatai(R.en); }
 bool inMenu() { return R.ok() && XPLMGetDatai(R.menu) != 0; }
 bool browserShown() { return R.browser && XPLMGetDatai(R.browser) != 0; }
 // the tap, as 0..1 across AviTab's screen (from the left, from the bottom)
@@ -731,6 +756,7 @@ int drawCb(XPLMDrawingPhase, int, void* ref) {
     if (!turnToDraw((int)(intptr_t)ref)) return 1;
     findRefs();
     if (!R.ok()) { note("AviTab's datarefs not found (is AviTab installed and loaded?)"); return 1; }
+    if (!hostIsAviTab()) return 1;
     float x, y, w, h;
     if (!powered()) { note("AviTab is off or not shown in this cockpit (panel_powered " + std::to_string(XPLMGetDatai(R.pow)) + ", panel_enabled " + std::to_string(XPLMGetDatai(R.en)) + ")"); return 1; }
     if (!screen(x, y, w, h)) { note("AviTab's screen has no size on the panel (" + std::to_string(XPLMGetDatai(R.w)) + " x " + std::to_string(XPLMGetDatai(R.h)) + ")"); return 1; }
@@ -753,6 +779,7 @@ void imguiMouse(bool down) {
 
 int capClick(XPLMWindowID, int, int, XPLMMouseStatus st, void*) {
     findRefs();
+    if (!R.ok() || !hostIsAviTab()) return 0;
     if (!powered()) return 0;
     float nx, ny;
     const bool on = tapPos(nx, ny);
@@ -841,7 +868,7 @@ bool tabletTick() {
         g_pairFirst = -1;
     }
     findRefs();
-    if (!R.ok()) { g_shown = false; return false; }   // AviTab is not installed (or not loaded yet)
+    if (!R.ok() || !hostIsAviTab()) { g_shown = false; g_wantShow = false; return false; }   // no AviTab (or XPTablet runs)
     makeCaptureWindow();
     if (g_wantShow && !inMenu()) { g_shown = true; g_wantShow = false; }
     if (g_shown && (inMenu() || !powered() || browserShown())) { g_shown = false; g_down = false; g_nx = -1; }

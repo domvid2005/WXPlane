@@ -6,3 +6,7 @@ int XPLMCountPlugins();
 XPLMPluginID XPLMGetNthPlugin(int index);
 void XPLMGetPluginInfo(XPLMPluginID id, char* outName, char* outFilePath, char* outSignature, char* outDescription);
 int XPLMIsPluginEnabled(XPLMPluginID id);
+XPLMPluginID XPLMFindPluginBySignature(const char* inSignature);
+#ifndef XPLM_NO_PLUGIN_ID
+#define XPLM_NO_PLUGIN_ID (-1)
+#endif
