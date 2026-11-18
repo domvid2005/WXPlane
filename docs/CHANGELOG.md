@@ -1,5 +1,10 @@
 # WXPlane changelog
 
+## 5.1.4
+- XPTablet: with Alpine Aviation's XPTablet installed, the WXPlane window fills the tablet's WXPlane page, with all its tabs, touch and scrolling (no Pop out tab there). XPTablet asks for it through a plugin message (embed.h)
+- AviTab tab: only with AviTab itself, never on XPTablet's screen; its full-screen click window is there only while the mouse points at the tablet, so X-Plane's own pop-up messages can be dismissed again
+- Overview: in a narrow window the °C / °F switch stands after the temperature instead of being cut off
+
 ## 5.1.3
 - Map, worldwide: every airport in the world with a current METAR, as smaller dots by flight category; click one for its METAR (aviationweather.gov, every 10 minutes; world_metars)
 - Map beyond the weather loaded into X-Plane, for the part in view: global-model winds aloft (Winds), cloud cover as grey shading (Clouds), pilot reports (PIREPs), ECMWF turbulence for the whole world at 1 degree (Turb), the whole US radar mosaic and Europe's radar (OPERA). Display only: none of it is sent to X-Plane, so the sim's frame rate is not affected
