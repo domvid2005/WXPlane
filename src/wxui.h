@@ -140,6 +140,8 @@ struct UiImage { int w = 0, h = 0; std::vector<unsigned char> rgba; };
 std::vector<UiImage> uiLogoMips(const std::vector<unsigned char>& rgba, int w, int h);
 // Applies the WXPlane look to the current ImGui context.
 void uiStyle();
+// Drawn on another plugin's screen (XPTablet's cockpit tablet): no Pop out tab, since there is no window of ours to pop out.
+void uiSetEmbedded(bool on);
 // Loads the embedded fonts into the current context's atlas at `pixelScale` (pixels per window unit). Call before building the atlas.
 UiFonts uiLoadFonts(float pixelScale);
 // Draws the whole window into the current ImGui frame, filling `size` (window units) from the top-left corner.

@@ -4014,4 +4014,11 @@ PLUGIN_API void XPluginDisable(void) {
     if (g_loop) XPLMScheduleFlightLoop(g_loop, -1.0f, 1);   // negative = every frame; the callback stops itself after the erase
 }
 
-PLUGIN_API void XPluginReceiveMessage(XPLMPluginID, int, void*) {}
+PLUGIN_API void XPluginReceiveMessage(XPLMPluginID, int msg, void* param) {
+#ifndef WX_HARNESS
+    // XPTablet (or any plugin) asking for the weather window's contents on a screen of its own: see embed.h
+    if (msg == WXPLANE_MSG_EMBED && param) wx::xpui::drawEmbedded(uiBuild, *static_cast<WxEmbedRequest*>(param));
+#else
+    (void)msg; (void)param;
+#endif
+}

@@ -3,6 +3,7 @@
 // into its own OS window, and opens in VR when VR is on.
 #pragma once
 
+#include "embed.h"
 #include "wxui.h"
 
 namespace wx {
@@ -25,6 +26,9 @@ using TabletBuildFn = void (*)(const UiFonts& fonts, float width, float height);
 void tabletStart(TabletBuildFn build, float iconX, float iconY);
 bool tabletTick();          // from the flight loop: AviTab's state; true while the map is shown on the tablet
 void tabletStop();
+
+// The window's contents on another plugin's screen (see embed.h): called while that plugin is drawing, with its matrix set.
+void drawEmbedded(BuildFn build, WxEmbedRequest& rq);
 
 } // namespace xpui
 } // namespace wx

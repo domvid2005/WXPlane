@@ -135,8 +135,9 @@ namespace wx { double uiLocalOffsetForTest(const UiData& d, double lat, double l
 int main(int argc, char** argv) {
     const std::string out = argc > 1 ? argv[1] : ".";
     const float scale = argc > 2 ? (float)std::atof(argv[2]) : 1.0f;
-    const float W = 1240, H = 820;
+    const float W = std::getenv("UI_W") ? (float)std::atof(std::getenv("UI_W")) : 1240, H = std::getenv("UI_H") ? (float)std::atof(std::getenv("UI_H")) : 820;
     const std::time_t now = 1794451800;   // 2026-11-12 02:50Z
+    if (std::getenv("UI_EMBED")) uiSetEmbedded(true);   // as on XPTablet's screen: no Pop out tab
 
     // Boston, 2026-11-12 (from the user's log), with a made-up line of showers to the west so the radar has something to draw
     FetchResult res;

@@ -666,16 +666,20 @@ void stationCard(const UiData& d, const UiFonts& f, const Station& st, bool full
         ImGui::TableNextColumn(); field(f, "Weather", weatherText(r));
         ImGui::TableNextColumn(); field(f, us ? "Altimeter" : "QNH", !r.hasAltim ? std::string("—") : (us ? fmt("%.2f inHg", r.altimHpa / 33.8639) : fmt("%.0f hPa", r.altimHpa)));
         ImGui::TableNextColumn();
-        {   // temperature and dew point; the small box with the other unit switches °C / °F (for the whole window), like the wind's
+        {   // temperature and dew point; the small box with the other unit switches °C / °F (for the whole window), like the wind's.
+            // It stands beside the label where the column has room for both. In a narrow card (a small window, XPTablet's screen)
+            // it was cut off by the next column there, so it then stands after the value instead, where there is room.
             ImGui::BeginGroup();
+            const char* other = tempF() ? "°C" : "°F";
+            const bool beside = ImGui::CalcTextSize("Temp / Dew").x + 8 + ImGui::CalcTextSize(other).x + 10 <= ImGui::GetContentRegionAvail().x;
+            bool swap = false;
             muted("Temp / Dew");
-            if (r.hasTemp) {
-                ImGui::SameLine(0, 8);
-                if (magBox(tempF() ? "°C" : "°F", IM_COL32(196, 200, 207, 255), true)) tempF() = !tempF();
-            }
+            if (r.hasTemp && beside) { ImGui::SameLine(0, 8); swap = magBox(other, IM_COL32(196, 200, 207, 255), true); }
             ImGui::PushFont(f.bold);
             ImGui::TextUnformatted((r.hasTemp ? (r.hasDewp ? fmt("%.0f / %.0f %s", tempIn(r.tempC), tempIn(r.dewpC), tempUnit()) : tempText(r.tempC)) : std::string("—")).c_str());
             ImGui::PopFont();
+            if (r.hasTemp && !beside) { ImGui::SameLine(0, 8); swap = magBox(other, IM_COL32(196, 200, 207, 255), true); }
+            if (swap) tempF() = !tempF();
             ImGui::EndGroup();
         }
         const int ceil = ceilingFt(r);
@@ -3819,12 +3823,15 @@ UiFonts uiLoadFonts(float pixelScale) {
 
 // Refresh and Pop out: two tabs at the right end of the tab row (standing on the line, like the others: the same width, font, colours
 // and text offset), clickable as buttons. Narrower (to their text) when the window is too narrow for both rows of tabs side by side.
+static bool g_embedded = false;   // on another plugin's screen: Refresh only
+void uiSetEmbedded(bool on) { g_embedded = on; }
 float sideTabW() { return uniformTabWidth(); }
-float sideTabsWidth() { return 2 * sideTabW() + ImGui::GetStyle().ItemInnerSpacing.x; }
+float sideTabsWidth() { return g_embedded ? sideTabW() : 2 * sideTabW() + ImGui::GetStyle().ItemInnerSpacing.x; }
 void sideTabs(float top, float bottom, float right, float leftLimit, bool poppedOut, UiActions& act) {
     float w = sideTabW();
     const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
-    if (right - 2 * w - gap < leftLimit) w = std::max(tabWidth("Pop out"), (right - gap - leftLimit) * 0.5f);
+    if (g_embedded) { if (right - w < leftLimit) w = std::max(tabWidth("Refresh"), right - leftLimit); }
+    else if (right - 2 * w - gap < leftLimit) w = std::max(tabWidth("Pop out"), (right - gap - leftLimit) * 0.5f);
     ImFont* tf = tabFont() ? tabFont() : ImGui::GetFont();
     const float fs = tf->FontSize * ImGui::GetIO().FontGlobalScale;
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -3841,8 +3848,12 @@ void sideTabs(float top, float bottom, float right, float leftLimit, bool popped
         if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         return clicked;
     };
-    if (tab("##refreshtab", "Refresh", right - 2 * w - gap)) act.refresh = true;
-    if (tab("##popouttab", poppedOut ? "Pop in" : "Pop out", right - w)) act.popOut = true;
+    if (g_embedded) {
+        if (tab("##refreshtab", "Refresh", right - w)) act.refresh = true;
+    } else {
+        if (tab("##refreshtab", "Refresh", right - 2 * w - gap)) act.refresh = true;
+        if (tab("##popouttab", poppedOut ? "Pop in" : "Pop out", right - w)) act.popOut = true;
+    }
     ImGui::SetCursorScreenPos(keep);
 }
 
