@@ -986,6 +986,9 @@ bool tabletTick() {
         return false;
     }
     makeCaptureWindow();
+    // The click window covers the whole screen: it is only there while the mouse points at the tablet (or a press on it is held).
+    // Up all the time, it sat over X-Plane's own pop-up messages, whose buttons then could not be pressed (2026-11-17).
+    if (g_cap) { float nx, ny; XPLMSetWindowIsVisible(g_cap, (g_down || (powered() && tapPos(nx, ny))) ? 1 : 0); }
     if (g_wantShow && !inMenu()) { g_shown = true; g_wantShow = false; }
     if (g_shown && (inMenu() || !powered() || browserShown())) { g_shown = false; g_down = false; g_nx = -1; }
     return g_shown;
