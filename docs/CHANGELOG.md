@@ -1,12 +1,13 @@
 # WXPlane changelog
 
-## 5.1.3 (in progress)
-- Map: every airport in the world with a current METAR (aviationweather.gov, every 10 minutes), as smaller dots by flight category; click for the METAR. Display only, never sent to X-Plane (world_metars)
-- Map: in the US, the whole NOAA radar mosaic beyond the weather loaded into X-Plane (about 3 nm detail), display only
+## 5.1.3
+- Map, worldwide: every airport in the world with a current METAR, as smaller dots by flight category; click one for its METAR (aviationweather.gov, every 10 minutes; world_metars)
+- Map beyond the weather loaded into X-Plane, for the part in view: global-model winds aloft (Winds), cloud cover as grey shading (Clouds), pilot reports (PIREPs), ECMWF turbulence for the whole world at 1 degree (Turb), the whole US radar mosaic and Europe's radar (OPERA). Display only: none of it is sent to X-Plane, so the sim's frame rate is not affected
 - Map: zoom out to 640, 1280 and 2500 nm
-- Map beyond the weather loaded into X-Plane (display only): global-model winds aloft and cloud cover for the part of the map in view, pilot reports there, ECMWF turbulence for the whole world (1 degree), and Europe's radar (OPERA)
-- AviTab tab: a WXPlane icon on AviTab's home screen (3D cockpit AviTab); tapped, the WXPlane map fills the tablet until AviTab's Home. Works alongside AviTab Browser (avitab_tab, avitab_icon_x / avitab_icon_y)
-- Settings: Detailed log, off for a shorter Log.txt (main events, warnings and errors only) (detailed_log)
+- AviTab tab: a WXPlane icon on AviTab's home screen (AviTab in the 3D cockpit); tapped, the WXPlane map fills the tablet, with its layers, range, altitude and info windows, until AviTab's Home. Works alongside AviTab Browser, whatever order X-Plane draws the add-ons in (avitab_tab, avitab_icon_x / avitab_icon_y)
+- Settings: Detailed log. Off, Log.txt gets only WXPlane's main events, warnings and errors (detailed_log)
+- Blend ring: measures against the weather sent over the aircraft (rain counts), judges the sky as a whole rather than layer by layer, and compares the sea-level pressure correctly (it stopped at 1-5 % under rain); shown only while the weather at the aircraft is changing
+- Rain at an airport (from 5.1.2) and the first-load check: no second send of the first load (X-Plane's read-back lags what it draws by 2-3 minutes); Log.txt notes after 4 minutes whether it caught up
 
 ## 5.1.2
 - Overcast (OVC) at a steady 97% coverage
