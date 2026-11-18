@@ -61,6 +61,7 @@ struct GL {
     void(WXGL_API* TexCoordPointer)(GLint, GLenum, GLsizei, const void*) = nullptr;
     void(WXGL_API* ColorPointer)(GLint, GLenum, GLsizei, const void*) = nullptr;
     void(WXGL_API* DrawElements)(GLenum, GLsizei, GLenum, const void*) = nullptr;
+    void(WXGL_API* DrawArrays)(GLenum, GLint, GLsizei) = nullptr;
     void(WXGL_API* MatrixMode)(GLenum) = nullptr;
     void(WXGL_API* PushMatrix)(void) = nullptr;
     void(WXGL_API* PopMatrix)(void) = nullptr;
@@ -100,7 +101,7 @@ bool loadGl() {
         ok &= get(gl.PixelStorei, "glPixelStorei"); ok &= get(gl.DeleteTextures, "glDeleteTextures");
         ok &= get(gl.EnableClientState, "glEnableClientState"); ok &= get(gl.DisableClientState, "glDisableClientState");
         ok &= get(gl.VertexPointer, "glVertexPointer"); ok &= get(gl.TexCoordPointer, "glTexCoordPointer"); ok &= get(gl.ColorPointer, "glColorPointer");
-        ok &= get(gl.DrawElements, "glDrawElements"); ok &= get(gl.MatrixMode, "glMatrixMode"); ok &= get(gl.PushMatrix, "glPushMatrix");
+        ok &= get(gl.DrawElements, "glDrawElements"); ok &= get(gl.DrawArrays, "glDrawArrays"); ok &= get(gl.MatrixMode, "glMatrixMode"); ok &= get(gl.PushMatrix, "glPushMatrix");
         ok &= get(gl.PopMatrix, "glPopMatrix"); ok &= get(gl.Translatef, "glTranslatef"); ok &= get(gl.Scalef, "glScalef");
         ok &= get(gl.PushClientAttrib, "glPushClientAttrib"); ok &= get(gl.PopClientAttrib, "glPopClientAttrib"); ok &= get(gl.Color4f, "glColor4f");
         gl.state = ok ? 1 : -1;
@@ -112,6 +113,10 @@ bool loadGl() {
 // ---- state ---------------------------------------------------------------------------------------------------------------------
 XPLMWindowID g_win = nullptr;
 ImGuiContext* g_ctx = nullptr;
+ImGuiContext* g_ctxEmbed = nullptr;   // the contents on another plugin's screen: its own context (own size and pointer), the same fonts
+int g_embedFrame = -1;                // the sim frame the embedded picture was last built in
+bool g_embedDown = false;
+std::chrono::steady_clock::time_point g_embedAt{};   // when it was last asked for
 BuildFn g_build = nullptr;
 UiFonts g_fonts;
 int g_fontTex = 0, g_logoTex = 0;
@@ -360,8 +365,7 @@ void key(XPLMWindowID, char ch, XPLMKeyFlags flags, char vkey, void*, int losing
 } // namespace
 
 void createWindow();
-void open(BuildFn build) {
-    g_build = build;
+void ensureWindowContext() {
     if (!g_ctx) {
         IMGUI_CHECKVERSION();
         ImGuiContext* prev = ImGui::GetCurrentContext();
@@ -380,6 +384,11 @@ void open(BuildFn build) {
         g_fontsDirty = true;
         if (prev) ImGui::SetCurrentContext(prev);
     }
+}
+
+void open(BuildFn build) {
+    g_build = build;
+    ensureWindowContext();
     if (!g_win) createWindow();
     if (!g_win) return;
     XPLMSetWindowIsVisible(g_win, 1);
@@ -416,7 +425,11 @@ void createWindow() {
     }
 }
 
-bool isOpen() { return g_win && XPLMGetWindowIsVisible(g_win); }
+bool isOpen() {
+    if (g_win && XPLMGetWindowIsVisible(g_win)) return true;
+    // shown on another plugin's screen within the last second: the window's data is wanted just the same
+    return g_embedAt.time_since_epoch().count() && std::chrono::duration<double>(std::chrono::steady_clock::now() - g_embedAt).count() < 1.0;
+}
 void hide() {
     if (!g_win) return;
     if (g_hasKeyFocus && XPLMHasKeyboardFocus(g_win)) XPLMTakeKeyboardFocus(nullptr);
@@ -455,8 +468,160 @@ void tick() {
     g_fontsDirty = true;   // a popped-out window has its own pixel scale
 }
 
+// ---- on another plugin's screen (embed.h) ----------------------------------------------------------------------------------------------
+namespace {
+
+ImDrawVert lerpVert(const ImDrawVert& a, const ImDrawVert& b, float t) {
+    ImDrawVert o;
+    o.pos = ImVec2(a.pos.x + (b.pos.x - a.pos.x) * t, a.pos.y + (b.pos.y - a.pos.y) * t);
+    o.uv = ImVec2(a.uv.x + (b.uv.x - a.uv.x) * t, a.uv.y + (b.uv.y - a.uv.y) * t);
+    ImU32 c = 0;
+    for (int sh = 0; sh < 32; sh += 8) {
+        const float ca = (float)((a.col >> sh) & 0xFF), cb = (float)((b.col >> sh) & 0xFF);
+        c |= (ImU32)std::lround(ca + (cb - ca) * t) << sh;
+    }
+    o.col = c;
+    return o;
+}
+// Sutherland-Hodgman against one edge. axis 0: x, 1: y. keepGreater: keep the side where the coordinate >= limit.
+int clipEdge(const ImDrawVert* in, int n, ImDrawVert* out, int axis, float limit, bool keepGreater) {
+    int m = 0;
+    for (int i = 0; i < n; ++i) {
+        const ImDrawVert& a = in[i];
+        const ImDrawVert& b = in[(i + 1) % n];
+        const float ca = axis ? a.pos.y : a.pos.x, cb = axis ? b.pos.y : b.pos.x;
+        const bool ia = keepGreater ? ca >= limit : ca <= limit, ib = keepGreater ? cb >= limit : cb <= limit;
+        if (ia) out[m++] = a;
+        if (ia != ib) out[m++] = lerpVert(a, b, (limit - ca) / (cb - ca));
+    }
+    return m;
+}
+
+struct EmbedBatch { int tex; std::vector<ImDrawVert> v; };
+std::vector<EmbedBatch> g_embedBatches;   // the embedded picture: plain triangles, each already cut to its clip rectangle
+
+// The draw lists as triangles that need no scissor test. The surface may be an aircraft's panel texture, where a scissor box in
+// screen pixels means nothing, so every triangle is cut to its command's clip rectangle here instead.
+void clipDrawData(const ImDrawData* dd, std::vector<EmbedBatch>& out) {
+    out.clear();
+    for (int n = 0; n < dd->CmdListsCount; ++n) {
+        const ImDrawList* cl = dd->CmdLists[n];
+        for (const ImDrawCmd& cmd : cl->CmdBuffer) {
+            if (cmd.UserCallback) continue;
+            const float x0 = cmd.ClipRect.x, y0 = cmd.ClipRect.y, x1 = cmd.ClipRect.z, y1 = cmd.ClipRect.w;
+            if (x1 <= x0 || y1 <= y0) continue;
+            const int tex = (int)(intptr_t)cmd.GetTexID();
+            if (out.empty() || out.back().tex != tex) { out.emplace_back(); out.back().tex = tex; }
+            std::vector<ImDrawVert>& dst = out.back().v;
+            for (unsigned e = 0; e + 2 < cmd.ElemCount; e += 3) {
+                ImDrawVert tri[3];
+                bool inside = true;
+                for (int k = 0; k < 3; ++k) {
+                    tri[k] = cl->VtxBuffer[cmd.VtxOffset + cl->IdxBuffer[cmd.IdxOffset + e + k]];
+                    inside = inside && tri[k].pos.x >= x0 && tri[k].pos.x <= x1 && tri[k].pos.y >= y0 && tri[k].pos.y <= y1;
+                }
+                if (inside) { dst.insert(dst.end(), tri, tri + 3); continue; }
+                const float mnx = std::min({tri[0].pos.x, tri[1].pos.x, tri[2].pos.x}), mxx = std::max({tri[0].pos.x, tri[1].pos.x, tri[2].pos.x});
+                const float mny = std::min({tri[0].pos.y, tri[1].pos.y, tri[2].pos.y}), mxy = std::max({tri[0].pos.y, tri[1].pos.y, tri[2].pos.y});
+                if (mxx <= x0 || mnx >= x1 || mxy <= y0 || mny >= y1) continue;
+                ImDrawVert a[8], b[8];   // a triangle cut by four edges has at most 7 corners
+                int m = clipEdge(tri, 3, a, 0, x0, true);
+                m = clipEdge(a, m, b, 0, x1, false);
+                m = clipEdge(b, m, a, 1, y0, true);
+                m = clipEdge(a, m, b, 1, y1, false);
+                for (int k = 1; k + 1 < m; ++k) { dst.push_back(b[0]); dst.push_back(b[k]); dst.push_back(b[k + 1]); }
+            }
+        }
+    }
+}
+
+} // namespace
+
+void drawEmbedded(BuildFn build, WxEmbedRequest& rq) {
+    if (rq.structSize < (int)sizeof(WxEmbedRequest) || rq.version < 1 || rq.widthPx < 50 || rq.heightPx < 50 || !build || !loadGl()) return;
+    rq.handled = 1;
+    g_embedAt = std::chrono::steady_clock::now();
+    ensureWindowContext();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    // The screen is laid out at the window's smallest size or larger (900 x 560 units): on a small tablet it is scaled down to fit
+    // rather than squeezed. s: the caller's pixels per layout unit.
+    const float s = std::max(0.25f, std::min(1.6f, std::min(rq.widthPx / 900.0f, rq.heightPx / 560.0f)));
+    const float W = rq.widthPx / s, H = rq.heightPx / s;
+    if (rq.frame != g_embedFrame || g_embedBatches.empty()) {
+        g_embedFrame = rq.frame;
+        ImGui::SetCurrentContext(g_ctx);
+        if (g_fontsDirty || g_fontScale <= 0) buildFonts(std::max(1.0f, std::min(4.0f, s * std::max(0.5f, rq.pixelsPerUnit))));   // else: the window's fonts, as they are
+        if (!g_ctxEmbed) {
+            g_ctxEmbed = ImGui::CreateContext(ImGui::GetIO().Fonts);   // the same font atlas and texture
+            ImGui::SetCurrentContext(g_ctxEmbed);
+            ImGuiIO& eio = ImGui::GetIO();
+            eio.IniFilename = nullptr; eio.LogFilename = nullptr;
+            eio.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+            eio.ConfigDebugHighlightIdConflicts = false;
+            eio.ConfigErrorRecoveryEnableTooltip = false;
+            uiStyle();
+        }
+        ImGui::SetCurrentContext(g_ctxEmbed);
+        ImGuiIO& io = ImGui::GetIO();
+        io.FontDefault = g_fonts.body;                              // the atlas may have been rebuilt by the window since
+        io.FontGlobalScale = 1.0f / std::max(1.0f, g_fontScale);
+        io.DisplaySize = ImVec2(W, H);
+        io.DeltaTime = 1.0f / 60.0f;
+        const bool over = rq.mouseX >= 0 && rq.mouseY >= 0 && rq.mouseX <= rq.widthPx && rq.mouseY <= rq.heightPx;
+        if (over || g_embedDown) io.AddMousePosEvent(rq.mouseX / s, rq.mouseY / s); else io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        const bool down = rq.mouseDown != 0 && (over || g_embedDown);
+        if (down != g_embedDown) { io.AddMouseButtonEvent(0, down); g_embedDown = down; }
+        if (rq.wheel != 0 && over) io.AddMouseWheelEvent(0.0f, rq.wheel);
+        ImGui::NewFrame();
+        uiSetEmbedded(true);
+        build(g_fonts, W, H, false);
+        uiSetEmbedded(false);
+        ImGui::Render();
+        clipDrawData(ImGui::GetDrawData(), g_embedBatches);
+        const float k = std::max(0.0f, std::min(1.0f, rq.brightness));
+        if (k < 0.999f) {
+            const unsigned m = (unsigned)(k * 256.0f + 0.5f);
+            for (EmbedBatch& b : g_embedBatches)
+                for (ImDrawVert& v : b.v) {
+                    const ImU32 c = v.col;
+                    const unsigned r = ((c >> IM_COL32_R_SHIFT) & 0xFF) * m >> 8, g = ((c >> IM_COL32_G_SHIFT) & 0xFF) * m >> 8, bl = ((c >> IM_COL32_B_SHIFT) & 0xFF) * m >> 8;
+                    v.col = (c & IM_COL32_A_MASK) | (r << IM_COL32_R_SHIFT) | (g << IM_COL32_G_SHIFT) | (bl << IM_COL32_B_SHIFT);
+                }
+        }
+    }
+    // draw: the caller's matrix has the area's top-left corner at the origin, y down, one unit per pixel
+    XPLMSetGraphicsState(0, 1, 0, 0, 1, 0, 0);
+    gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    const bool cull = gl.IsEnabled(GL_CULL_FACE) != 0;
+    gl.Disable(GL_CULL_FACE);
+    gl.PushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+    gl.EnableClientState(GL_VERTEX_ARRAY);
+    gl.EnableClientState(GL_TEXTURE_COORD_ARRAY);
+    gl.EnableClientState(GL_COLOR_ARRAY);
+    gl.MatrixMode(GL_MODELVIEW);
+    gl.PushMatrix();
+    gl.Scalef(s, s, 1.0f);
+    gl.Color4f(1, 1, 1, 1);
+    for (const EmbedBatch& b : g_embedBatches) {
+        if (b.v.empty()) continue;
+        XPLMBindTexture2d(b.tex, 0);
+        const ImDrawVert* v = b.v.data();
+        gl.VertexPointer(2, GL_FLOAT, sizeof(ImDrawVert), (const void*)((const char*)v + offsetof(ImDrawVert, pos)));
+        gl.TexCoordPointer(2, GL_FLOAT, sizeof(ImDrawVert), (const void*)((const char*)v + offsetof(ImDrawVert, uv)));
+        gl.ColorPointer(4, GL_UNSIGNED_BYTE, sizeof(ImDrawVert), (const void*)((const char*)v + offsetof(ImDrawVert, col)));
+        gl.DrawArrays(GL_TRIANGLES, 0, (GLsizei)b.v.size());
+    }
+    gl.PopMatrix();
+    gl.PopClientAttrib();
+    gl.Color4f(1, 1, 1, 1);
+    XPLMBindTexture2d(0, 0);
+    if (cull) gl.Enable(GL_CULL_FACE);
+    if (prev) ImGui::SetCurrentContext(prev);
+}
+
 void destroy() {
     if (g_win) { XPLMDestroyWindow(g_win); g_win = nullptr; }
+    if (g_ctxEmbed) { ImGui::DestroyContext(g_ctxEmbed); g_ctxEmbed = nullptr; }   // before the context whose fonts it shares
     if (g_ctx) {
         ImGui::SetCurrentContext(g_ctx);
         ImGui::DestroyContext(g_ctx);
@@ -868,7 +1033,11 @@ bool tabletTick() {
         g_pairFirst = -1;
     }
     findRefs();
-    if (!R.ok() || !hostIsAviTab()) { g_shown = false; g_wantShow = false; return false; }   // no AviTab (or XPTablet runs)
+    if (!R.ok() || !hostIsAviTab()) {   // no AviTab (or XPTablet runs): nothing of ours over the screen, the click window included
+        g_shown = false; g_wantShow = false;
+        if (g_cap) XPLMSetWindowIsVisible(g_cap, 0);
+        return false;
+    }
     makeCaptureWindow();
     if (g_wantShow && !inMenu()) { g_shown = true; g_wantShow = false; }
     if (g_shown && (inMenu() || !powered() || browserShown())) { g_shown = false; g_down = false; g_nx = -1; }

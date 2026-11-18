@@ -4029,6 +4029,8 @@ PLUGIN_API void XPluginDisable(void) {
 PLUGIN_API void XPluginReceiveMessage(XPLMPluginID, int msg, void* param) {
 #ifndef WX_HARNESS
     if (msg == XPLM_MSG_PLANE_LOADED && (intptr_t)param == 0) wx::xpui::tabletPlaneLoaded();   // the AviTab tab keeps drawing over AviTab
+    // XPTablet (or any plugin) asking for the weather window's contents on a screen of its own: see embed.h
+    if (msg == WXPLANE_MSG_EMBED && param) wx::xpui::drawEmbedded(uiBuild, *static_cast<WxEmbedRequest*>(param));
 #else
     (void)msg; (void)param;
 #endif
