@@ -493,6 +493,13 @@ float g_nx = -1, g_ny = -1;   // the last tap position on the tablet (0..1)
 constexpr float kLogicalW = 1000.0f;   // the tablet's picture is laid out 1000 units wide
 constexpr float kHeaderFrac = 0.068f;  // AviTab's header (clock, Home) at the top of its screen: left to AviTab
 
+// what the tab sees, written to Log.txt whenever it changes (so a missing icon can be traced)
+void note(const std::string& what) {
+    static std::string last;
+    if (what == last) return;
+    last = what;
+    XPLMDebugString(("[WXPlane] AviTab tab: " + what + "\n").c_str());
+}
 void findRefs() {
     if (R.ok()) return;
     R.l = XPLMFindDataRef("avitab/panel_left"); R.b = XPLMFindDataRef("avitab/panel_bottom");
@@ -569,6 +576,21 @@ void renderOnPanel(ImDrawData* dd, float ox, float oy, float k) {
     Xform xf;
     std::memcpy(xf.mv, mv, sizeof mv); std::memcpy(xf.pr, pr, sizeof pr);
     xf.vp[0] = vp[0]; xf.vp[1] = vp[1]; xf.vp[2] = vp[0] + vp[2]; xf.vp[3] = vp[1] + vp[3]; xf.ok = true;
+    {   // the picture's corners must land in the viewport, or the clipping would hide it: then no clipping at all
+        float ax, ay, bx, by;
+        toNative(xf, ox, oy - dd->DisplaySize.y * k, ax, ay);
+        toNative(xf, ox + dd->DisplaySize.x * k, oy, bx, by);
+        const bool sane = std::isfinite(ax) && std::isfinite(bx) && std::fabs(bx - ax) > 4 && std::fabs(by - ay) > 4 &&
+                          std::max(ax, bx) > xf.vp[0] && std::min(ax, bx) < xf.vp[2] && std::max(ay, by) > xf.vp[1] && std::min(ay, by) < xf.vp[3];
+        if (!sane) xf.ok = false;
+        static bool told = false;
+        if (!told) {
+            told = true;
+            char b[220];
+            std::snprintf(b, sizeof b, "[WXPlane] AviTab tab: panel pass viewport %d,%d %dx%d, picture at %.0f,%.0f-%.0f,%.0f there (%s)\n", vp[0], vp[1], vp[2], vp[3], ax, ay, bx, by, sane ? "clipped" : "not clipped");
+            XPLMDebugString(b);
+        }
+    }
     XPLMSetGraphicsState(0, 1, 0, 0, 1, 0, 0);
     gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     const bool cull = gl.IsEnabled(GL_CULL_FACE) != 0, sc = gl.IsEnabled(GL_SCISSOR_TEST) != 0;
@@ -593,7 +615,9 @@ void renderOnPanel(ImDrawData* dd, float ox, float oy, float k) {
         for (const ImDrawCmd& cmd : cl->CmdBuffer) {
             if (cmd.UserCallback) continue;
             if (cmd.ClipRect.z <= cmd.ClipRect.x || cmd.ClipRect.w <= cmd.ClipRect.y) continue;
+            if (!xf.ok) gl.Disable(GL_SCISSOR_TEST);
             float x0, y0, x1, y1;
+            if (xf.ok) {
             toNative(xf, ox + cmd.ClipRect.x * k, oy - cmd.ClipRect.w * k, x0, y0);
             toNative(xf, ox + cmd.ClipRect.z * k, oy - cmd.ClipRect.y * k, x1, y1);
             int sx = (int)std::floor(std::min(x0, x1)), sy = (int)std::floor(std::min(y0, y1));
@@ -601,6 +625,7 @@ void renderOnPanel(ImDrawData* dd, float ox, float oy, float k) {
             if (sc) { sx = std::max(sx, oldBox[0]); sy = std::max(sy, oldBox[1]); ex = std::min(ex, oldBox[0] + oldBox[2]); ey = std::min(ey, oldBox[1] + oldBox[3]); }
             if (ex <= sx || ey <= sy) continue;
             gl.Scissor(sx, sy, ex - sx, ey - sy);
+            }
             const int tex = (int)(intptr_t)cmd.GetTexID();
             if (tex != boundTex) { XPLMBindTexture2d(tex, 0); boundTex = tex; }
             const ImDrawVert* v = vb + cmd.VtxOffset;
@@ -687,8 +712,14 @@ void drawIcon(float sx, float sy, float sw, float sh) {
 int drawCb(XPLMDrawingPhase, int, void*) {
     if (!g_tbuild || !loadGl()) return 1;
     findRefs();
+    if (!R.ok()) { note("AviTab's datarefs not found (is AviTab installed and loaded?)"); return 1; }
     float x, y, w, h;
-    if (!powered() || !screen(x, y, w, h)) return 1;
+    if (!powered()) { note("AviTab is off or not shown in this cockpit (panel_powered " + std::to_string(XPLMGetDatai(R.pow)) + ", panel_enabled " + std::to_string(XPLMGetDatai(R.en)) + ")"); return 1; }
+    if (!screen(x, y, w, h)) { note("AviTab's screen has no size on the panel (" + std::to_string(XPLMGetDatai(R.w)) + " x " + std::to_string(XPLMGetDatai(R.h)) + ")"); return 1; }
+    char b[200];
+    std::snprintf(b, sizeof b, "screen at %.0f,%.0f size %.0fx%.0f on the panel; %s", x, y, w, h,
+                  g_shown ? "the map is shown" : !inMenu() ? "AviTab is in one of its apps (the icon shows on its home screen)" : browserShown() ? "AviTab Browser is showing" : "icon drawn on the home screen");
+    note(b);
     if (g_shown) frame(x, y, w, h);
     else if (inMenu() && !browserShown()) drawIcon(x, y, w, h);
     return 1;
