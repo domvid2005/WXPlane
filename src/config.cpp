@@ -161,6 +161,7 @@ bool loadConfig(const std::string& path, Config& c) {
         else if (k == "startup_delay_s") c.startupDelayS = (int)(d < 0 ? 0 : (d > 300 ? 300 : d));
     }
     if (version < 26) { Config d; c.regionWinds = d.regionWinds; }
+    if (version < 31 && c.radarNaturalMax == 250) { Config d; c.radarNaturalMax = d.radarNaturalMax; }   // v31: 250 left big squares at the far side of widespread storms
     if (version < 30) { c.maxTurbulence = 1.0; if (!sawRealistic) c.realisticTurbulence = true; }   // v30: the storm slider (0-200 %) became Max turbulence (0-1)
     if (version < 29) c.windshear = true;   // v29: windshear on by default (turned on once; turning it off afterwards sticks)
     if (version < 28 && std::fabs(c.windshearGain - 1.4) < 1e-6) { Config d; c.windshearGain = d.windshearGain; }   // v28: 1.4 left ~40 % of the outflow

@@ -1290,7 +1290,7 @@ int main() {
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);
         const bool natural = g_logAll.find("radar: natural picture") != std::string::npos;
         CHECK(natural);                           // the default since 2026-11
-        CHECK(storms >= 3 && storms <= 160);      // natural picture: radar_natural_max (150) rain and dry records
+        CHECK(storms >= 3 && storms <= 410);      // natural picture: radar_natural_max (400 since 5.1.5) rain and dry records
         CHECK(heavy >= 1);
         CHECK(minVis <= 800 && minVis >= 400);
         CHECK(maxTop > 8500 && maxTop < 13100);   // echo top ~12 km in the mock; the default top smoothing + centroid placement lower its lone peak       // echo top ~12 km from the mock product
