@@ -1005,6 +1005,62 @@ GribField convectiveMask(GribField& refl, const GribField* flag, const std::vect
     return m;
 }
 
+GribField classifyPrecipType(const GribField& refl) {
+    // Steiner, Houze & Yuter (1995), with the 40 dBZ absolute rule raised to 46 so a melting-layer bright band (40-45 dBZ over a wide area,
+    // not peaked) stays steady rain. Background: the mean in linear Z within 11 km; a pixel is convective if it reaches 46 dBZ or stands out
+    // from that background by 10 - Zbg^2/180 dB (Zbg < 42.43); around each convective pixel, 1-5 km by background strength are too.
+    GribField f = refl;
+    if (!refl.valid()) return f;
+    const int ni = refl.ni, nj = refl.nj;
+    const double cl = std::max(0.2, std::cos((refl.lat0 - 0.5 * nj * refl.dLat) * kPi / 180.0));
+    const double kmY = refl.dLat * 111.2, kmX = refl.dLon * 111.2 * cl;   // pixel size in km
+    auto rx = [&](double km) { return std::max(1, (int)std::lround(km / kmX)); };
+    auto ry = [&](double km) { return std::max(1, (int)std::lround(km / kmY)); };
+    // integral images of linear Z and of echo counts (echo: a value at or above 5 dBZ)
+    std::vector<double> sz((size_t)(ni + 1) * (nj + 1), 0.0), sn(sz.size(), 0.0);
+    auto I = [&](int i, int j) { return (size_t)j * (ni + 1) + i; };
+    for (int j = 0; j < nj; ++j)
+        for (int i = 0; i < ni; ++i) {
+            const float v = refl.v[(size_t)j * ni + i];
+            const bool e = v >= 5.0f && v < 90.0f;
+            sz[I(i + 1, j + 1)] = sz[I(i, j + 1)] + sz[I(i + 1, j)] - sz[I(i, j)] + (e ? std::pow(10.0, std::min(v, 70.0f) / 10.0) : 0.0);
+            sn[I(i + 1, j + 1)] = sn[I(i, j + 1)] + sn[I(i + 1, j)] - sn[I(i, j)] + (e ? 1.0 : 0.0);
+        }
+    const int bx = rx(11.0), by = ry(11.0);
+    std::vector<float> bg((size_t)ni * nj, -999.0f);
+    std::vector<unsigned char> core((size_t)ni * nj, 0);
+    for (int j = 0; j < nj; ++j)
+        for (int i = 0; i < ni; ++i) {
+            const size_t k = (size_t)j * ni + i;
+            const float v = refl.v[k];
+            f.v[k] = std::numeric_limits<float>::quiet_NaN();   // no echo: no type (convectiveMask falls back to the airports there)
+            if (!(v >= 5.0f && v < 90.0f)) continue;
+            const int i0 = std::max(0, i - bx), i1 = std::min(ni, i + bx + 1), j0 = std::max(0, j - by), j1 = std::min(nj, j + by + 1);
+            const double n = sn[I(i1, j1)] - sn[I(i0, j1)] - sn[I(i1, j0)] + sn[I(i0, j0)];
+            const double s = sz[I(i1, j1)] - sz[I(i0, j1)] - sz[I(i1, j0)] + sz[I(i0, j0)];
+            const float zb = n > 0 ? (float)(10.0 * std::log10(std::max(1e-3, s / n))) : 0.0f;
+            bg[k] = zb;
+            const float need = zb < 0 ? 10.0f : (zb < 42.43f ? 10.0f - zb * zb / 180.0f : 0.0f);
+            if (v >= 46.0f || v - zb >= need) core[k] = 1;
+            f.v[k] = 1.0f;   // MRMS PrecipFlag 1: warm stratiform rain
+        }
+    for (int j = 0; j < nj; ++j)
+        for (int i = 0; i < ni; ++i) {
+            const size_t k = (size_t)j * ni + i;
+            if (!core[k]) continue;
+            const float zb = bg[k];
+            const double rk = zb < 20 ? 1.0 : zb < 25 ? 2.0 : zb < 30 ? 3.0 : zb < 35 ? 4.0 : 5.0;
+            const int ax = rx(rk), ay = ry(rk);
+            for (int jj = std::max(0, j - ay); jj <= std::min(nj - 1, j + ay); ++jj)
+                for (int ii = std::max(0, i - ax); ii <= std::min(ni - 1, i + ax); ++ii) {
+                    const double dx = (ii - i) * kmX, dy = (jj - j) * kmY;
+                    const size_t q = (size_t)jj * ni + ii;
+                    if (dx * dx + dy * dy <= rk * rk && !std::isnan(f.v[q])) f.v[q] = 6.0f;   // PrecipFlag 6: convective
+                }
+        }
+    return f;
+}
+
 void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm) {
     if (!conv.valid()) return;
     for (auto& c : cells) {
@@ -1173,15 +1229,22 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     const int slot = stormSlot(x);
     float baseM = baseOverrideM > 0 ? baseOverrideM : stormBaseFor(x, c, fieldElevM);
     float topM = stormTopM(c, cfg, baseM);
-    // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a wall.
-    if (c.edge > 0) topM = std::max(baseM + 1500.0f, baseM + (topM - baseM) * (1.0f - 0.45f * c.edge));
     // Steady rain (MRMS PrecipFlag): the radar sees the rain, not the small ice above it, so its echo top reads low for the cloud. Where
     // the global model has the cloud reaching higher from this base, the top goes up to the model's (within the depth X-Plane allows
     // for cumulus). It only ever raises a top: storms (40 dBZ and up, or convective) keep the radar's.
     if (c.stratiform && dbz < 40.0f && !x.modelProfM.empty()) {
         const float mt = modelCloudTopM(x.modelProfM, baseM);
-        if (mt > topM) topM = std::min({mt, baseM + xpMaxThicknessM(2.0f), kXpTopM});
+        if (mt > topM) {
+            // the model's top is one value per pressure level for a whole region: neighbouring records took exactly the same height (flat
+            // slabs). Varied by up to +/- 400 m with smooth noise fixed to the ground, so the tops roll like the radar's own do.
+            const double X = c.lon * 60.0 * std::max(0.2, std::cos(c.lat * kPi / 180.0)), Y = c.lat * 60.0;
+            const float v = (float)(fbm(X, Y, 8.0, 53) * 400.0);
+            topM = std::max(topM, std::min({mt + v, baseM + xpMaxThicknessM(2.0f), kXpTopM}));
+        }
     }
+    // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a
+    // wall. After the model raise above (5.1.5): before, that raise put rim records of steady rain straight back to full height.
+    if (c.edge > 0) topM = std::max(baseM + 1500.0f, baseM + (topM - baseM) * (1.0f - 0.45f * c.edge));
     XpCloud& cl = x.clouds[slot];
     const float replacedCov = cl.coverage;   // the deck this storm grows out of (0 if the slot was free)
     // Cumulonimbus from 30 dBZ up (and for any measured echo top above 6 km); a weak echo is cumulus (2.0), not a deep anvil. Ramping

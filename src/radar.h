@@ -169,6 +169,10 @@ bool convectionReported(const Station& st);
 // Caps steady rain/snow pixels of `refl` at capDbz and returns a mask on its grid (1 = convective). With `flag` (MRMS PrecipFlag),
 // 6, 7 and 96 are convective; without it, pixels above capDbz within 60 nm of an airport reporting convection. `capped` = pixels capped.
 GribField convectiveMask(GribField& refl, const GribField* flag, const std::vector<Station>* stations, float capDbz, int& capped);
+// For radar without a precipitation type (EUMETNET OPERA): the type worked out from the reflectivity itself (Steiner et al. 1995
+// convective/stratiform separation), on refl's grid in MRMS PrecipFlag codes (6 = convective, 1 = steady rain, NaN = no echo), so
+// convectiveMask treats Europe the way it treats the US.
+GribField classifyPrecipType(const GribField& refl);
 // Marks every cell whose footprint holds no convective pixel of `conv` as stratiform.
 void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm);
 

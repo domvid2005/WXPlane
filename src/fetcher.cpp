@@ -513,11 +513,17 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
         refl.refTime = slot;
         GribField conv;
         std::string typeNote;
-        if (cfg.radarPrecipType && stations) {
+        if (cfg.radarPrecipType) {
+            // OPERA has no precipitation type. Before 5.1.5 only pixels within 60 nm of an airport reporting convection could be convective,
+            // so nearly all of a European storm was steady rain capped at one strength: uniform squares with the global model's flat cloud
+            // tops, ending in square walls (2026-11-19 screenshots). The type now comes from the reflectivity's own structure, as MRMS gives it.
             int capped = 0;
-            conv = convectiveMask(refl, nullptr, stations, (float)cfg.radarStratiformMaxDbz, capped);
+            const GribField flag = classifyPrecipType(refl);
+            conv = convectiveMask(refl, &flag, stations, (float)cfg.radarStratiformMaxDbz, capped);
+            int nConv = 0;
+            for (float v : conv.v) if (v > 0.5f) ++nConv;
             char b[200];
-            std::snprintf(b, sizeof b, "convection only within 60 nm of an airport reporting it; %d pixel(s) capped at %.0f dBZ", capped, cfg.radarStratiformMaxDbz);
+            std::snprintf(b, sizeof b, "precipitation type from the reflectivity (convective/stratiform): %d convective pixel(s), %d of steady rain capped at %.0f dBZ", nConv, capped, cfg.radarStratiformMaxDbz);
             typeNote = b;
         }
         out = buildRadarCells(refl, nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr, stations);

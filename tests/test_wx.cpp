@@ -650,7 +650,7 @@ int main() {
         RadarCell c; c.dbz = 30; c.dbzFine = 30; c.rateMmH = 3; c.stratiform = true; c.topM = 2500; c.topKnown = true; c.lat = 40.0;
         XpWx s1 = s; applyStorm(s1, c, cfg, 0.0, 40.0, 800.0f);
         float t1 = 0; for (const auto& k : s1.clouds) t1 = std::max(t1, k.topM);
-        NEAR(t1, 5000, 1);
+        NEAR(t1, 5000, 401);                                   // the model's top, varied by up to 400 m (5.1.5)
         c.stratiform = false; c.dbz = c.dbzFine = 45;
         XpWx s2 = s; applyStorm(s2, c, cfg, 0.0, 40.0, 800.0f);
         float t2 = 0; for (const auto& k : s2.clouds) t2 = std::max(t2, k.topM);
@@ -1066,6 +1066,22 @@ int main() {
             std::vector<RadarCell> cs(2); cs[0].lat = 47.02; cs[0].lon = -119.0; cs[1].lat = 46.5; cs[1].lon = -118.0;
             markStratiform(cs, m, 2.0);
             CHECK(!cs[0].stratiform && cs[1].stratiform);
+            {   // Europe (no PrecipFlag, 5.1.5): the type from the reflectivity. 80 x 80 pixels of 0.01 deg at 50 N: a wide 42 dBZ bright band
+                // (steady rain), a 55 dBZ core in 25 dBZ rain (convective), a 36 dBZ peak 3 km wide in 22 dBZ rain (convective, it stands out)
+                GribField eu; eu.ni = eu.nj = 80; eu.lat0 = 50.4; eu.lon0 = 8.0; eu.dLat = eu.dLon = 0.01;
+                eu.v.assign(6400, 25.0f);
+                for (int j = 0; j < 80; ++j) for (int i = 0; i < 30; ++i) eu.v[(size_t)j * 80 + i] = 42.0f;
+                for (int j = 0; j < 80; ++j) for (int i = 50; i < 80; ++i) eu.v[(size_t)j * 80 + i] = 22.0f;
+                for (int j = 38; j < 42; ++j) for (int i = 43; i < 46; ++i) eu.v[(size_t)j * 80 + i] = 55.0f;
+                for (int j = 60; j < 63; ++j) for (int i = 64; i < 67; ++i) eu.v[(size_t)j * 80 + i] = 36.0f;
+                eu.v[5] = -999.0f;
+                const GribField ty = classifyPrecipType(eu);
+                auto at = [&](int i, int j) { return ty.v[(size_t)j * 80 + i]; };
+                CHECK(at(10, 40) == 1.0f && at(44, 40) == 6.0f && at(65, 61) == 6.0f && at(70, 20) == 1.0f && std::isnan(ty.v[5]));
+                GribField eu2 = eu; int cp = 0;
+                convectiveMask(eu2, &ty, nullptr, 33.0f, cp);
+                CHECK(eu2.v[(size_t)40 * 80 + 10] == 33.0f && eu2.v[(size_t)40 * 80 + 44] == 55.0f);   // the bright band capped, the core kept
+            }
             // without PrecipFlag: convective only within 60 nm of an airport reporting convection
             std::vector<Station> sts(2);
             sts[0].icao = "KEPH"; sts[0].lat = 47.31; sts[0].lon = -119.52; sts[0].rawMetar = "METAR KEPH 100553Z AUTO 27003KT 10SM OVC031 08/07 A3002 RMK AO2 RAE0457B21E34";
