@@ -94,6 +94,12 @@ struct Config {
     int diagVerbosity = 1;            // 0 = no flight-state log, 1 = events + a summary every 5 min, 2 = every 10 s
     bool stormCloudsAtStations = true; // a station inside a storm gets the storm cloud too (its circle was a hole in the storm deck)
     bool qnhAsSeaLevel = true;        // send the QNH as sea-level pressure (pressure_sl): X-Plane read it in pressure_alt as station pressure
+    bool qnhTempCorrect = true;       // ...as the sea-level pressure X-Plane needs for that QNH at the field's height and temperatures (5.1.5): X-Plane works the
+                                      // pressure at a field out through the real temperatures, so the QNH itself left the altimeter out at high, cold or hot fields
+    bool tropoSmooth = true;          // the tropopause height given to X-Plane is a smooth field over the records, each with its own temperature there (5.1.5);
+                                      // off: every record its own tropopause, which X-Plane blended into one that was on neither profile across a jet stream
+    bool xpBaseSteady = true;         // while WXPlane sets the weather: X-Plane's own "variation across region" 0 and "evolution over time" static (put back when
+                                      // WXPlane is switched off); they move its temperatures, pressure and winds aloft away from what WXPlane writes
     bool fillQnhAtSeaLevel = true;    // gap-fill and radar records give X-Plane their QNH calibrated at sea level, not at the nearest station's elevation (which jumps by
                                       // thousands of feet from tile to tile in the mountains, so the same QNH made a different pressure in each record)
     bool regionWinds = true;          // write the winds aloft into X-Plane's region wind arrays: X-Plane ignores the upper wind layers of records (see pushRegionWinds)       // one smooth QNH field over all records (no pressure steps where records meet), airports keep their own within 2 hPa of it

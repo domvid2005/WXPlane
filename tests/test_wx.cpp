@@ -1259,6 +1259,42 @@ int main() {
             std::vector<std::pair<float, float>> mp2 = mp; mp2[4].second = -50.5f;
             float ta2 = 0, tt2 = 0;
             CHECK(findTropopause(mp2, ta2, tt2) && std::fabs(ta2 - ta) < 400);
+            // 5.1.5, under a 190 kt jet (North Pacific, 2026-11-21): surface, 925 ... 70 hPa. The 500-400 hPa layer is a front (stable),
+            // the tropopause is near 150 hPa. With that layer a little more stable the old rule gave FL175 at -23 C.
+            std::vector<std::pair<float, float>> jet = {{0, 6}, {760, 3.5f}, {1460, -1}, {3010, -15}, {5570, -23.3f}, {7190, -27.5f}, {9160, -37}, {10360, -47},
+                                                        {11780, -52.5f}, {13600, -59.5f}, {16180, -60.5f}, {18440, -56}};
+            CHECK(findTropopause(jet, ta, tt) && ta > 13000 && ta < 14500 && tt < -57);
+            std::vector<std::pair<float, float>> front = jet; front[5].second = -24.5f;
+            float tf = 0, ttf = 0;
+            CHECK(findTropopause(front, tf, ttf) && std::fabs(tf - ta) < 300 && ttf < -57);        // the front is not the tropopause
+            std::vector<std::pair<float, float>> fold = jet; fold[4].second = -25; fold[5].second = -25.5f; fold[6].second = -30;   // a deep fold
+            CHECK(findTropopause(fold, tf, ttf) && tf > 13000 && ttf < -57);
+            std::printf("  tropopause under a jet: %.0f m %.1f C; with a front below it %.0f m %.1f C\n", ta, tt, tf, ttf);
+            // the polar side of that jet: a low tropopause, with the stratosphere a little colder further up (it stays the tropopause)
+            std::vector<std::pair<float, float>> polar = {{0, 2}, {740, -2}, {1420, -7}, {2950, -18}, {5450, -34}, {7050, -44}, {8950, -52}, {10150, -51},
+                                                          {11600, -50}, {13450, -51}, {16050, -53}, {18350, -53}};
+            CHECK(findTropopause(polar, tf, ttf) && tf > 8000 && tf < 9300 && ttf < -49 && ttf > -54);
+        }
+        {   // 5.1.5: the sea-level pressure X-Plane needs for a QNH (it works the pressure at a field out through the real temperatures)
+            auto col = [](double dIsa) { return std::vector<std::pair<float, float>>{{0, (float)(15 + dIsa)}, {3000, (float)(-4.5 + dIsa)}, {6000, (float)(-24 + dIsa)}}; };
+            NEAR(seaLevelHpaForQnh(1013.2, 1655.0, col(0)), 1013.2, 0.05);           // standard air: the QNH itself
+            NEAR(seaLevelHpaForQnh(1020.0, 0.0, col(-20)), 1020.0, 0.001);           // at sea level: the QNH itself, whatever the air
+            NEAR(seaLevelHpaForQnh(1013.2, 1655.0, {}), 1013.2, 0.05);               // no temperatures known: standard
+            const double cold = seaLevelHpaForQnh(1020.0, 1655.0, col(-20)), hot = seaLevelHpaForQnh(1010.0, 1655.0, col(+20));
+            std::printf("  Denver (1,655 m): QNH 1020 on a day 20 C colder than standard -> sea level %.1f hPa; QNH 1010, 20 C warmer -> %.1f hPa\n", cold, hot);
+            CHECK(cold > 1020.0 + 12.0 && cold < 1020.0 + 19.0);                      // cold air is heavier: more pressure further down
+            CHECK(hot < 1010.0 - 10.0 && hot > 1010.0 - 16.0);
+            // back up through the same air it is the station pressure the QNH stands for: the altimeter reads the field elevation
+            auto up = [&](double sl, double h, double dIsa) {
+                double sum = 0; const int n = 400;
+                for (int k = 0; k < n; ++k) { const double z = (k + 0.5) * h / n; sum += (h / n) / (288.15 + dIsa - 0.0065 * z); }
+                return sl * std::exp(-9.80665 / 287.053 * sum);
+            };
+            const double qfe = 1020.0 * std::pow(1.0 - 0.0065 * 1655.0 / 288.15, 9.80665 / (287.053 * 0.0065));
+            NEAR(up(cold, 1655.0, -20), qfe, 0.05);
+            NEAR(seaLevelHpaForQnh(1018.0, 197.0, col(-7)), 1018.0 + 0.62, 0.15);    // Detroit, 645 ft, 7 C cold: 0.6 hPa (the log showed about 1)
+            CHECK(seaLevelHpaForQnh(1013.0, 4000.0, col(+60)) >= 1013.0 - 45.0);     // never further than the worst real case
+            NEAR(seaLevelHpaForQnh(1013.0, -400.0, col(+25)), 1013.0 + 3.8, 0.5);    // below sea level (the Dead Sea, 25 C warm): the other way round
         }
         NEAR(profileTemp(xa.tempProfile, 9144), -45, 0.5);                           // 30 000 ft
         CHECK(profileTemp(xa.tempProfile, 20000) == profileTemp(xa.tempProfile, 12000)); // constant above the top level

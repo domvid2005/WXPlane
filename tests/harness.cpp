@@ -47,6 +47,7 @@ static int g_begin = 0, g_end = 0, g_lastIncr = -1, g_lastImm = -1;
 struct Call { std::string where; bool airport; XPLMWeatherInfo_t info; double lat, lon, elev; };
 static std::vector<Call> g_calls;
 static float g_agl = 10000.0f;
+static int g_xpChangeMode = 3; static float g_xpVariability = 0.0f;   // X-Plane's own "evolution over time" (3 = static) and "variation across region"
 static double g_lat = 37.60, g_lon = -97.40; // cruising abeam KICT
 
 XPLMMenuID XPLMFindPluginsMenu(void) { return (void*)1; }
@@ -83,7 +84,7 @@ void XPLMGetPluginInfo(XPLMPluginID id, char* n, char* p, char* s, char* d) {
     if (d) d[0] = 0;
 }
 int XPLMIsPluginEnabled(XPLMPluginID) { return 1; }
-XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
+XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/change_mode")) return (void*)81; if (std::strstr(n, "region/variability_pct")) return (void*)82; if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
 int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
     if (r == (void*)79) { if (!out) return 13; for (int i = 0; i < n && off + i < 13; ++i) out[i] = g_turbArr[off + i]; return n; }
     static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};
@@ -91,7 +92,7 @@ int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
     for (int i = 0; i < n && off + i < 13; ++i) out[i] = lv[off + i];
     return n;
 }
-float XPLMGetDataf(XPLMDataRef r) { return r == (void*)14 ? 0.01f : g_agl; }
+float XPLMGetDataf(XPLMDataRef r) { return r == (void*)82 ? g_xpVariability : r == (void*)14 ? 0.01f : g_agl; }
 static double g_elev = 0;
 double XPLMGetDatad(XPLMDataRef r) { return r == (void*)10 ? g_lat : r == (void*)78 ? g_elev : g_lon; }
 static std::string g_logAll;
@@ -196,10 +197,10 @@ static XPLMMapCreatedCallback_f g_mapHook = nullptr;
 static int g_loadingFlag = 1;
 static int g_realWx = 0, g_realWxSets = 0;
 static int g_xpWxSource = 0;   // sim/weather/region/weather_source (1 = X-Plane's real weather)
-int XPLMGetDatai(XPLMDataRef r) { return r == (void*)80 ? g_xpWxSource : r == (void*)77 ? g_realWx : g_loadingFlag; }
+int XPLMGetDatai(XPLMDataRef r) { return r == (void*)81 ? g_xpChangeMode : r == (void*)80 ? g_xpWxSource : r == (void*)77 ? g_realWx : g_loadingFlag; }
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) { return r == (void*)77 ? xplmType_Int : xplmType_Int | xplmType_Float | xplmType_Double; }
 int XPLMCanWriteDataRef(XPLMDataRef) { return 1; }
-void XPLMSetDataf(XPLMDataRef, float) {}
+void XPLMSetDataf(XPLMDataRef r, float v) { if (r == (void*)82) g_xpVariability = v; }
 void XPLMSetDatad(XPLMDataRef, double) {}
 int XPLMGetDatavi(XPLMDataRef, int* v, int, int n) { for (int i = 0; i < n; ++i) v[i] = 0; return n; }
 int XPLMCountDataRefs(void) { return 2; }
@@ -210,7 +211,7 @@ float XPLMGetMagneticVariation(double, double) { return g_stubMagVar; }
 float XPLMDegTrueToDegMagnetic(float h) { return std::fmod(h - g_stubMagVar + 360.0f, 360.0f); }
 float XPLMDegMagneticToDegTrue(float h) { return std::fmod(h + g_stubMagVar + 360.0f, 360.0f); }
 void XPLMSetDatavf(XPLMDataRef r, float* v, int off, int n) { if (r == (void*)79) { for (int i = 0; i < n && off + i < 13; ++i) g_turbArr[off + i] = v[i]; ++g_turbWrites; } }
-void XPLMSetDatai(XPLMDataRef r, int v) { if (r == (void*)77) { g_realWx = v; ++g_realWxSets; } }
+void XPLMSetDatai(XPLMDataRef r, int v) { if (r == (void*)81) g_xpChangeMode = v; if (r == (void*)77) { g_realWx = v; ++g_realWxSets; } }
 XPLMMapLayerID XPLMCreateMapLayer(XPLMCreateMapLayer_t* p) { g_mapLabelCb = p->labelCallback; return (void*)77; }
 int XPLMDestroyMapLayer(XPLMMapLayerID) { g_mapDestroyed = true; return 1; }
 void XPLMRegisterMapCreationHook(XPLMMapCreatedCallback_f f, void*) { g_mapHook = f; }
@@ -223,6 +224,8 @@ void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* 
 struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
 static std::string g_pirepJson;
+static bool g_jet = false;         // HARNESS_JET: open water under a jet stream, the tropopause low north of 42.5 N and high south of it
+static bool g_highField = false;   // HARNESS_HIGHFIELD: four fields around Denver, 1,500-1,800 m high, 15-20 C colder than standard
 static bool g_ocean = false, g_oceanModel = false; static int g_oceanMetar = 0;   // HARNESS_OCEAN: METAR searches answer HTTP 204 (open water)   // HARNESS_TURB: pilot reports served for /api/data/pirep
 static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
 static void (*g_ecBuild)(std::time_t run, int step) = nullptr;   // HARNESS_TURB: builds the synthetic ECMWF index/file for one run+step
@@ -371,6 +374,34 @@ CURLcode curl_easy_perform(CURL* c) {
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
     }
+    if (g_jet && e->url.find("api.open-meteo.com") != std::string::npos && e->url.find("cloud_cover_1000hPa") == std::string::npos) {
+        // HARNESS_JET: winds and temperatures aloft for each point asked for. South of 42.5 N the warm side of a 190 kt jet (tropopause
+        // near 150 hPa, a front at 500-400 hPa, as over the North Pacific on 2026-11-21), north of it the cold side (tropopause near 300 hPa).
+        std::vector<double> lats;
+        const size_t p0 = e->url.find("latitude=");
+        if (p0 != std::string::npos) {
+            const std::string list = e->url.substr(p0 + 9, e->url.find('&', p0) - p0 - 9);
+            for (size_t a = 0; a < list.size();) { size_t c = list.find(',', a); if (c == std::string::npos) c = list.size(); lats.push_back(std::atof(list.substr(a, c - a).c_str())); a = c + 1; }
+        }
+        static const int lv[] = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
+        static const double ghW[] = {760, 1460, 3010, 5570, 7190, 9160, 10360, 11780, 13600, 16180, 18440}, tW[] = {3.5, -1, -15, -23.3, -24.5, -37, -47, -52.5, -59.5, -60.5, -56};
+        static const double ghC[] = {740, 1420, 2950, 5450, 7050, 8950, 10150, 11600, 13450, 16050, 18350}, tC[] = {-2, -7, -18, -34, -44, -52, -51, -50, -51, -53, -53};
+        const long t = (long)std::time(nullptr);
+        std::string b = "[";
+        for (size_t k = 0; k < lats.size(); ++k) {
+            const bool cold = lats[k] > 42.5;
+            b += std::string(k ? "," : "") + "{\"hourly\":{\"time\":[" + std::to_string(t) + "]";
+            for (size_t i = 0; i < 11; ++i) {
+                char q[300];
+                std::snprintf(q, sizeof q, ",\"wind_speed_%dhPa\":[%d],\"wind_direction_%dhPa\":[255],\"temperature_%dhPa\":[%g],\"geopotential_height_%dhPa\":[%g]",
+                              lv[i], 30 + (int)i * 16, lv[i], lv[i], cold ? tC[i] : tW[i], lv[i], cold ? ghC[i] : ghW[i]);
+                b += q;
+            }
+            b += "}}";
+        }
+        b += "]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
     if (g_oceanModel && e->url.find("api.open-meteo.com") != std::string::npos && e->url.find("cloud_cover_1000hPa") != std::string::npos) {
         // HARNESS_OCEAN, second part: the model's clouds and surface weather at 9 nodes (a low overcast deck at 925 hPa, drizzle)
         const long t = (long)std::time(nullptr);
@@ -402,6 +433,14 @@ CURLcode curl_easy_perform(CURL* c) {
         static std::string b;
         b = "[{\"icaoId\":\"LEMD\",\"lat\":40.4722,\"lon\":-3.5608,\"elev\":609,\"rawOb\":\"LEMD " + utcStamp(90) + " 24012KT 9999 -RA BKN020 OVC040 12/10 Q1008\"},"
             "{\"icaoId\":\"LETO\",\"lat\":40.4967,\"lon\":-3.4458,\"elev\":617,\"rawOb\":\"LETO " + utcStamp(90) + " 23010KT 9999 -RA BKN025 12/10 Q1008\"}]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
+    if (g_highField && e->url.find("aviationweather.gov/api/data/metar?bbox") != std::string::npos) {   // HARNESS_HIGHFIELD: the Denver area on a cold morning
+        static std::string b;
+        b = "[{\"icaoId\":\"KDEN\",\"lat\":39.8617,\"lon\":-104.6731,\"elev\":1655,\"rawOb\":\"KDEN " + utcStamp(20) + " 02006KT 10SM FEW120 M15/M20 Q1020\"},"
+            "{\"icaoId\":\"KAPA\",\"lat\":39.5701,\"lon\":-104.8493,\"elev\":1793,\"rawOb\":\"KAPA " + utcStamp(20) + " 36005KT 10SM FEW120 M14/M19 Q1020\"},"
+            "{\"icaoId\":\"KBJC\",\"lat\":39.9088,\"lon\":-105.1172,\"elev\":1724,\"rawOb\":\"KBJC " + utcStamp(20) + " 01004KT 10SM FEW120 M15/M20 Q1020\"},"
+            "{\"icaoId\":\"KFNL\",\"lat\":40.4518,\"lon\":-105.0113,\"elev\":1529,\"rawOb\":\"KFNL " + utcStamp(20) + " 35004KT 10SM FEW120 M13/M18 Q1020\"}]";
         e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
     }
     if (e->url.find("metar?ids=35D,K35D&") != std::string::npos) {   // the airport search: NOAA knows the field as K35D
@@ -518,11 +557,17 @@ static int runOneShot() {
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nvis_autocal = 0\n", f); std::fclose(f); }
     const bool realWx = std::getenv("HARNESS_REALWX") != nullptr;   // X-Plane's own real weather left on
     if (realWx) g_xpWxSource = 1;
+    g_xpVariability = 0.35f; g_xpChangeMode = 5;   // the user's own X-Plane weather settings: 35 % variation across the region, "deteriorating"
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
     for (int i = 0; i < 700 && g_calls.size() < 3; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
     for (int i = 0; i < 40; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    // 5.1.5: while WXPlane sets the weather, X-Plane's own variation and evolution of its base weather are held at none / static
+    // (with X-Plane's real weather on they are X-Plane's business and are left alone)
+    std::printf("oneshot: X-Plane's variation across region %.2f, evolution mode %d while WXPlane runs\n", g_xpVariability, g_xpChangeMode);
+    if (!realWx) CHECK(g_xpVariability == 0.0f && g_xpChangeMode == 3 && g_logAll.find("\"variation across region\" was 0.35") != std::string::npos);
+    else CHECK(g_xpVariability == 0.35f && g_xpChangeMode == 5);
     std::printf("oneshot: %zu records in %d weather update(s), largest %zu\n", g_calls.size(), g_end, g_maxBatch);
     CHECK(g_calls.size() >= 3);
     CHECK(g_end == 1 && g_begin == 1);               // one Begin/End pair for the whole first load
@@ -536,6 +581,7 @@ static int runOneShot() {
     }
     if (!realWx) CHECK(g_logAll.find("X-Plane weather source 0") != std::string::npos && g_logAll.find("real-world weather is ON") == std::string::npos);
     XPluginDisable();
+    CHECK(g_xpVariability == 0.35f && g_xpChangeMode == 5);   // the user's settings are back when WXPlane is switched off
     XPluginStop();
     std::printf("%s (%d failures)\n", g_fail ? "ONESHOT FAILED" : "ONESHOT OK", g_fail);
     return g_fail ? 1 : 0;
@@ -767,6 +813,114 @@ static int runOpera() {
     return g_fail ? 1 : 0;
 }
 
+// HARNESS_HIGHFIELD=1 (5.1.5): X-Plane works the pressure at a field out from the sea-level pressure through the real temperatures, so
+// what is sent for a QNH is the sea-level pressure that gives that field its QNH (wx::seaLevelHpaForQnh), on the temperatures the
+// record itself carries. Checked here the way X-Plane does it: from each record's sea-level pressure up through its own temperature
+// levels to the field must come out at the station pressure the QNH stands for.
+static int runHighField() {
+    const char* kCfg = hpath("WXPlane.cfg");
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 31\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\nuse_atis = 0\n", f); std::fclose(f); }
+    g_highField = true;
+    g_loadingFlag = 0;
+    g_lat = 39.86; g_lon = -104.67; g_elev = 1655; g_agl = 0;
+    char n[256], s[256], d[256];
+    CHECK(XPluginStart(n, s, d) == 1);
+    CHECK(XPluginEnable() == 1);
+    for (int i = 0; i < 900 && g_logAll.find("all weather records handed to X-Plane") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};   // the mock's temperature levels
+    auto up = [&](const XPLMWeatherInfo_t& in, double h) {   // the pressure at height h from the record's sea-level pressure and temperatures
+        auto T = [&](double z) {
+            for (int k = 1; k < 13; ++k) if (z <= lv[k]) { const double f = (z - lv[k - 1]) / (lv[k] - lv[k - 1]); return in.temp_layers[k - 1] + f * (in.temp_layers[k] - in.temp_layers[k - 1]) + 273.15; }
+            return in.temp_layers[12] + 273.15;
+        };
+        double sum = 0; const int nn = 400;
+        for (int k = 0; k < nn; ++k) sum += (h / nn) / T((k + 0.5) * h / nn);
+        return in.pressure_sl / 100.0 * std::exp(-9.80665 / 287.053 * sum);
+    };
+    struct F { const char* id; double lat, lon, elev; } fields[] = {{"KDEN", 39.8617, -104.6731, 1655}, {"KAPA", 39.5701, -104.8493, 1793}, {"KBJC", 39.9088, -105.1172, 1724}, {"KFNL", 40.4518, -105.0113, 1529}};
+    int found = 0;
+    double slMin = 1e9, slMax = 0;
+    for (const auto& fl : fields) {
+        const Call* c = nullptr;
+        for (const auto& k : g_calls) if (k.where == fl.id || (!k.airport && std::fabs(k.lat - fl.lat) < 1e-3 && std::fabs(k.lon - fl.lon) < 1e-3)) c = &k;
+        if (!c) continue;
+        ++found;
+        const double qfe = 1020.0 * std::pow(1.0 - 0.0065 * fl.elev / 288.15, 9.80665 / (287.053 * 0.0065));
+        const double atField = up(c->info, fl.elev);
+        const double need = atField / std::pow(1.0 - 0.0065 * fl.elev / 288.15, 9.80665 / (287.053 * 0.0065));   // the altimeter setting that reads the field's height
+        std::printf("[highfield] %s (%.0f m): QNH 1020.0, sea level sent %.1f hPa; at the field %.1f hPa (QNH means %.1f): altimeter setting needed %.1f hPa = %+.0f ft with the reported one\n",
+                    fl.id, fl.elev, c->info.pressure_sl / 100.0, atField, qfe, need, (1020.0 - need) * 27.3);
+        CHECK(c->info.pressure_alt == 0 && c->info.pressure_sl > 102800 && c->info.pressure_sl < 103800);   // 8 to 18 hPa more than the QNH in this cold air
+        CHECK(std::fabs(need - 1020.0) < 0.4);   // within 10 ft at the field (it was about 300 ft with the QNH itself sent)
+        slMin = std::min(slMin, (double)c->info.pressure_sl / 100.0); slMax = std::max(slMax, (double)c->info.pressure_sl / 100.0);
+    }
+    CHECK(found == 4);
+    // the records between the fields carry the same field of sea-level pressures (no step where two meet)
+    int tiles = 0; double tMin = 1e9, tMax = 0;
+    for (const auto& k : g_calls) {
+        if (k.airport || k.lat == 0) continue;
+        bool isField = false;
+        for (const auto& fl : fields) if (std::fabs(k.lat - fl.lat) < 1e-3 && std::fabs(k.lon - fl.lon) < 1e-3) isField = true;
+        if (isField || std::hypot((k.lat - 39.86) * 60.0, (k.lon + 104.67) * 46.0) > 40.0) continue;
+        ++tiles; tMin = std::min(tMin, (double)k.info.pressure_sl / 100.0); tMax = std::max(tMax, (double)k.info.pressure_sl / 100.0);
+    }
+    std::printf("[highfield] %d records within 40 nm between the fields: sea level %.1f-%.1f hPa (the fields' own %.1f-%.1f)\n", tiles, tMin, tMax, slMin, slMax);
+    CHECK(tiles > 20 && tMin > slMin - 1.5 && tMax < slMax + 1.5);
+    XPluginDisable(); XPluginStop();
+    std::printf(g_fail ? "HARNESS_HIGHFIELD FAILED (%d)\n" : "HARNESS_HIGHFIELD OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
+// HARNESS_JET=1 (5.1.5): the tropopause X-Plane is given. Open water under a jet stream: the model's tropopause is near FL285 on the
+// cold side and near FL455 on the warm side, and the warm side has a front at 500-400 hPa that the tropopause rule took for the
+// tropopause (FL175 at -23 C). Every record must get a tropopause that is real, that changes smoothly from record to record, and whose
+// temperature is on the record's own profile.
+static int runJet() {
+    const char* kCfg = hpath("WXPlane.cfg");
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 31\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\nuse_atis = 0\n", f); std::fclose(f); }
+    if (std::getenv("HARNESS_JET_OWN")) { FILE* f = std::fopen(kCfg, "a"); std::fputs("tropo_smooth = 0\n", f); std::fclose(f); }   // to see what each record's own tropopause gives (the checks below then fail)
+    g_ocean = true; g_oceanModel = true; g_jet = true;
+    g_loadingFlag = 0;
+    g_lat = 42.4; g_lon = -35.0; g_elev = 11100; g_agl = 11100;
+    char n[256], s[256], d[256];
+    CHECK(XPluginStart(n, s, d) == 1);
+    CHECK(XPluginEnable() == 1);
+    for (int i = 0; i < 1200 && g_logAll.find("all weather records handed to X-Plane") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};   // the mock's temperature levels
+    auto levelT = [&](const XPLMWeatherInfo_t& in, double z) {
+        for (int k = 1; k < 13; ++k) if (z <= lv[k]) { const double f = (z - lv[k - 1]) / (lv[k] - lv[k - 1]); return (double)in.temp_layers[k - 1] + f * (in.temp_layers[k] - in.temp_layers[k - 1]); }
+        return (double)in.temp_layers[12];
+    };
+    int withTropo = 0, low = 0, offProfile = 0;
+    double aMin = 1e9, aMax = 0, worstStep = 0, worstOff = 0;
+    for (size_t i = 0; i < g_calls.size(); ++i) {
+        const Call& a = g_calls[i];
+        if (a.airport || a.lat == 0 || !(a.info.troposphere_alt > 0)) continue;
+        ++withTropo;
+        aMin = std::min(aMin, (double)a.info.troposphere_alt); aMax = std::max(aMax, (double)a.info.troposphere_alt);
+        if (a.info.troposphere_alt < 8000.0f || a.info.troposphere_temp > -45.0f) ++low;
+        const double off = std::fabs(a.info.troposphere_temp - levelT(a.info, a.info.troposphere_alt));
+        worstOff = std::max(worstOff, off);
+        if (off > 3.5) ++offProfile;
+        for (size_t j = i + 1; j < g_calls.size(); ++j) {
+            const Call& b = g_calls[j];
+            if (b.airport || b.lat == 0 || !(b.info.troposphere_alt > 0)) continue;
+            const double dn = std::hypot((a.lat - b.lat) * 60.0, (a.lon - b.lon) * 60.0 * std::cos(a.lat * 3.14159265 / 180.0));
+            if (dn < 15.0) worstStep = std::max(worstStep, (double)std::fabs(a.info.troposphere_alt - b.info.troposphere_alt));
+        }
+    }
+    std::printf("[jet] %d records with a tropopause: FL%.0f to FL%.0f; largest step between records within 15 nm %.0f m; furthest from the record's own profile %.1f C\n",
+                withTropo, aMin / 30.48, aMax / 30.48, worstStep, worstOff);
+    CHECK(withTropo > 60);
+    CHECK(low == 0);            // the front at 500-400 hPa is not a tropopause anywhere
+    CHECK(worstStep < 900.0);   // no step of the tropopause between neighbouring records (it was 5 km across the jet)
+    CHECK(offProfile == 0);     // each temperature is on its own record's profile
+    CHECK(aMin < 11500.0 && aMax > 13000.0);   // lower towards the cold side, the full height on the warm side
+    XPluginDisable(); XPluginStop();
+    std::printf(g_fail ? "HARNESS_JET FAILED (%d)\n" : "HARNESS_JET OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 static int runOcean() {
     // 2026-11-09 crash report: "[WXPlane] no METARs within search radius" then X-Plane crashed (the open ocean).
     const char* kCfg = hpath("WXPlane.cfg");
@@ -793,6 +947,11 @@ static int runOcean() {
         for (const auto& c : g_calls) if (!c.airport) { ++gfs; for (const auto& L : c.info.cloud_layers) if (L.coverage > 0.8f && L.alt_base < 800) overcast = true; }
         std::printf("[ocean] model weather: %d location records, low overcast %s\n", gfs, overcast ? "yes" : "no");
         CHECK(gfs >= 9 && overcast);
+        // over water the model's sea-level pressure goes in as it is (the temperature correction of 5.1.5 is for fields above sea level)
+        int slOk = 0;
+        for (const auto& c : g_calls) if (!c.airport && c.info.pressure_alt == 0 && std::fabs(c.info.pressure_sl - 100630.0f) < 15.0f) ++slOk;
+        std::printf("[ocean] records with the model's sea-level pressure (1006.3 hPa): %d of %d\n", slOk, gfs);
+        CHECK(slOk == gfs);
     }
     g_oceanModel = false;
     // the menu's refresh and the windows also cope with no stations
@@ -979,10 +1138,12 @@ int main() {
     }
     if (std::getenv("HARNESS_BUMPS")) { return runBumps(); }
     if (std::getenv("HARNESS_DEBOUNCE")) { return runDebounce(); }
-    if (std::getenv("HARNESS_ONESHOT")) { return runOneShot(); }
+    if (std::getenv("HARNESS_ONESHOT") || std::getenv("HARNESS_REALWX")) { return runOneShot(); }   // REALWX: the same, with X-Plane's real weather left on
     if (std::getenv("HARNESS_STAGED")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_TURB")) return runTurb();
     if (std::getenv("HARNESS_OCEAN")) return runOcean();
+    if (std::getenv("HARNESS_HIGHFIELD")) return runHighField();
+    if (std::getenv("HARNESS_JET")) return runJet();
     if (std::getenv("HARNESS_OPERA")) return runOpera();
     if (std::getenv("HARNESS_RAMP")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
     { FILE* f = std::fopen(hpath("WXPlane.cfg"), "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }
@@ -1024,8 +1185,10 @@ int main() {
         CHECK(i.cloud_layers[0].cloud_type == 1.0f && i.cloud_layers[0].coverage == 1.0f);
         CHECK(i.cloud_layers[0].alt_base < 410 && i.cloud_layers[0].alt_top > 520 && i.cloud_layers[0].alt_top < 535); // VV001: fog layer 120 m deep (minimum), from the 407 m field
         CHECK(i.cloud_layers[1].coverage < 0.05f && i.cloud_layers[2].coverage < 0.05f);   // (an empty slot may carry a neighbour's height at 1 %)
-        std::printf("  KICT QNH sent: %.1f hPa\n", i.pressure_sl / 100.0);
-        CHECK(i.pressure_alt == 0 && i.pressure_sl > 101900 && i.pressure_sl < 102000);   // QNH goes in as sea-level pressure        // ATIS altimeter 30.11 overrides METAR 30.10
+        std::printf("  KICT sea-level pressure sent: %.1f hPa (QNH 1019.6 at 407 m, 8 C at the field)\n", i.pressure_sl / 100.0);
+        // ATIS altimeter 30.11 (1019.6 hPa) overrides METAR 30.10. 5.1.5: what goes in is the sea-level pressure X-Plane needs for that QNH
+        // at the field's height in this air (4 C colder than standard at the surface): about half a hPa more than the QNH.
+        CHECK(i.pressure_alt == 0 && i.pressure_sl > 101980 && i.pressure_sl < 102080);
         CHECK(i.max_altitude_msl_ft == 60000 && i.radius_nm >= 0.5 && i.radius_nm <= 30); // carries aloft data, so it reaches cruise levels
         CHECK(i.wind_layers[0].speed == 0 && i.wind_layers[1].speed > 0);
         CHECK(i.temp_layers[0] == 8);
@@ -1278,13 +1441,17 @@ int main() {
                         return (std::fabs(c.lat - 37.9) < 0.01 && std::fabs(c.lon + 97.9) < 0.01) || (std::fabs(c.lat - 37.2) < 0.01 && std::fabs(c.lon + 97.1) < 0.01); };
                     if (a.airport || b.airport || a.lat == 0 || b.lat == 0 || isOld(a) || isOld(b)) continue;
                     const double dn = std::hypot((a.lat - b.lat) * 60.0, (a.lon - b.lon) * 60.0 * std::cos(a.lat * 3.14159265 / 180.0));
-                    if (dn < 15.0 && std::fabs(a.info.pressure_alt - b.info.pressure_alt) / 100.0 > worst) {
-                        worst = std::fabs(a.info.pressure_alt - b.info.pressure_alt) / 100.0;
-                        if (worst > 1.0) std::printf("    %.3f,%.3f %.1f  vs  %.3f,%.3f %.1f\n", a.lat, a.lon, a.info.pressure_alt / 100, b.lat, b.lon, b.info.pressure_alt / 100);
+                    // (the pressure goes out in pressure_sl; this compared pressure_alt, which is 0 in what is sent, until 5.1.5)
+                    if (dn < 15.0 && std::fabs(a.info.pressure_sl - b.info.pressure_sl) / 100.0 > worst) {
+                        worst = std::fabs(a.info.pressure_sl - b.info.pressure_sl) / 100.0;
+                        if (worst > 1.0) std::printf("    %.3f,%.3f %.1f  vs  %.3f,%.3f %.1f\n", a.lat, a.lon, a.info.pressure_sl / 100, b.lat, b.lon, b.info.pressure_sl / 100);
                     }
                 }
-            std::printf("  largest QNH difference between records within 15 nm: %.2f hPa\n", worst);
+            std::printf("  largest sea-level pressure difference between records within 15 nm: %.2f hPa\n", worst);
             CHECK(worst < 1.0);
+            int noSl = 0;
+            for (size_t i = before; i < g_calls.size(); ++i) if (!(g_calls[i].info.pressure_sl > 87000.0f) || g_calls[i].info.pressure_alt != 0) ++noSl;
+            CHECK(noSl == 0);   // every record carries a sea-level pressure, none a pressure "at the station"
         }
         std::printf("  storm records: %d (%d convective), min vis %.0f m, max top %.0f m, precip %.2f, turbulence %.2f, radius %.1f nm\n",
                     storms, heavy, minVis, maxTop, maxPrecip, maxTurb, radius);

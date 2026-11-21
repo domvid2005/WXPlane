@@ -69,6 +69,14 @@ float profileTemp(const std::vector<std::pair<float, float>>& p, float altM);
 // The tropopause (WMO lapse-rate rule) of a profile; false when the profile is too short or shows none.
 bool findTropopause(const std::vector<std::pair<float, float>>& p, float& altM, float& tempC);
 float isaTempC(float altM);
+// The sea-level pressure to give X-Plane for a QNH reported at a field elevM high, so that an altimeter set to that QNH reads elevM
+// there. X-Plane takes the pressure at any height from the sea-level pressure through the real temperature column (measured
+// 2026-11-21 on 547 read-backs: X-Plane's altimeter setting leaves the sea-level pressure by about 1.3 hPa per 1,000 ft per 10 C off
+// standard, as the air does), while a QNH is the station pressure brought down through the standard column. Sent unchanged, the QNH
+// left the altimeter 38 ft out on the ground at Detroit (645 ft, 7 C colder than standard) and hundreds of feet out at a high field on
+// a cold or hot day. `column`: the temperatures X-Plane will hold, (altitude MSL m, C) ascending; under its lowest level the standard
+// lapse rate is taken, with no column the standard atmosphere (the QNH comes back unchanged). At sea level the QNH is returned as it is.
+double seaLevelHpaForQnh(double qnhHpa, double elevM, const std::vector<std::pair<float, float>>& column);
 // Wind at an altitude from an ascending profile, interpolated as vectors (350 and 010 deg give 000); ends are held.
 XpWind windAt(const std::vector<XpWind>& p, float altM);
 // Winds/temperatures aloft of a record from the sampled forecast levels; x.winds holds the surface layer (if any) on entry.

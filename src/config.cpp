@@ -36,6 +36,9 @@ bool loadConfig(const std::string& path, Config& c) {
         if (k == "avitab_tab") { c.avitabTab = toBool(v); continue; }
         if (k == "avitab_icon_x") { c.avitabIconX = d < 0 ? 0 : (d > 1 ? 1 : d); continue; }
         if (k == "avitab_icon_y") { c.avitabIconY = d < 0 ? 0 : (d > 1 ? 1 : d); continue; }
+        if (k == "qnh_temp_correct") { c.qnhTempCorrect = toBool(v); continue; }
+        if (k == "xp_base_steady") { c.xpBaseSteady = toBool(v); continue; }
+        if (k == "tropo_smooth") { c.tropoSmooth = toBool(v); continue; }
         if (k == "config_version") version = (int)d;
         else if (k == "enabled") c.enabled = toBool(v);
         else if (k == "use_atis") c.useAtis = toBool(v);
@@ -214,6 +217,9 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "avitab_tab = " << (c.avitabTab ? 1 : 0) << "\n"
       << "avitab_icon_x = " << c.avitabIconX << "\n"
       << "avitab_icon_y = " << c.avitabIconY << "\n"
+      << "qnh_temp_correct = " << (c.qnhTempCorrect ? 1 : 0) << "\n"
+      << "xp_base_steady = " << (c.xpBaseSteady ? 1 : 0) << "\n"
+      << "tropo_smooth = " << (c.tropoSmooth ? 1 : 0) << "\n"
       << "frame_check = " << (c.frameCheck ? 1 : 0) << "\n"
       << "use_aloft = " << (c.useAloft ? 1 : 0) << "\n"
       << "update_minutes = " << c.updateMinutes << "\n"

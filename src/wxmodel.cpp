@@ -114,9 +114,19 @@ bool findTropopause(const std::vector<std::pair<float, float>>& p, float& altM, 
         }
         if (z + 2000.0f > top) return false;   // the profile does not reach high enough to tell
         if ((profileTemp(p, z) - profileTemp(p, z + 2000.0f)) / 2.0f > 2.0f) continue;
+        // A front or a tropopause fold under a jet stream is a stable layer too, and can be over 2 km deep (2026-11-21, North Pacific jet
+        // of 190 kt: 500-400 hPa at 2.7 C/km at the aircraft; with that layer 3 C more stable this returned FL175 at -23 C, with -60 C
+        // still to come above it). Above such a layer the troposphere resumes, above the tropopause it does not: the 4 km above (or as
+        // much as the profile has) must stay at 2.5 C/km or less as well.
+        const float zu = std::min(z + 4000.0f, top);
+        if (zu - z > 2000.0f && (profileTemp(p, z) - profileTemp(p, zu)) / ((zu - z) / 1000.0f) > 2.5f) continue;
+        const float tz = profileTemp(p, z);
+        // ...and no tropopause is warmer than about -40 C (the warmest, over the poles in summer, are near -42 C): a warmer "one" is a
+        // stable layer in the middle of the troposphere, and the search goes on above it.
+        if (!std::isfinite(z) || !std::isfinite(tz) || tz > -38.0f) continue;
         altM = z;
-        tempC = profileTemp(p, z);
-        return std::isfinite(altM) && std::isfinite(tempC) && altM > 5000.0f && altM < 20000.0f && tempC > -95.0f && tempC < -20.0f;
+        tempC = tz;
+        return altM > 5000.0f && altM < 20000.0f && tempC > -95.0f;
     }
     return false;
 }
@@ -130,6 +140,35 @@ bool stationHasFog(const Station& st, const Config& cfg) {
 }
 
 float isaTempC(float altM) { return altM < 11000.0f ? 15.0f - 0.0065f * altM : -56.5f; }
+
+double seaLevelHpaForQnh(double qnhHpa, double elevM, const std::vector<std::pair<float, float>>& column) {
+    if (!(qnhHpa > 0) || !std::isfinite(elevM) || std::fabs(elevM) < 1.0 || elevM < -500.0 || elevM > 9000.0) return qnhHpa;
+    const double T0 = 288.15, L = 0.0065, g = 9.80665, R = 287.053;
+    const double qfe = qnhHpa * std::pow(1.0 - L * elevM / T0, g / (R * L));   // what the QNH says the pressure at the field is
+    auto tempK = [&](double z) {
+        double c;
+        if (column.empty()) c = 15.0 - L * z;
+        else if (z <= column.front().first) c = column.front().second + L * (column.front().first - z);   // under the lowest level: standard lapse
+        else if (z >= column.back().first) c = column.back().second;
+        else {
+            c = column.back().second;
+            for (size_t i = 1; i < column.size(); ++i)
+                if (z <= column[i].first) {
+                    const double span = column[i].first - column[i - 1].first, f = span > 0 ? (z - column[i - 1].first) / span : 0.0;
+                    c = column[i - 1].second + f * (column[i].second - column[i - 1].second);
+                    break;
+                }
+        }
+        return std::max(180.0, std::min(330.0, c + 273.15));
+    };
+    const int n = std::max(4, (int)std::ceil(std::fabs(elevM) / 50.0));
+    const double dz = elevM / n;
+    double sum = 0;   // the integral of dz / T from sea level to the field (negative below sea level)
+    for (int k = 0; k < n; ++k) sum += dz / tempK((k + 0.5) * dz);
+    const double sl = qfe * std::exp(g / R * sum);
+    if (!std::isfinite(sl)) return qnhHpa;
+    return std::max(qnhHpa - 45.0, std::min(qnhHpa + 45.0, sl));   // a wrong column can never move it further than the worst real case
+}
 
 float modelCloudTopM(const std::vector<std::pair<float, float>>& prof, float baseM) {
     const float kCloudy = 0.4f;

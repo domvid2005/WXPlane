@@ -202,8 +202,10 @@ void setStatus(const std::string& l1, const std::string& l2) {
 // every minute and blends them with WXPlane's records, and the regen_weather WXPlane sends at start made it fetch everything again
 // (a 19.7 s freeze during the load, none on a machine with it off). sim/weather/region/weather_source is 1 ("Real Weather") and
 // change_mode 7 ("Using Real Weather") then. Checked every 10 s; logged when it changes; the menu says so.
+void baseSteady();
 void realWeatherCheck() {
     static XPLMDataRef drSrc = XPLMFindDataRef("sim/weather/region/weather_source"), drMode = XPLMFindDataRef("sim/weather/region/change_mode");
+    static XPLMDataRef drVar = XPLMFindDataRef("sim/weather/region/variability_pct");
     static Clock::time_point next{};
     static int lastSrc = -99, lastMode = -99;
     const auto nowC = Clock::now();
@@ -212,7 +214,8 @@ void realWeatherCheck() {
     const int src = drSrc ? XPLMGetDatai(drSrc) : -1, mode = drMode ? XPLMGetDatai(drMode) : -1;
     if (src == lastSrc && mode == lastMode) return;
     const bool on = src == 1 || mode == 7;
-    logf("X-Plane weather source %d (0 preset, 1 real weather, 2 control pad, 3 plugin), change mode %d%s", src, mode,
+    logf("X-Plane weather source %d (0 preset, 1 real weather, 2 control pad, 3 plugin), change mode %d (3 = static), variation across region %.2f%s", src, mode,
+         drVar ? XPLMGetDataf(drVar) : -1.0f,
          on ? ": X-Plane's own real-world weather is ON - it should be off while WXPlane runs (X-Plane's weather settings), or the two are blended"
             : "");
     lastSrc = src; lastMode = mode;
@@ -289,18 +292,80 @@ bool underStorm(const std::vector<wx::RadarCell>& cells, double lat, double lon,
 // Now every record takes a smooth pressure field: a Gaussian-weighted mean (sigma 50 nm) of the station QNHs, with stations more than
 // 4 hPa off the local median left out of it. A station's own record keeps its QNH within 2 hPa of that field (so the altimeter setting at
 // the field stays close to the ATIS), never more.
+// 5.1.5: what goes to X-Plane is the sea-level pressure it needs for each QNH (wx::seaLevelHpaForQnh), not the QNH itself. X-Plane takes
+// the pressure at a field from the sea-level pressure through the real temperatures, so with the QNH sent as it was the altimeter was
+// out on the ground wherever the air was not standard: 38 ft at Detroit on a cold morning, hundreds of feet at a high field (and
+// X-Plane's own ATIS, which works its altimeter setting out the same way, disagreed with the real one). The smooth field is now made
+// of those sea-level pressures, which also differ far less between a valley and a mountain station than their QNHs do. Each record
+// keeps the QNH in pressure_alt (what the log and the windows show) and carries the pressure to send in pressure_sl.
+// qnh_temp_correct = 0 goes back to sending the QNH itself.
+// tempAltM: the height X-Plane takes a record's single temperature at (an airport's elevation; the ground altitude a location record is set with)
+std::vector<std::pair<float, float>> recColumn(const XPLMWeatherInfo_t& in, double tempAltM) {
+    const double elevM = tempAltM;
+    std::vector<std::pair<float, float>> col;   // the temperatures X-Plane will hold for this record
+    if (g_haveLevels)
+        for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i)
+            if (in.temp_layers[i] > -273.0f && std::isfinite(in.temp_layers[i]) && (col.empty() || g_levelsM[i] > col.back().first)) col.emplace_back(g_levelsM[i], in.temp_layers[i]);
+    if (col.size() < 2) {
+        col.clear();
+        if (in.temperature_alt > -273.0f && std::isfinite(in.temperature_alt)) {   // a surface temperature only: X-Plane moves the standard atmosphere by it at every height
+            const float d = in.temperature_alt - wx::isaTempC((float)elevM);
+            col.emplace_back(0.0f, 15.0f + d);
+            col.emplace_back(11000.0f, -56.5f + d);
+        }
+    }
+    return col;
+}
+float ownSeaLevelPa(const Rec& r) {   // from the record's own QNH, field elevation and temperatures
+    if (!(r.info.pressure_alt > 0)) return 0.0f;
+    if (!g_cfg.qnhTempCorrect) return r.info.pressure_alt;
+    const double tempAlt = (!r.airport && r.icao.empty() && g_cfg.fillQnhAtSeaLevel) ? 0.0 : r.elev;   // as sendRec sets it
+    return (float)(std::round(wx::seaLevelHpaForQnh(r.info.pressure_alt / 100.0, r.elev, recColumn(r.info, tempAlt)) * 10.0) * 10.0);
+}
+// The smooth sea-level pressure field of the last update (Gaussian-weighted mean, sigma 50 nm), for records made outside applyResult
+struct SlField { struct Q { double lat, lon, hpa; }; std::vector<Q> q; } g_slField;
+bool slFieldAt(double lat, double lon, double& out) {
+    double sw = 0, sv = 0;
+    const double sig = 50.0;
+    for (const auto& q : g_slField.q) {
+        const double d = wx::distNm(lat, lon, q.lat, q.lon);
+        const double w = std::exp(-d * d / (2.0 * sig * sig)) + 1e-9 / (1.0 + d);   // far from all stations: the nearest still counts a little
+        sw += w; sv += w * q.hpa;
+    }
+    if (g_slField.q.size() < 2 || sw <= 0) return false;
+    out = sv / sw;
+    return true;
+}
 void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& stations) {
-    if (!g_cfg.smoothPressure) return;
-    struct Q { double lat, lon, hpa; };
+    g_slField.q.clear();
+    if (!g_cfg.smoothPressure) {
+        for (auto& t : todo) t.rec.info.pressure_sl = ownSeaLevelPa(t.rec);
+        return;
+    }
+    std::map<std::string, const Todo*> stRec;   // each station's own record: its elevation and the temperatures it carries
+    for (const auto& t : todo) if (!t.rec.icao.empty() && t.key == t.rec.icao) stRec[t.key] = &t;
+    struct Q { double lat, lon, hpa, sl; std::string id; };
     std::vector<Q> qs;
-    for (const auto& s : stations) if (s.report.hasAltim && s.report.altimHpa > 850 && s.report.altimHpa < 1090) qs.push_back({s.lat, s.lon, s.report.altimHpa});
-    if (qs.size() < 2) return;
-    std::vector<unsigned char> keep(qs.size(), 1);
-    for (size_t i = 0; i < qs.size(); ++i) {   // outliers against the median of the stations within 100 nm
-        std::vector<double> around;
-        for (const auto& o : qs) if (wx::distNm(qs[i].lat, qs[i].lon, o.lat, o.lon) <= 100.0) around.push_back(o.hpa);
+    for (const auto& s : stations) {
+        if (!(s.report.hasAltim && s.report.altimHpa > 850 && s.report.altimHpa < 1090)) continue;
+        double sl = s.report.altimHpa;
+        auto it = stRec.find(s.icao);
+        if (g_cfg.qnhTempCorrect && it != stRec.end()) sl = wx::seaLevelHpaForQnh(s.report.altimHpa, it->second->rec.elev, recColumn(it->second->rec.info, it->second->rec.elev));
+        qs.push_back({s.lat, s.lon, s.report.altimHpa, sl, s.icao});
+    }
+    if (qs.size() < 2) {
+        for (auto& t : todo) t.rec.info.pressure_sl = ownSeaLevelPa(t.rec);
+        return;
+    }
+    // outliers against the median of the stations within 100 nm, for the QNHs and for the sea-level pressures
+    std::vector<unsigned char> keep(qs.size(), 1), keepSl(qs.size(), 1);
+    for (size_t i = 0; i < qs.size(); ++i) {
+        std::vector<double> around, aroundSl;
+        for (const auto& o : qs) if (wx::distNm(qs[i].lat, qs[i].lon, o.lat, o.lon) <= 100.0) { around.push_back(o.hpa); aroundSl.push_back(o.sl); }
         std::sort(around.begin(), around.end());
+        std::sort(aroundSl.begin(), aroundSl.end());
         if (around.size() >= 3 && std::fabs(qs[i].hpa - around[around.size() / 2]) > 4.0) keep[i] = 0;
+        if (aroundSl.size() >= 3 && std::fabs(qs[i].sl - aroundSl[aroundSl.size() / 2]) > 4.0) keepSl[i] = 0;
     }
     const double sig = 50.0;
     auto field = [&](double lat, double lon, double& out) {
@@ -314,17 +379,83 @@ void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& sta
         if (sw <= 0) return false;
         out = sv / sw; return true;
     };
+    for (size_t i = 0; i < qs.size(); ++i) if (keepSl[i]) g_slField.q.push_back({qs[i].lat, qs[i].lon, qs[i].sl});
     for (auto& t : todo) {
         XPLMWeatherInfo_t& in = t.rec.info;
         if (!(in.pressure_alt > 0)) continue;
         double lat = t.rec.lat, lon = t.rec.lon;
-        bool station = false;   // a station's own record (an airport record, or a location record for an airport X-Plane does not know)
-        for (const auto& st : stations) if (st.icao == t.key) { lat = st.lat; lon = st.lon; station = true; break; }
+        const Q* own = nullptr;   // a station's own record (an airport record, or a location record for an airport X-Plane does not know)
+        for (const auto& q : qs) if (q.id == t.key) { lat = q.lat; lon = q.lon; own = &q; break; }
+        bool station = own != nullptr;
+        if (!station) for (const auto& st : stations) if (st.icao == t.key) { lat = st.lat; lon = st.lon; station = true; break; }
+        // the pressure to send: the field's, a station's own within 2 hPa of it (so the altimeter at the field agrees with its report)
+        double fs;
+        if (slFieldAt(lat, lon, fs)) {
+            double sl = fs;
+            if (own) sl = fs + std::max(-2.0, std::min(2.0, own->sl - fs));
+            else if (station) sl = fs + std::max(-2.0, std::min(2.0, ownSeaLevelPa(t.rec) / 100.0 - fs));
+            in.pressure_sl = (float)(std::round(sl * 10.0) * 10.0);
+        } else in.pressure_sl = ownSeaLevelPa(t.rec);
         double f;
         if (!field(lat, lon, f)) continue;
         double hpa = f;
         if (station) hpa = f + std::max(-2.0, std::min(2.0, in.pressure_alt / 100.0 - f));
         in.pressure_alt = (float)(std::round(hpa * 10.0) * 10.0);   // 0.1 hPa steps, in Pa
+    }
+}
+
+// The tropopause X-Plane gets with each record (5.1.5). X-Plane holds the temperature at the tropopause height to the tropopause
+// temperature whatever its temperature levels say (2026-11-10: -57 C at FL360 where the levels had -52 C), and it blends the height
+// and the temperature of neighbouring records separately. Across a jet stream the tropopause steps from about FL300 on the cold side
+// to FL450 on the warm side within a few records: blended, that gives a tropopause halfway up with a temperature that is on neither
+// profile (worked out for one such pair: about 5 C out around FL370, and with it the pressure above). Now the height is a smooth field of the stations'
+// own tropopauses (Gaussian mean, sigma 60 nm). A record whose own tropopause is within 500 m of the field keeps it; otherwise it takes
+// the field's height with its own temperature there, read off the levels X-Plane holds for it - a point on its own profile, which
+// changes nothing in the sim. Without any tropopause to go by the point at 11,000 m (X-Plane's own default height) is given the same
+// way, so X-Plane never falls back to -56.5 C there. tropo_smooth = 0 goes back to each record's own tropopause.
+struct TropoField { struct Q { double lat, lon, altM; }; std::vector<Q> q; } g_tropoField;
+bool tropoFieldAt(double lat, double lon, double& altM) {
+    double sw = 0, sv = 0;
+    const double sig = 60.0;
+    for (const auto& q : g_tropoField.q) {
+        const double d = wx::distNm(lat, lon, q.lat, q.lon);
+        const double w = std::exp(-d * d / (2.0 * sig * sig)) + 1e-9 / (1.0 + d);
+        sw += w; sv += w * q.altM;
+    }
+    if (g_tropoField.q.empty() || sw <= 0) return false;
+    altM = sv / sw;
+    return true;
+}
+// The temperature X-Plane holds for a record at a height: linear between its levels; false outside them or without levels
+bool levelTemp(const XPLMWeatherInfo_t& in, float altM, float& out) {
+    if (!g_haveLevels) return false;
+    int lo = -1;
+    for (int i = 0; i < XPLM_NUM_TEMPERATURE_LAYERS; ++i) {
+        if (!(in.temp_layers[i] > -273.0f) || !std::isfinite(in.temp_layers[i])) continue;
+        if (g_levelsM[i] <= altM) { lo = i; continue; }
+        if (lo < 0) return false;
+        const float span = g_levelsM[i] - g_levelsM[lo];
+        if (!(span > 1.0f)) return false;
+        out = in.temp_layers[lo] + (altM - g_levelsM[lo]) / span * (in.temp_layers[i] - in.temp_layers[lo]);
+        return std::isfinite(out) && out > -95.0f && out < -25.0f;
+    }
+    return false;
+}
+void smoothTropopause(std::vector<Todo>& todo) {
+    g_tropoField.q.clear();
+    if (!g_cfg.tropoSmooth || !g_haveLevels) return;
+    for (const auto& t : todo)
+        if (!t.rec.icao.empty() && t.key == t.rec.icao && t.rec.info.troposphere_alt > 5000.0f) g_tropoField.q.push_back({t.rec.lat, t.rec.lon, t.rec.info.troposphere_alt});
+    for (auto& t : todo) {
+        XPLMWeatherInfo_t& in = t.rec.info;
+        double fa;
+        float tt;
+        if (tropoFieldAt(t.rec.lat, t.rec.lon, fa)) {
+            if (in.troposphere_alt > 5000.0f && std::fabs(in.troposphere_alt - fa) <= 500.0) continue;   // its own: the neighbours agree with it
+            if (levelTemp(in, (float)fa, tt)) { in.troposphere_alt = (float)fa; in.troposphere_temp = tt; }
+        } else if (!(in.troposphere_alt > 5000.0f) && levelTemp(in, 11000.0f, tt)) {
+            in.troposphere_alt = 11000.0f; in.troposphere_temp = tt;
+        }
     }
 }
 
@@ -708,7 +839,9 @@ void sendRec(Todo& t) {
     // in every record whose elevation differs. A QNH is the sea-level pressure of the standard atmosphere, so it now goes in pressure_sl,
     // which X-Plane uses whenever pressure_alt is 0; the record we keep (and compare against) is unchanged. qnh_as_sea_level = 0 undoes it.
     XPLMWeatherInfo_t sendInfo = t.rec.info;
-    if (g_cfg.qnhAsSeaLevel && sendInfo.pressure_alt > 0) { sendInfo.pressure_sl = sendInfo.pressure_alt; sendInfo.pressure_alt = 0.0f; }
+    // 5.1.5: pressure_sl of the record holds the sea-level pressure X-Plane needs for that QNH (smoothPressure); without one, the QNH itself.
+    if (g_cfg.qnhAsSeaLevel && sendInfo.pressure_alt > 0) { if (!(sendInfo.pressure_sl > 0)) sendInfo.pressure_sl = sendInfo.pressure_alt; sendInfo.pressure_alt = 0.0f; }
+    else if (!g_cfg.qnhAsSeaLevel) sendInfo.pressure_sl = 0.0f;
     if (t.rec.airport) XPLMSetWeatherAtAirport(t.rec.icao.c_str(), &sendInfo);
     // X-Plane calibrates a location record's QNH at the ground altitude passed here. Gap-fill and radar records used to pass the nearest
     // station's elevation, which jumps by thousands of feet between neighbouring tiles in the mountains; with one smooth QNH field that
@@ -1455,7 +1588,12 @@ void wsBuildInfo(const wx::shear::ShearRecord& r, XPLMWeatherInfo_t& info, doubl
     }
     fillInfo(info, x);
     info.radius_nm = r.radiusNm;
-    if (info.pressure_alt > 0) { info.pressure_sl = info.pressure_alt; info.pressure_alt = 0; }
+    if (info.pressure_alt > 0) {   // the same sea-level pressure as the records around it (a step inside the cell would move the altimeter)
+        double fs;
+        if (slFieldAt(r.lat, r.lon, fs)) info.pressure_sl = (float)(fs * 100.0);
+        else { Rec tmp; tmp.info = info; tmp.elev = b.elevM; info.pressure_sl = ownSeaLevelPa(tmp); }
+        info.pressure_alt = 0;
+    }
 }
 
 void windshearTick() {
@@ -1770,6 +1908,7 @@ void blendTarget(double lat, double lon, float* s) {
     std::memset(&q, 0, sizeof q);
     q.visibility = (float)x.visM;
     q.pressure_sl = x.qnhPa > 0 ? x.qnhPa : (float)(b.report.altimHpa > 0 ? b.report.altimHpa * 100.0 : 101325.0);
+    { double fs; if (slFieldAt(lat, lon, fs)) q.pressure_sl = (float)(fs * 100.0); }   // what was sent is the sea-level pressure for that QNH
     q.precip_rate = x.precip;
     for (int k = 0; k < 3; ++k) { q.cloud_layers[k].coverage = x.clouds[k].coverage; q.cloud_layers[k].alt_base = x.clouds[k].baseM; q.cloud_layers[k].alt_top = x.clouds[k].topM; }
     blendSig(q, s);
@@ -2494,6 +2633,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // coverage, so towards the clear side the deck only thins out, at its own height.
     matchEmptyLayers(todo);
     smoothPressure(todo, res.stations);
+    smoothTropopause(todo);
     // An airport record that is no longer wanted (the aircraft moved and the station list changed): X-Plane crashed twice right as
     // WXPlane began removing records after a move (logs 2026-11-03 22:41 and 23:03, both with airport records to remove, both gone with
     // no crash report before the first batch was through; an update that only removed location records went through). Such an update
@@ -2534,6 +2674,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
                 r.info = info;
                 r.info.age = 0.0f;
                 r.kept = true;
+                { double fs; r.info.pressure_sl = (r.info.pressure_alt > 0 && slFieldAt(r.lat, r.lon, fs)) ? (float)(std::round(fs * 10.0) * 10.0) : ownSeaLevelPa(r); }
                 todo.push_back({k, r});
             }
             for (const auto& kv : g_recs) if (kv.second.airport && !seen.count(kv.first)) seen[kv.first] = true;   // kept: never erased
@@ -2609,6 +2750,7 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     if (!g_firstApplyDone) g_firstApplyAt = Clock::now();
     if (!g_radarDeferred) g_startupPhase = false;     // start-up is over once the storm update (or the only update) is applied
     g_firstApplyDone = true;
+    baseSteady();   // X-Plane's own variation and evolution off from the first weather on (then every 20 s)
     g_lastRes = res;
     g_haveLast = true;
     ++g_viewVersion;
@@ -2684,8 +2826,8 @@ void logCoveringRecords(double lat, double lon, const char* label) {
         buf[0] = 0;
         for (int j = 0; j < XPLM_NUM_CLOUD_LAYERS && n < 200; ++j)
             if (L[j].coverage > 0) n += std::snprintf(buf + n, sizeof buf - n, " [%d: t%.0f %.0f%% %.0f-%.0f m]", j, L[j].cloud_type, L[j].coverage * 100, L[j].alt_base, L[j].alt_top);
-        logf("    %s  %.1f nm of r=%.1f nm, QNH %.1f hPa, rain %.2f:%s", hits[i].key->c_str(), hits[i].d, hits[i].r->info.radius_nm, hits[i].r->info.pressure_alt / 100.0f,
-             hits[i].r->info.precip_rate, buf);
+        logf("    %s  %.1f nm of r=%.1f nm, QNH %.1f hPa (sea level sent %.1f), rain %.2f:%s", hits[i].key->c_str(), hits[i].d, hits[i].r->info.radius_nm, hits[i].r->info.pressure_alt / 100.0f,
+             (hits[i].r->info.pressure_sl > 0 ? hits[i].r->info.pressure_sl : hits[i].r->info.pressure_alt) / 100.0f, hits[i].r->info.precip_rate, buf);
     }
 }
 
@@ -2754,6 +2896,9 @@ struct RegionSaved {
     float alt[XPLM_NUM_WIND_LAYERS], spd[XPLM_NUM_WIND_LAYERS], dir[XPLM_NUM_WIND_LAYERS];
     float temp[XPLM_NUM_TEMPERATURE_LAYERS];
     float troAlt = 0, troTemp = 0;
+    bool var = false, mode = false;   // X-Plane's own variation and evolution settings (baseSteady)
+    float variability = 0;
+    int changeMode = 3;
 };
 RegionSaved g_regionSaved;
 bool g_rwHaveW = false, g_rwHaveT = false, g_rwHaveTro = false;
@@ -2761,6 +2906,16 @@ std::time_t g_rwLast = 0;
 
 void regionRestore(const char* why) {
     const bool any = g_regionSaved.w || g_regionSaved.t || g_regionSaved.tro;
+    if (g_regionSaved.var) {
+        XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/variability_pct");
+        if (dr) XPLMSetDataf(dr, g_regionSaved.variability);
+        logf("%s: X-Plane's \"variation across region\" put back to %.2f", why, g_regionSaved.variability);
+    }
+    if (g_regionSaved.mode) {
+        XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/change_mode");
+        if (dr && XPLMGetDatai(dr) != 7) XPLMSetDatai(dr, g_regionSaved.changeMode);
+        logf("%s: X-Plane's \"evolution over time\" put back to mode %d", why, g_regionSaved.changeMode);
+    }
     if (g_regionSaved.w) {
         XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
                     drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
@@ -2782,6 +2937,40 @@ void regionRestore(const char* why) {
     g_rwHaveW = g_rwHaveT = g_rwHaveTro = false;
     g_rwLast = 0;
     if (any) logf("%s: X-Plane's region winds, temperatures and tropopause put back", why);
+}
+
+// X-Plane's own weather simulation on top of the region ("base") weather. At cruise the temperatures and winds aloft come from that
+// base, which WXPlane writes every 20 s (pushRegionWinds). X-Plane also changes the base by itself (Laminar's note on the weather
+// datarefs): it varies it with the distance from the place it was set for ("Variation across region" in its weather settings,
+// sim/weather/region/variability_pct) and lets it drift with time ("Evolution over time", change_mode). That is the one part of the
+// temperatures aloft WXPlane did not control. 2026-11-21, a customer over the North Pacific had -36 C at FL364 in the sim (ISA+19)
+// where WXPlane's profile had -49 C; there is no log of that flight, so this is a possible cause, not a proven one (the check in
+// pushRegionWinds will say so in the next log). While WXPlane sets the weather and X-Plane's real weather is off, both are held at
+// none / static; what the user had is put back when WXPlane is switched off (regionRestore). xp_base_steady = 0 leaves them alone.
+void baseSteady() {
+    if (!g_cfg.xpBaseSteady || !g_cfg.enabled || !g_pluginEnabled || g_xpRealWx) return;
+    static XPLMDataRef drVar = XPLMFindDataRef("sim/weather/region/variability_pct"), drMode = XPLMFindDataRef("sim/weather/region/change_mode");
+    static int varTries = 0, modeTries = 0;   // a value X-Plane will not take is tried three times, then left
+    if (drVar && XPLMCanWriteDataRef(drVar) && varTries < 3) {
+        const float v = XPLMGetDataf(drVar);
+        if (std::isfinite(v) && v > 0.005f && v <= 100.0f) {
+            if (!g_regionSaved.var) { g_regionSaved.var = true; g_regionSaved.variability = v; }
+            XPLMSetDataf(drVar, 0.0f);
+            ++varTries;
+            logf("X-Plane's own \"variation across region\" was %.2f (0 = none): set to 0 while WXPlane sets the weather - with it X-Plane varies its base "
+                 "weather by itself, which can move the temperatures, pressure and winds aloft away from WXPlane's (put back when WXPlane is switched off; xp_base_steady = 0 leaves it)", v);
+        } else varTries = 0;
+    }
+    if (drMode && XPLMCanWriteDataRef(drMode) && modeTries < 3) {
+        const int m = XPLMGetDatai(drMode);
+        if (m >= 0 && m <= 6 && m != 3) {
+            if (!g_regionSaved.mode) { g_regionSaved.mode = true; g_regionSaved.changeMode = m; }
+            XPLMSetDatai(drMode, 3);
+            ++modeTries;
+            logf("X-Plane's own \"evolution over time\" was mode %d (3 = static): set to static while WXPlane sets the weather - with it X-Plane lets "
+                 "its base weather drift by itself (put back when WXPlane is switched off; xp_base_steady = 0 leaves it)", m);
+        } else modeTries = 0;
+    }
 }
 
 void pushRegionWinds(const wx::XpWx& xin) {
@@ -2847,12 +3036,38 @@ void pushRegionWinds(const wx::XpWx& xin) {
     if (drT && XPLMCanWriteDataRef(drT) && x.tempProfile.size() >= 2 && g_drLevels) {
         float lv[XPLM_NUM_TEMPERATURE_LAYERS], tc[XPLM_NUM_TEMPERATURE_LAYERS];
         if (XPLMGetDatavf(g_drLevels, lv, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS) {
+            float cur[XPLM_NUM_TEMPERATURE_LAYERS];
+            const bool got = XPLMGetDatavf(drT, cur, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
+            static float wrote[XPLM_NUM_TEMPERATURE_LAYERS];
+            static bool haveWrote = false;
+            static std::time_t lastMoveAt = 0;   // when WXPlane's own writes last changed a level (X-Plane fades a change in over a minute or two)
             if (!haveT) {
-                float cur[XPLM_NUM_TEMPERATURE_LAYERS];
-                const bool got = XPLMGetDatavf(drT, cur, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
                 for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k)
                     ct[k] = (got && std::isfinite(cur[k]) && cur[k] > -95.0f && cur[k] < 60.0f) ? cur[k] : wx::profileTemp(x.tempProfile, lv[k]);
                 haveT = true;
+                haveWrote = false;
+            } else if (got && haveWrote && now - lastMoveAt >= 180) {
+                // Does the sim still hold what was written 20 s ago (and has been written, unchanged, for 3 minutes)? If not, X-Plane
+                // changed its base weather by itself (its variation and evolution settings, a new region as the aircraft moves on, a weather
+                // rebuild): said in the log, so a temperature or pressure complaint can be traced to it (2026-11-21: -36 C at FL364 over the
+                // Pacific where WXPlane's profile had -49 C, and no log of that flight to tell why).
+                float worst = 0; int wk = 0, n = 0;
+                for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k) {
+                    const float d = (std::isfinite(cur[k]) && cur[k] > -95.0f && cur[k] < 60.0f) ? std::fabs(cur[k] - wrote[k]) : 0.0f;
+                    if (d > 2.0f) ++n;
+                    if (d > worst) { worst = d; wk = k; }
+                }
+                static std::time_t lastSelf = 0;
+                static int selfCount = 0;
+                if (n > 0) {
+                    ++selfCount;
+                    if (selfCount <= 3 || now - lastSelf >= 600) {
+                        lastSelf = now;
+                        logf("X-Plane changed its base temperatures by itself since WXPlane wrote them 20 s ago: at %.0f ft it holds %.1f C, written %.1f C "
+                             "(%d of %d levels differ by more than 2 C; time %d this flight). They are written again now.",
+                             lv[wk] / 0.3048f, cur[wk], wrote[wk], n, XPLM_NUM_TEMPERATURE_LAYERS, selfCount);
+                    }
+                }
             }
             float maxGap = 0; int gapK = 0;
             for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k) {
@@ -2864,6 +3079,11 @@ void pushRegionWinds(const wx::XpWx& xin) {
             }
             if (!g_regionSaved.t) g_regionSaved.t = XPLMGetDatavf(drT, g_regionSaved.temp, 0, XPLM_NUM_TEMPERATURE_LAYERS) == XPLM_NUM_TEMPERATURE_LAYERS;
             XPLMSetDatavf(drT, tc, 0, XPLM_NUM_TEMPERATURE_LAYERS);
+            for (int k = 0; k < XPLM_NUM_TEMPERATURE_LAYERS; ++k) {
+                if (!haveWrote || std::fabs(tc[k] - wrote[k]) > 0.25f) lastMoveAt = now;
+                wrote[k] = tc[k];
+            }
+            haveWrote = true;
             static std::time_t lastRampLog = 0;
             if (maxGap > 5.0f && now - lastRampLog > 60) {
                 lastRampLog = now;
@@ -2876,7 +3096,10 @@ void pushRegionWinds(const wx::XpWx& xin) {
         logf("region temperature datarefs are missing or read-only: not writing temperatures aloft there");
     }
     // The tropopause, if X-Plane has region datarefs for it (not documented; looked up, written only when they exist and are writable).
-    // Ramped like the temperatures: at most 1.5 C and 300 m per write.
+    // The height moves at most 300 m per write. 5.1.5: towards the smooth field's height at the aircraft (smoothTropopause), and the
+    // temperature written is the profile's at the height written - before, height and temperature moved separately (1.5 C per write), so
+    // while the tropopause moved (crossing a jet stream) the sim held a tropopause that was not on the profile (worked out for a move
+    // from FL295 at -51 C to FL437 at -58 C: 10 C colder than the profile at FL345 on the way), and X-Plane holds the temperature there to it.
     static XPLMDataRef drTa = XPLMFindDataRef("sim/weather/region/tropo_alt_m"), drTt = XPLMFindDataRef("sim/weather/region/tropo_temp_c");
     static bool troReported = false;
     bool& haveTro = g_rwHaveTro;
@@ -2888,7 +3111,13 @@ void pushRegionWinds(const wx::XpWx& xin) {
         logf(canTro ? "tropopause: writing the GFS profile's tropopause into the sim's region tropopause datarefs too"
                     : "tropopause: no writable region tropopause datarefs (set in the weather records only)");
     }
-    if (canTro && x.tempProfile.size() >= 3 && wx::findTropopause(x.tempProfile, ta, tt)) {
+    bool haveTarget = canTro && x.tempProfile.size() >= 3 && wx::findTropopause(x.tempProfile, ta, tt);
+    if (canTro && g_cfg.tropoSmooth && x.tempProfile.size() >= 3) {
+        double fa;
+        if (g_drLat && g_drLon && tropoFieldAt(XPLMGetDatad(g_drLat), XPLMGetDatad(g_drLon), fa)) { ta = (float)fa; haveTarget = true; }
+        else if (!haveTarget && x.tempProfile.back().first >= 11500.0f) { ta = 11000.0f; haveTarget = true; }
+    }
+    if (haveTarget) {
         if (!haveTro) {
             const float a0 = XPLMGetDataf(drTa), t0 = XPLMGetDataf(drTt);
             cTa = (std::isfinite(a0) && a0 > 5000.0f && a0 < 20000.0f) ? a0 : ta;
@@ -2896,7 +3125,10 @@ void pushRegionWinds(const wx::XpWx& xin) {
             haveTro = true;
         }
         cTa += std::max(-300.0f, std::min(300.0f, ta - cTa));
-        cTt += std::max(-1.5f, std::min(1.5f, tt - cTt));
+        if (g_cfg.tropoSmooth) {
+            const float onProfile = wx::profileTemp(x.tempProfile, cTa);
+            if (std::isfinite(onProfile) && onProfile > -95.0f && onProfile < -20.0f) cTt = onProfile;
+        } else cTt += std::max(-1.5f, std::min(1.5f, tt - cTt));
         if (!g_regionSaved.tro) { g_regionSaved.troAlt = XPLMGetDataf(drTa); g_regionSaved.troTemp = XPLMGetDataf(drTt); g_regionSaved.tro = true; }
         XPLMSetDataf(drTa, cTa);
         XPLMSetDataf(drTt, cTt);
@@ -2954,8 +3186,20 @@ void weatherWatch() {
     }
     // pressure_alt in a weather read-back is the QNH-style value X-Plane holds for the spot (it read 1008-1045 hPa at FL350), not the air
     // pressure at the aircraft; the real static pressure is in the altitude watch ("outside pressure").
-    logf("  pressure: report QNH %.1f hPa | X-Plane's read-back for this spot: QNH-style value %.1f hPa, sea level %.1f hPa (aircraft at %.0f ft; outside pressure is in the altitude watch)",
-         x.qnhPa / 100.0f, info.pressure_alt / 100.0f, info.pressure_sl / 100.0f, el / 0.3048);
+    {
+        // 5.1.5: what was sent is the sea-level pressure X-Plane needs for the QNH (smoothPressure). On the ground at a field with a report
+        // X-Plane's altimeter setting should now equal the reported QNH; in the air it leaves it with the temperature, as the real one does.
+        double fs = 0;
+        char sentSl[64] = "";
+        if (slFieldAt(lat, lon, fs)) std::snprintf(sentSl, sizeof sentSl, ", we sent sea level %.1f hPa", fs);
+        const float aglFt = g_drAgl ? XPLMGetDataf(g_drAgl) / 0.3048f : 1e9f;
+        char onGround[160] = "";
+        if (aglFt < 30.0f && nearSt && nearD < 3.0 && x.qnhPa > 0 && info.pressure_alt > 0)
+            std::snprintf(onGround, sizeof onGround, " | on the ground at %s: with the reported QNH the altimeter reads %+.0f ft against the field", nearSt->icao.c_str(),
+                          (x.qnhPa - info.pressure_alt) / 100.0f * 27.3f);
+        logf("  pressure: report QNH %.1f hPa%s | X-Plane's read-back for this spot: altimeter setting that reads true altitude here %.1f hPa, sea level %.1f hPa (aircraft at %.0f ft; outside pressure is in the altitude watch)%s",
+             x.qnhPa / 100.0f, sentSl, info.pressure_alt / 100.0f, info.pressure_sl / 100.0f, el / 0.3048, onGround);
+    }
     for (int i = 0; i < XPLM_NUM_CLOUD_LAYERS; ++i)
         logf("  layer %d: X-Plane type %.1f cov %.2f %.0f-%.0f m | we want type %.1f cov %.2f %.0f-%.0f m (aircraft at %.0f m)", i,
              info.cloud_layers[i].cloud_type, info.cloud_layers[i].coverage, info.cloud_layers[i].alt_base, info.cloud_layers[i].alt_top,
@@ -3284,7 +3528,7 @@ float flightLoop(float, float, int, void*) {
     }
     {
         static Clock::time_point nextRegion{};
-        if (Clock::now() >= nextRegion) { nextRegion = Clock::now() + std::chrono::seconds(20); regionTick(); }
+        if (Clock::now() >= nextRegion) { nextRegion = Clock::now() + std::chrono::seconds(20); if (g_firstApplyDone) baseSteady(); regionTick(); }
     }
     windshearTick();
     dryRunwayTick();
