@@ -888,6 +888,8 @@ static int runOpera() {
 // in, for the three things those pictures show:
 //   walls  - solid cloud (60 % or more) beside a touching record that has no cloud (25 %) anywhere at its heights
 //   lids   - touching records whose highest solid top is exactly the same
+//   faces  - the tallest stretch of a record's solid cloud where a touching record has no cloud (a wall only in part covered counts
+//            here too; the stricter measure of the two), and steps: a solid top more than 650 m per nm above the neighbour's cloud
 //   towers - a thin layer (10 to 60 %) 3,000 m deep or more in a record without rain (scattered cloud as deep as the front)
 // HARNESS_SQUARES_OFF=1 runs it with deck_shape = 0 (the picture before 5.1.5, which the test must then find again), and
 // HARNESS_SQUARES_EDGE=1 with clear sky reported on both sides of the band.
@@ -937,8 +939,19 @@ static int runSquares() {
         v.push_back(q);
     }
     auto distNm = [](const R& a, const R& b) { return std::hypot((a.lat - b.lat) * 60.0, (a.lon - b.lon) * 60.0 * std::cos(a.lat * 3.14159265 / 180.0)); };
-    int rain = 0, solid = 0, wallRecs = 0, walls2000 = 0, pairs = 0, level = 0, towers = 0, thin = 0;
-    double wallMax = 0;
+    int rain = 0, solid = 0, wallRecs = 0, walls2000 = 0, pairs = 0, level = 0, towers = 0, thin = 0, faces2000 = 0, faces3500 = 0, near2000 = 0, steep = 0;
+    double wallMax = 0, faceMax = 0;
+    // the longest stretch of [lo, hi] that none of the (sorted, united) intervals covers
+    auto openStretch = [](float lo, float hi, const std::vector<std::pair<float, float>>& cov) {
+        float cur = lo, worst = 0;
+        for (const auto& y : cov) {
+            if (y.second <= cur || y.first >= hi) continue;
+            if (y.first > cur) worst = std::max(worst, y.first - cur);
+            cur = std::max(cur, y.second);
+        }
+        if (cur < hi) worst = std::max(worst, hi - cur);
+        return worst;
+    };
     std::vector<double> depths;
     for (size_t i = 0; i < v.size(); ++i) {
         if (v[i].rain > 0.01) ++rain;
@@ -947,24 +960,36 @@ static int runSquares() {
         ++solid;
         double dep = 0; for (const auto& x : v[i].solid) dep += x.second - x.first;
         depths.push_back(dep);
-        double wall = 0;
+        double wall = 0, face = 0, faceNear = 0;
         for (size_t j = 0; j < v.size(); ++j) {
-            if (i == j || distNm(v[i], v[j]) > (v[i].r + v[j].r) * 0.8) continue;   // footprints that touch: the radius is 0.9 of a square's side
+            const double dij = distNm(v[i], v[j]);
+            if (i == j || dij > (v[i].r + v[j].r) * 0.8) continue;   // footprints that touch: the radius is 0.9 of a square's side
             for (const auto& x : v[i].solid) {
                 bool covered = false;
-                for (const auto& y : v[j].any) if (y.second > x.first && y.first < x.second) covered = true;
+                float nbLow = 1e9f, nbTop = -1e9f;
+                for (const auto& y : v[j].any) if (y.second > x.first && y.first < x.second) { covered = true; nbLow = std::min(nbLow, y.first); nbTop = std::max(nbTop, y.second); }
                 if (!covered) wall = std::max(wall, (double)(x.second - x.first));
+                const double open = openStretch(x.first, x.second, v[j].any);
+                face = std::max(face, open);
+                if (dij <= 12.0) faceNear = std::max(faceNear, open);
+                if (covered && nbLow <= x.first + 150.0f && (x.second - nbTop) / std::max(1.0, dij) > 650.0) ++steep;
             }
             if (j > i && !v[j].solid.empty()) { ++pairs; if (std::fabs(v[i].solid.back().second - v[j].solid.back().second) < 1.0f) ++level; }
         }
         if (wall >= 300.0) ++wallRecs;
         if (wall >= 2000.0) ++walls2000;
         wallMax = std::max(wallMax, wall);
+        if (face >= 2000.0) ++faces2000;
+        if (face >= 3500.0) ++faces3500;
+        if (faceNear >= 2000.0) ++near2000;
+        faceMax = std::max(faceMax, face);
     }
     std::sort(depths.begin(), depths.end());
     const double depMed = depths.empty() ? 0.0 : depths[depths.size() / 2];
     std::printf("[squares] %s%s: records %zu, with rain %d, with solid cloud %d (median %.0f m deep)\n", off ? "deck_shape = 0" : "deck_shape = 1", g_operaEdge ? ", clear sky beside the band" : "", v.size(), rain, solid, depMed);
     std::printf("[squares] walls: %d records with solid cloud beside a record with none at its heights, %d of them 2,000 m high or more (highest %.0f m)\n", wallRecs, walls2000, wallMax);
+    std::printf("[squares] faces: solid cloud with a stretch of 2,000 m or more open beside it: %d records (%d against a record within 12 nm), 3,500 m or more: %d (highest %.0f m); tops over 650 m per nm above the neighbour's: %d\n",
+                faces2000, near2000, faces3500, faceMax, steep);
     std::printf("[squares] lids: %d of %d touching pairs of solid cloud have exactly the same top (%.0f %%)\n", level, pairs, pairs ? 100.0 * level / pairs : 0.0);
     std::printf("[squares] towers: %d of %d thin layers (10-60 %%) in records without rain are 3,000 m deep or more\n", towers, thin);
     if (std::getenv("HARNESS_SQUARES_DUMP"))   // every record's layers, for a closer look
@@ -978,6 +1003,7 @@ static int runSquares() {
     if (off) {
         // the picture before 5.1.5 (measured the same in 5.1.4): the scenario must show what the screenshots show, or it proves nothing
         CHECK(walls2000 >= 5 && wallMax > 5000.0);          // pits and ends as high as the deepest deck X-Plane allows (5,084 m)
+        CHECK(faces3500 >= 5 && near2000 >= 25 && steep >= 5);
         CHECK(level * 2 > pairs);                           // more than half of all touching tops exactly level
         CHECK(towers >= 15);                                // scattered cloud 3 km deep and more
         CHECK(depMed > 5000.0);
@@ -985,10 +1011,13 @@ static int runSquares() {
         // clear sky beside the band: the deep deck ends against it far out, where the records are 10 to 30 nm wide (the smoothing reaches
         // 8 nm), so some of that end stays; it must be less than it was (11 records, 21 towers)
         CHECK(walls2000 <= 6);
+        CHECK(faces3500 <= 3 && near2000 <= 14 && steep <= 2);   // 11, 34 and 9 with deck_shape = 0
         CHECK(level * 10 < pairs);
         CHECK(towers <= 10);
     } else {
         CHECK(walls2000 == 0 && wallMax < 1000.0);          // no pit and no end of 2,000 m or more (7 of 5,084 m before)
+        // the stricter measure: what is left stands where two fields report it (a low deck beside "few, then broken at 10,000 ft")
+        CHECK(faces3500 <= 2 && near2000 <= 12 && steep <= 2);   // 7, 34 and 9 before
         CHECK(level * 10 < pairs);                          // under a tenth of the tops level (65 % before)
         CHECK(towers <= 20);                                // 44 before
         CHECK(depMed > 4000.0);                             // and the deck is still as deep as the model has it (not shaved off everywhere)

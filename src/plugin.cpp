@@ -565,7 +565,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         // sigma grows with the record's own size, so the coarse 30 nm tiles further out are smoothed against their neighbours too
         auto sigOf = [&](size_t i) { return std::max(g_cfg.cloudSmoothNm, 0.7 * (double)todo[i].rec.info.radius_nm); };
         auto isFog = [&](size_t i, int k) { const auto& c = todo[i].rec.info.cloud_layers[k]; return isReal[i][k] && c.alt_base < todo[i].rec.elev + 250.0; };
-        struct Acc { double w = 0, wc = 0, cb = 0, ct = 0, cy = 0, sup = 0, supMax = 0; };
+        struct Acc { double w = 0, wc = 0, cb = 0, ct = 0, cy = 0, ws = 0, sup = 0, supMax = 0; };
         std::vector<std::array<XPLMWeatherInfoClouds_t, 3>> out(n);
         std::vector<std::array<bool, 3>> outReal(n);
         for (size_t i = 0; i < n; ++i) {
@@ -574,6 +574,10 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             if (todo[i].rec.airport || !todo[i].rec.holdOf.empty() || isBump(i)) continue;
             Acc a[3];
             const double sig = sigOf(i), reach = 3.0 * sig;
+            // (deck_shape) where the cloud ends is judged over the records that touch this one: 1.3 of its own radius where that is more
+            // than the smoothing's reach. Far out the records are 10 to 30 nm wide and the smoothing reaches 8 to 20 nm: the last record
+            // of an overcast saw almost only itself, kept the whole depth, and the deck ended there at 4,800 m (2026-11-21).
+            const double sigS = g_cfg.deckShape ? std::max(sig, 1.3 * (double)todo[i].rec.info.radius_nm) : sig, reachS = 3.0 * sigS;
             // Only layers that touch are blended (2026-11-13: decks at different heights were averaged into one in between, and
             // hung down in waves under the cloud). The layer a neighbour's is held against: this record's own, or (an empty slot
             // here) the neighbours' heaviest one in that slot.
@@ -601,13 +605,14 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             for (size_t j = 0; j < n; ++j) {
                 if (isBump(j)) continue;   // a bump is its deck again (see above): it would count the deck twice
                 const double d = wx::distNm(todo[i].rec.lat, todo[i].rec.lon, todo[j].rec.lat, todo[j].rec.lon);
-                if (d > reach) continue;
+                if (d > reachS) continue;
+                const bool inReach = d <= reach;   // the smoothing itself keeps its own reach
                 const double r = std::max(1.0, (double)todo[j].rec.info.radius_nm);
-                const double w = std::exp(-d * d / (2.0 * sig * sig)) * r * r;
+                const double w = std::exp(-d * d / (2.0 * sig * sig)) * r * r, wS = std::exp(-d * d / (2.0 * sigS * sigS)) * r * r;
                 for (int k = 0; k < K; ++k) {
                     if (isFog(j, k)) continue;
                     const XPLMWeatherInfoClouds_t* cp = &todo[j].rec.info.cloud_layers[k];
-                    a[k].w += w;
+                    if (inReach) a[k].w += w;
                     // (deck_shape, below) how much cloud this neighbour has at the heights of the deck here, in whichever slot and whatever
                     // its base: the share of the deck's depth its layers fill, times their cover (cirrus and ground fog are no part of a deck)
                     if (g_cfg.deckShape && haveRef[k] && ref[k].alt_top > ref[k].alt_base + 1.0f) {
@@ -620,9 +625,10 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                             if (ov > 0) cj += (double)q.coverage * ov / (ref[k].alt_top - ref[k].alt_base);
                         }
                         cj = std::min(1.0, cj);
-                        a[k].sup += w * cj;
-                        a[k].supMax = std::max(a[k].supMax, cj * std::exp(-d * d / (2.88 * sig * sig)));   // the most of it near here (counted less with distance, 1.2 sigma, so it changes smoothly)
+                        a[k].ws += wS; a[k].sup += wS * cj;
+                        a[k].supMax = std::max(a[k].supMax, cj * std::exp(-d * d / (2.88 * sigS * sigS)));   // the most of it near here (counted less with distance, 1.2 sigma, so it changes smoothly)
                     }
+                    if (!inReach) continue;
                     bool has = isReal[j][k] && haveRef[k] && touches(*cp, ref[k]);
                     // 5.1.5 (deck_shape): the same deck in another slot of the neighbour counts as well. A rain record carries its rain cloud
                     // in the lowest slot and the station's deck one slot up, the dry record beside it has that deck in the lowest slot: slot
@@ -669,8 +675,8 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 // record with rain: the radar and the rim of the rain shape those (applyStorm), and a rain cloud made thin stops the rain
                 // in X-Plane (2026-11-14 KFDR). The dry records around them slope off.
                 const bool rainRec = todo[i].key.compare(0, 6, "radar:") == 0 && todo[i].rec.info.precip_rate > 0.0f;
-                if (g_cfg.deckShape && !rainRec && o.cloud_type >= 0.5f && o.cloud_type <= 2.0f && a[k].supMax > 0.05) {
-                    const double sup = a[k].sup / a[k].w;
+                if (g_cfg.deckShape && !rainRec && o.cloud_type >= 0.5f && o.cloud_type <= 2.0f && a[k].supMax > 0.05 && a[k].ws > 0) {
+                    const double sup = a[k].sup / a[k].ws;
                     const double f = std::min(1.0, sup / std::max(a[k].supMax, sup));
                     if (f < 0.9) o.alt_top = o.alt_base + (float)((o.alt_top - o.alt_base) * (0.2 + 0.8 * (f / 0.9) * (f / 0.9)));
                 }
@@ -804,7 +810,22 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                         const double dy = (todo[j].rec.lat - todo[i].rec.lat) * 60.0, dx = (todo[j].rec.lon - todo[i].rec.lon) * 60.0 * cosL;
                         const double d2 = dx * dx + dy * dy;
                         if (d2 > 400.0) continue;   // 20 nm
-                        cap = std::min(cap, (double)todo[j].rec.info.cloud_layers[k].alt_top + G * std::sqrt(d2));
+                        // 5.1.5 (deck_shape): the neighbour's cloud goes on above its layer in this slot where another of its layers
+                        // stands on it (starts within 400 m of that top, about as dense as the layer here): the top to hold against is
+                        // that one's. Slot against slot, a deck 5 km deep was cut to 3,615 m 3 nm from Madrid, whose layer in the same
+                        // slot was its lower broken deck (top 1,678 m, plus 650 m per nm) with the overcast to 6,700 m right above it in
+                        // the next slot: a step of 2,500 m in the cloud top between two fields in the same rain (2026-11-21).
+                        double nbTop = todo[j].rec.info.cloud_layers[k].alt_top;
+                        if (g_cfg.deckShape)
+                            for (int pass2 = 0; pass2 < 2; ++pass2)
+                                for (int m = 0; m < K; ++m) {
+                                    if (m == k || !isReal[j][m]) continue;
+                                    const XPLMWeatherInfoClouds_t& q = todo[j].rec.info.cloud_layers[m];
+                                    if (q.cloud_type < 0.5f && c.cloud_type >= 0.5f) continue;   // cirrus hides nothing
+                                    if (q.coverage < 0.6f * c.coverage) continue;
+                                    if (q.alt_base <= nbTop + 400.0 && q.alt_top > nbTop && q.alt_base < c.alt_top) nbTop = q.alt_top;
+                                }
+                        cap = std::min(cap, nbTop + G * std::sqrt(d2));
                     }
                     const float nt = std::max((float)cap, c.alt_base + 300.0f);
                     if (nt < c.alt_top - 1.0f) { c.alt_top = nt; changed = true; }
