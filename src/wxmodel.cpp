@@ -442,7 +442,12 @@ XpWx buildXp(const Station& st, const Config& cfg, std::time_t now, const std::v
         // cirrus keep theirs (radar echo tops decide for storms).
         if (!x.modelProfM.empty() && g.kind == 0 && c.type >= 0.5f) {
             const float mt = modelCloudTopM(x.modelProfM, c.baseM);
-            if (mt > 0) thick = std::min((double)xpMaxThicknessM(c.type), std::max(300.0, (double)(mt - c.baseM)));
+            // 5.1.5 (deck_shape): a few or scattered clouds are not made as deep as the model's cloud. Under a deep model cloud (a front,
+            // 5 km of it) every reported layer took the whole depth X-Plane allows, 5,084 m, and a scattered layer became a field of
+            // 5 km towers; a report says TCU or CB when they tower (those keep their own rules). Broken and overcast decks keep the
+            // model's depth (they are one deck with their neighbours, and a different depth would be a step between two stations).
+            const double byCover = !cfg.deckShape || g.cover >= CloudGroup::BKN ? 1e9 : g.cover == CloudGroup::SCT ? 1800.0 : 1200.0;
+            if (mt > 0) thick = std::min({(double)xpMaxThicknessM(c.type), byCover, std::max(300.0, (double)(mt - c.baseM))});
         }
         c.topM = (float)std::min((double)kXpMaxTopM, c.baseM + thick);
         layers.push_back(c);

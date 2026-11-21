@@ -224,6 +224,8 @@ void XPLMMapProject(XPLMMapProjectionID, double la, double lo, float* x, float* 
 struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, size_t, size_t, void*) = nullptr; void* wd = nullptr; };
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
 static std::string g_pirepJson;
+static bool g_operaEdge = false;   // HARNESS_SQUARES_EDGE=1: clear sky on both sides of that storm's band (the deep cloud ends against nothing)
+static bool g_operaStorm = false;  // HARNESS_SQUARES: a natural-looking European storm in the mock composite, and the model's cloud for it
 static bool g_jet = false;         // HARNESS_JET: open water under a jet stream, the tropopause low north of 42.5 N and high south of it
 static bool g_highField = false;   // HARNESS_HIGHFIELD: four fields around Denver, 1,500-1,800 m high, 15-20 C colder than standard
 static bool g_ocean = false, g_oceanModel = false; static int g_oceanMetar = 0;   // HARNESS_OCEAN: METAR searches answer HTTP 204 (open water)   // HARNESS_TURB: pilot reports served for /api/data/pirep
@@ -374,6 +376,54 @@ CURLcode curl_easy_perform(CURL* c) {
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
     }
+    if (g_operaStorm && e->url.find("api.open-meteo.com") != std::string::npos) {
+        // HARNESS_SQUARES: for each point asked for, an ordinary profile aloft, or (the cloud request) a deep rain cloud: 95 % from 900 to
+        // 450 hPa, thinning above
+        auto listOf = [&](const char* key) {
+            std::vector<double> v;
+            const size_t p0 = e->url.find(key);
+            if (p0 == std::string::npos) return v;
+            const size_t a0 = p0 + std::strlen(key);
+            const std::string list = e->url.substr(a0, e->url.find('&', a0) - a0);
+            for (size_t a = 0; a < list.size();) { size_t c = list.find(',', a); if (c == std::string::npos) c = list.size(); v.push_back(std::atof(list.substr(a, c - a).c_str())); a = c + 1; }
+            return v;
+        };
+        const std::vector<double> lats = listOf("latitude="), lons = listOf("longitude=");
+        const long t = (long)std::time(nullptr);
+        const bool cloudReq = e->url.find("cloud_cover_1000hPa") != std::string::npos;
+        std::string b = "[";
+        for (size_t k = 0; k < lats.size() && k < lons.size(); ++k) {
+            std::string one = "{\"elevation\":650,\"hourly\":{\"time\":[" + std::to_string(t) + "]";
+            if (cloudReq) {
+                // inside the band (as the composite has it) the deep rain cloud; outside it a little low cloud only
+                const double x = (lons[k] + 3.5608) * 111.2 * std::cos(40.47 * 3.14159265 / 180.0), y = (40.4722 - lats[k]) * 111.2;
+                const bool inBand = std::fabs(x * 0.6 + y * 0.8 + 30.0) < 110.0;
+                static const int lv[] = {1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150};
+                static const double gh[] = {110, 320, 540, 760, 990, 1460, 1950, 2470, 3010, 3590, 4210, 4870, 5570, 6340, 7190, 8120, 9160, 10360, 11780, 13600};
+                for (size_t i = 0; i < 20; ++i) {
+                    const int cover = !inBand ? (!g_operaEdge && lv[i] <= 850 && lv[i] >= 750 ? 45 : 5) : lv[i] > 900 ? 40 : lv[i] >= 450 ? 95 : lv[i] == 400 ? 60 : lv[i] == 350 ? 30 : 10;
+                    char q[160];
+                    std::snprintf(q, sizeof q, ",\"cloud_cover_%dhPa\":[%d],\"geopotential_height_%dhPa\":[%g]", lv[i], cover, lv[i], gh[i]);
+                    one += q;
+                }
+                one += ",\"temperature_2m\":[12],\"dew_point_2m\":[10],\"pressure_msl\":[1008],\"wind_speed_10m\":[12],\"wind_direction_10m\":[240],\"wind_gusts_10m\":[20],"
+                       "\"visibility\":[9000],\"precipitation\":[1.2],\"snowfall\":[0],\"weather_code\":[61]";
+            } else {
+                static const int lv[] = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
+                static const double gh[] = {760, 1460, 3010, 5570, 7190, 9160, 10360, 11780, 13600, 16180, 18440}, tc[] = {9, 5, -4, -21, -32, -47, -55, -58, -58, -60, -58};
+                for (size_t i = 0; i < 11; ++i) {
+                    char q[300];
+                    std::snprintf(q, sizeof q, ",\"wind_speed_%dhPa\":[%d],\"wind_direction_%dhPa\":[240],\"temperature_%dhPa\":[%g],\"geopotential_height_%dhPa\":[%g]",
+                                  lv[i], 20 + (int)i * 8, lv[i], lv[i], tc[i], lv[i], gh[i]);
+                    one += q;
+                }
+            }
+            one += "}}";
+            b += (k ? "," : "") + one;
+        }
+        b += "]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
     if (g_jet && e->url.find("api.open-meteo.com") != std::string::npos && e->url.find("cloud_cover_1000hPa") == std::string::npos) {
         // HARNESS_JET: winds and temperatures aloft for each point asked for. South of 42.5 N the warm side of a 190 kt jet (tropopause
         // near 150 hPa, a front at 500-400 hPa, as over the North Pacific on 2026-11-21), north of it the cold side (tropopause near 300 hPa).
@@ -428,6 +478,16 @@ CURLcode curl_easy_perform(CURL* c) {
         e->status = 200;
         e->wf((char*)b.data(), 1, b.size(), e->wd);
         return 0;
+    }
+    if (g_operaStorm && e->url.find("aviationweather.gov/api/data/metar?") != std::string::npos) {
+        // Madrid in the rain band, and a field on either side of the band with a different sky
+        static std::string b;
+        b = "[{\"icaoId\":\"LEMD\",\"lat\":40.4722,\"lon\":-3.5608,\"elev\":609,\"rawOb\":\"LEMD " + utcStamp(20) + " 24012KT 9999 -RA BKN020 OVC040 12/10 Q1008\"},"
+            "{\"icaoId\":\"LETO\",\"lat\":40.4967,\"lon\":-3.4458,\"elev\":617,\"rawOb\":\"LETO " + utcStamp(20) + " 23010KT 9999 -RA BKN025 12/10 Q1008\"},"
+            "{\"icaoId\":\"LEVS\",\"lat\":40.3707,\"lon\":-3.7851,\"elev\":692,\"rawOb\":\"LEVS " + utcStamp(20) + " 24010KT 9999 -RA OVC035 12/10 Q1008\"},"
+            "{\"icaoId\":\"LEZA\",\"lat\":39.4800,\"lon\":-2.8500,\"elev\":700,\"rawOb\":\"LEZA " + utcStamp(20) + (g_operaEdge ? " 25008KT CAVOK 14/07 Q1009\"}," : " 25008KT 9999 SCT045 14/07 Q1009\"},") +
+            "{\"icaoId\":\"LEZB\",\"lat\":41.6400,\"lon\":-4.3900,\"elev\":840,\"rawOb\":\"LEZB " + utcStamp(20) + (g_operaEdge ? " 27009KT CAVOK 11/05 Q1009\"}]" : " 27009KT 9999 FEW040 BKN100 11/05 Q1009\"}]");
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
     }
     if (!g_operaHead.empty() && e->url.find("aviationweather.gov/api/data/metar?") != std::string::npos) {   // Madrid
         static std::string b;
@@ -757,7 +817,16 @@ static std::string operaTileFor(uint64_t off) {
         const int col = tc * h.tileW + p % h.tileW, row = tr * h.tileH + p / h.tileW;
         const int dc = col - lc, dr = row - lr;
         float v = NAN;
-        if (std::abs(dc) <= 6 && std::abs(dr) <= 6) v = 50.0f;                 // a 13 km storm over the airport
+        if (g_operaStorm) {
+            // a rain band 200 km wide running SW-NE through the airport with uneven rain in it, four storm cores, three showers ahead of it
+            const double x = dc * 2.0, y = dr * 2.0;   // km east and south of the airport (2 km pixels)
+            const double across = x * 0.6 + y * 0.8 + 30.0, along = x * 0.8 - y * 0.6;
+            double q = std::fabs(along) > 300.0 ? -99.0 : 31.0 - across * across / 420.0 + 5.0 * std::sin(along / 23.0) * std::cos(across / 17.0) + 3.0 * std::sin((along + across) / 9.0);
+            static const double cores[][3] = {{-40, -10, 52}, {30, 25, 48}, {90, -50, 55}, {-120, 40, 45}, {70, 110, 38}, {120, 95, 34}, {20, 130, 36}};
+            for (const auto& c : cores) q = std::max(q, c[2] - ((x - c[0]) * (x - c[0]) + (y - c[1]) * (y - c[1])) * (c[2] > 40 ? 0.11 : 0.35));
+            if (q >= 8.0) v = (float)std::min(60.0, q);
+        }
+        else if (std::abs(dc) <= 6 && std::abs(dr) <= 6) v = 50.0f;            // a 13 km storm over the airport
         else if (std::abs(dc) <= 60 && std::abs(dr) <= 60) v = 20.0f;          // steady rain around it
         std::memcpy(&raw[(size_t)p * h.spp * 4], &v, 4);
     }
@@ -810,6 +879,122 @@ static int runOpera() {
     CHECK(g_operaTiles == tiles1 || (std::time(nullptr) % 300) < 20);   // unless a new slot began meanwhile
     XPluginDisable(); XPluginStop();
     std::printf(g_fail ? "HARNESS_OPERA FAILED (%d)\n" : "HARNESS_OPERA OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
+// HARNESS_SQUARES=1 (5.1.5): the "square clouds" over Europe (screenshots 2026-11-19: flat-topped slabs ending in straight walls, a
+// squared pit in a deep deck). A natural-looking storm in the European composite (a rain band through Madrid, five fields with
+// different skies, the model's cloud 5 km deep in the band). What goes to X-Plane is measured by column, whatever slot a layer sits
+// in, for the three things those pictures show:
+//   walls  - solid cloud (60 % or more) beside a touching record that has no cloud (25 %) anywhere at its heights
+//   lids   - touching records whose highest solid top is exactly the same
+//   towers - a thin layer (10 to 60 %) 3,000 m deep or more in a record without rain (scattered cloud as deep as the front)
+// HARNESS_SQUARES_OFF=1 runs it with deck_shape = 0 (the picture before 5.1.5, which the test must then find again), and
+// HARNESS_SQUARES_EDGE=1 with clear sky reported on both sides of the band.
+static int runSquares() {
+    const bool off = std::getenv("HARNESS_SQUARES_OFF") != nullptr;
+    const char* kCfg = hpath("WXPlane.cfg");
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 31\nmanual_refresh_gap_s = 0\nradar = 1\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\nuse_atis = 0\nwindshear = 0\n", f);
+      if (off) std::fputs("deck_shape = 0\n", f);
+      std::fclose(f); }
+    g_operaHead = readFile("tests/data/opera_head.bin");
+    g_operaStorm = true;
+    g_operaEdge = std::getenv("HARNESS_SQUARES_EDGE") != nullptr;
+    g_loadingFlag = 0;
+    g_lat = 40.4722; g_lon = -3.5608; g_elev = 1500; g_agl = 900;
+    char n[256], s[256], d[256];
+    CHECK(XPluginStart(n, s, d) == 1);
+    CHECK(XPluginEnable() == 1);
+    for (int i = 0; i < 3000 && g_logAll.find("all weather records handed to X-Plane") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    for (int i = 0; i < 50; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    { const size_t at = g_logAll.find("radar: natural picture"); if (at != std::string::npos) std::printf("[squares] %s\n", g_logAll.substr(at, std::min<size_t>(g_logAll.find('\n', at) - at, 230)).c_str()); }
+    // every record as last set
+    struct Lay { float type, cov, base, top; };
+    struct R { double lat, lon, r, rain; std::vector<Lay> lay; std::vector<std::pair<float, float>> solid, any; };
+    std::map<std::string, R> last;
+    for (const auto& c : g_calls) {
+        if (c.airport || c.lat == 0) continue;
+        R q{c.lat, c.lon, c.info.radius_nm, c.info.precip_rate, {}, {}, {}};
+        for (const auto& L : c.info.cloud_layers) q.lay.push_back({L.cloud_type, L.coverage, L.alt_base, L.alt_top});
+        char k[64]; std::snprintf(k, sizeof k, "%.4f,%.4f", c.lat, c.lon);
+        last[k] = q;
+    }
+    auto unite = [](std::vector<std::pair<float, float>> v) {
+        std::sort(v.begin(), v.end());
+        std::vector<std::pair<float, float>> o;
+        for (const auto& x : v) { if (!o.empty() && x.first <= o.back().second) o.back().second = std::max(o.back().second, x.second); else o.push_back(x); }
+        return o;
+    };
+    std::vector<R> v;
+    for (auto& kv : last) {
+        R& q = kv.second;
+        std::vector<std::pair<float, float>> so, an;
+        for (const auto& L : q.lay) {
+            if (L.cov >= 0.6f && L.type >= 0.5f) so.push_back({L.base, L.top});
+            if (L.cov >= 0.25f) an.push_back({L.base, L.top});
+        }
+        q.solid = unite(so); q.any = unite(an);
+        v.push_back(q);
+    }
+    auto distNm = [](const R& a, const R& b) { return std::hypot((a.lat - b.lat) * 60.0, (a.lon - b.lon) * 60.0 * std::cos(a.lat * 3.14159265 / 180.0)); };
+    int rain = 0, solid = 0, wallRecs = 0, walls2000 = 0, pairs = 0, level = 0, towers = 0, thin = 0;
+    double wallMax = 0;
+    std::vector<double> depths;
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (v[i].rain > 0.01) ++rain;
+        else for (const auto& L : v[i].lay) if (L.type >= 0.5f && L.cov >= 0.10f && L.cov < 0.6f) { ++thin; if (L.top - L.base >= 3000.0f) ++towers; }
+        if (v[i].solid.empty()) continue;
+        ++solid;
+        double dep = 0; for (const auto& x : v[i].solid) dep += x.second - x.first;
+        depths.push_back(dep);
+        double wall = 0;
+        for (size_t j = 0; j < v.size(); ++j) {
+            if (i == j || distNm(v[i], v[j]) > (v[i].r + v[j].r) * 0.8) continue;   // footprints that touch: the radius is 0.9 of a square's side
+            for (const auto& x : v[i].solid) {
+                bool covered = false;
+                for (const auto& y : v[j].any) if (y.second > x.first && y.first < x.second) covered = true;
+                if (!covered) wall = std::max(wall, (double)(x.second - x.first));
+            }
+            if (j > i && !v[j].solid.empty()) { ++pairs; if (std::fabs(v[i].solid.back().second - v[j].solid.back().second) < 1.0f) ++level; }
+        }
+        if (wall >= 300.0) ++wallRecs;
+        if (wall >= 2000.0) ++walls2000;
+        wallMax = std::max(wallMax, wall);
+    }
+    std::sort(depths.begin(), depths.end());
+    const double depMed = depths.empty() ? 0.0 : depths[depths.size() / 2];
+    std::printf("[squares] %s%s: records %zu, with rain %d, with solid cloud %d (median %.0f m deep)\n", off ? "deck_shape = 0" : "deck_shape = 1", g_operaEdge ? ", clear sky beside the band" : "", v.size(), rain, solid, depMed);
+    std::printf("[squares] walls: %d records with solid cloud beside a record with none at its heights, %d of them 2,000 m high or more (highest %.0f m)\n", wallRecs, walls2000, wallMax);
+    std::printf("[squares] lids: %d of %d touching pairs of solid cloud have exactly the same top (%.0f %%)\n", level, pairs, pairs ? 100.0 * level / pairs : 0.0);
+    std::printf("[squares] towers: %d of %d thin layers (10-60 %%) in records without rain are 3,000 m deep or more\n", towers, thin);
+    if (std::getenv("HARNESS_SQUARES_DUMP"))   // every record's layers, for a closer look
+        for (const auto& c : g_calls) {
+            if (c.airport || c.lat == 0) continue;
+            std::printf("[sqlay] %.4f %.4f r=%.1f rain=%.2f", c.lat, c.lon, c.info.radius_nm, c.info.precip_rate);
+            for (const auto& L : c.info.cloud_layers) std::printf(" [t%.1f %.0f%% %.0f-%.0f]", L.cloud_type, L.coverage * 100, L.alt_base, L.alt_top);
+            std::printf("\n");
+        }
+    CHECK(rain > 40 && solid > 60 && pairs > 300);
+    if (off) {
+        // the picture before 5.1.5 (measured the same in 5.1.4): the scenario must show what the screenshots show, or it proves nothing
+        CHECK(walls2000 >= 5 && wallMax > 5000.0);          // pits and ends as high as the deepest deck X-Plane allows (5,084 m)
+        CHECK(level * 2 > pairs);                           // more than half of all touching tops exactly level
+        CHECK(towers >= 15);                                // scattered cloud 3 km deep and more
+        CHECK(depMed > 5000.0);
+    } else if (g_operaEdge) {
+        // clear sky beside the band: the deep deck ends against it far out, where the records are 10 to 30 nm wide (the smoothing reaches
+        // 8 nm), so some of that end stays; it must be less than it was (11 records, 21 towers)
+        CHECK(walls2000 <= 6);
+        CHECK(level * 10 < pairs);
+        CHECK(towers <= 10);
+    } else {
+        CHECK(walls2000 == 0 && wallMax < 1000.0);          // no pit and no end of 2,000 m or more (7 of 5,084 m before)
+        CHECK(level * 10 < pairs);                          // under a tenth of the tops level (65 % before)
+        CHECK(towers <= 20);                                // 44 before
+        CHECK(depMed > 4000.0);                             // and the deck is still as deep as the model has it (not shaved off everywhere)
+    }
+    XPluginDisable(); XPluginStop();
+    std::printf(g_fail ? "HARNESS_SQUARES FAILED (%d)\n" : "HARNESS_SQUARES OK (%d failures)\n", g_fail);
     return g_fail ? 1 : 0;
 }
 
@@ -1144,6 +1329,7 @@ int main() {
     if (std::getenv("HARNESS_OCEAN")) return runOcean();
     if (std::getenv("HARNESS_HIGHFIELD")) return runHighField();
     if (std::getenv("HARNESS_JET")) return runJet();
+    if (std::getenv("HARNESS_SQUARES") || std::getenv("HARNESS_SQUARES_OFF") || std::getenv("HARNESS_SQUARES_EDGE")) return runSquares();
     if (std::getenv("HARNESS_OPERA")) return runOpera();
     if (std::getenv("HARNESS_RAMP")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
     { FILE* f = std::fopen(hpath("WXPlane.cfg"), "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }

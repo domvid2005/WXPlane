@@ -565,7 +565,7 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         // sigma grows with the record's own size, so the coarse 30 nm tiles further out are smoothed against their neighbours too
         auto sigOf = [&](size_t i) { return std::max(g_cfg.cloudSmoothNm, 0.7 * (double)todo[i].rec.info.radius_nm); };
         auto isFog = [&](size_t i, int k) { const auto& c = todo[i].rec.info.cloud_layers[k]; return isReal[i][k] && c.alt_base < todo[i].rec.elev + 250.0; };
-        struct Acc { double w = 0, wc = 0, cb = 0, ct = 0, cy = 0; };
+        struct Acc { double w = 0, wc = 0, cb = 0, ct = 0, cy = 0, sup = 0, supMax = 0; };
         std::vector<std::array<XPLMWeatherInfoClouds_t, 3>> out(n);
         std::vector<std::array<bool, 3>> outReal(n);
         for (size_t i = 0; i < n; ++i) {
@@ -606,9 +606,36 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 const double w = std::exp(-d * d / (2.0 * sig * sig)) * r * r;
                 for (int k = 0; k < K; ++k) {
                     if (isFog(j, k)) continue;
-                    const XPLMWeatherInfoClouds_t& c = todo[j].rec.info.cloud_layers[k];
+                    const XPLMWeatherInfoClouds_t* cp = &todo[j].rec.info.cloud_layers[k];
                     a[k].w += w;
-                    if (!isReal[j][k] || !haveRef[k] || !touches(c, ref[k])) continue;   // another deck (or none) there: clear sky for this one
+                    // (deck_shape, below) how much cloud this neighbour has at the heights of the deck here, in whichever slot and whatever
+                    // its base: the share of the deck's depth its layers fill, times their cover (cirrus and ground fog are no part of a deck)
+                    if (g_cfg.deckShape && haveRef[k] && ref[k].alt_top > ref[k].alt_base + 1.0f) {
+                        double cj = 0;
+                        for (int m = 0; m < K; ++m) {
+                            if (!isReal[j][m] || isFog(j, m)) continue;
+                            const XPLMWeatherInfoClouds_t& q = todo[j].rec.info.cloud_layers[m];
+                            if (q.cloud_type < 0.5f) continue;
+                            const float ov = std::min(ref[k].alt_top, q.alt_top) - std::max(ref[k].alt_base, q.alt_base);
+                            if (ov > 0) cj += (double)q.coverage * ov / (ref[k].alt_top - ref[k].alt_base);
+                        }
+                        cj = std::min(1.0, cj);
+                        a[k].sup += w * cj;
+                        a[k].supMax = std::max(a[k].supMax, cj * std::exp(-d * d / (2.88 * sig * sig)));   // the most of it near here (counted less with distance, 1.2 sigma, so it changes smoothly)
+                    }
+                    bool has = isReal[j][k] && haveRef[k] && touches(*cp, ref[k]);
+                    // 5.1.5 (deck_shape): the same deck in another slot of the neighbour counts as well. A rain record carries its rain cloud
+                    // in the lowest slot and the station's deck one slot up, the dry record beside it has that deck in the lowest slot: slot
+                    // against slot the deck found nothing of itself in the rain records around, and was thinned to a fifth or less (measured
+                    // 2026-11-21, 5.1.4 the same: 85 % reported, 8-25 % in the dry squares between and beside the rain, each a pit in solid
+                    // cloud with walls of the deck's whole depth, in the shape of the radar's squares).
+                    if (!has && haveRef[k] && g_cfg.deckShape)
+                        for (int m = 0; m < K && !has; ++m) {
+                            if (m == k || !isReal[j][m] || isFog(j, m)) continue;
+                            if (touches(todo[j].rec.info.cloud_layers[m], ref[k])) { cp = &todo[j].rec.info.cloud_layers[m]; has = true; }
+                        }
+                    if (!has) continue;   // another deck (or none) there: clear sky for this one
+                    const XPLMWeatherInfoClouds_t& c = *cp;
                     a[k].wc += w * c.coverage; a[k].cb += w * c.coverage * c.alt_base; a[k].ct += w * c.coverage * c.alt_top; a[k].cy += w * c.coverage * c.cloud_type;
                 }
             }
@@ -632,6 +659,21 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                 // the type is blended too, but a real thunderstorm core (type 3) keeps its type, and nothing is made more convective than
                 // the records around it: X-Plane flies type 3 with strong up- and downdrafts
                 o.cloud_type = (isReal[i][k] && L[k].cloud_type > 2.0f) ? L[k].cloud_type : (float)std::min(2.0, a[k].cy / a[k].wc);   // (TCU 2.5 and CB 3 keep theirs)
+                // 5.1.5 (deck_shape): a deck gets shallower towards the edge of the cloud. The coverage above already falls off over several
+                // miles, but base and top stayed the deck's, so a deck 5 km deep ended in a wall 5 km high (the "square clouds" over Europe,
+                // 2026-11-19; measured 2026-11-21 on a rain band: every deck was at its full depth where it ended). What counts is how much
+                // cloud the records around have at this deck's heights, in any slot and on any base (above): inside a wide overcast that
+                // neighbouring stations report on different bases nothing changes, and a record that keeps its own overcast gets shallower
+                // too where the cloud ends beside it. Under nine tenths of the most there is nearby, the depth comes down: under half at
+                // half, a fifth at the very edge. Thunderstorm cores and towering cumulus keep their tops (the radar's), and so does every
+                // record with rain: the radar and the rim of the rain shape those (applyStorm), and a rain cloud made thin stops the rain
+                // in X-Plane (2026-11-14 KFDR). The dry records around them slope off.
+                const bool rainRec = todo[i].key.compare(0, 6, "radar:") == 0 && todo[i].rec.info.precip_rate > 0.0f;
+                if (g_cfg.deckShape && !rainRec && o.cloud_type >= 0.5f && o.cloud_type <= 2.0f && a[k].supMax > 0.05) {
+                    const double sup = a[k].sup / a[k].w;
+                    const double f = std::min(1.0, sup / std::max(a[k].supMax, sup));
+                    if (f < 0.9) o.alt_top = o.alt_base + (float)((o.alt_top - o.alt_base) * (0.2 + 0.8 * (f / 0.9) * (f / 0.9)));
+                }
                 if (o.alt_top < o.alt_base + 300.0f) o.alt_top = o.alt_base + 300.0f;   // never a thin sliver (X-Plane dropped an update full of them)
                 o.alt_top = std::min(o.alt_top, o.alt_base + wx::xpMaxThicknessM(o.cloud_type));   // and never thicker than X-Plane allows for the type
                 if (o.cloud_type < 0.5f) o.coverage = std::min(o.coverage, 0.75f);   // cirrus stays thin (and out of reach of solid-layer effects)
@@ -660,6 +702,24 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             isReal[i] = outReal[i];
         }
     }
+    // 2b1) Uneven tops (5.1.5, deck_shape). A deck's top comes from the model, one height for a whole region, or from the depth X-Plane
+    // allows, the same for every record on one base: neighbouring records had exactly the same top (in the measured rain band more than
+    // half of all touching pairs) and the deck was a slab with a level lid. Each deep layer (1,500 m and more) is now up to a tenth of
+    // its depth lower, by smooth noise fixed to the ground (about 12 nm), airports included (a report gives no top). Storm cores keep theirs.
+    if (g_cfg.deckShape)
+        for (size_t i = 0; i < n; ++i) {
+            if (isBump(i)) continue;
+            size_t at = i;   // a rain record over an airport keeps that airport's layers as sent: the same place, so the same top
+            if (!todo[i].rec.holdOf.empty()) { const auto it = indexOf.find(todo[i].rec.holdOf); if (it != indexOf.end()) at = it->second; }
+            const double X = todo[at].rec.lon * 60.0 * std::cos(todo[at].rec.lat * 3.14159265358979 / 180.0), Y = todo[at].rec.lat * 60.0;
+            for (int k = 0; k < K; ++k) {
+                XPLMWeatherInfoClouds_t& c = todo[i].rec.info.cloud_layers[k];
+                if (!isReal[i][k] || c.cloud_type < 0.5f || c.cloud_type > 2.0f) continue;
+                const float depth = c.alt_top - c.alt_base;
+                if (depth < 1500.0f) continue;
+                c.alt_top = c.alt_base + depth * (float)(1.0 - 0.10 * (0.5 + 0.5 * noise2(X, Y, 12.0, 31 + k)));
+            }
+        }
     // 2b2) A level underside. X-Plane blends a layer's base between records, so bases that step from record to record (METAR bases
     // 100 ft apart, a smoothed base next to an airport's own) hung the cloud down in waves (2026-11-13). A base now changes at most
     // 40 m per nm (plus 60 m) against the records around it with a touching layer in the same slot; airports keep their reported

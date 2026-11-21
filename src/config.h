@@ -96,6 +96,10 @@ struct Config {
     bool qnhAsSeaLevel = true;        // send the QNH as sea-level pressure (pressure_sl): X-Plane read it in pressure_alt as station pressure
     bool qnhTempCorrect = true;       // ...as the sea-level pressure X-Plane needs for that QNH at the field's height and temperatures (5.1.5): X-Plane works the
                                       // pressure at a field out through the real temperatures, so the QNH itself left the altimeter out at high, cold or hot fields
+    bool deckShape = true;            // the shape of deep decks (5.1.5, "square clouds"): a deck is counted in whichever slot the records around carry it (it
+                                      // was thinned to a fifth in the dry squares beside rain: pits with walls as high as the deck is deep), a few or
+                                      // scattered clouds are not made as deep as the model's cloud, tops are uneven by up to a tenth of the depth, and a
+                                      // deck gets shallower where the cloud around it ends. Off: as 5.1.4
     bool tropoSmooth = true;          // the tropopause height given to X-Plane is a smooth field over the records, each with its own temperature there (5.1.5);
                                       // off: every record its own tropopause, which X-Plane blended into one that was on neither profile across a jet stream
     bool xpBaseSteady = true;         // while WXPlane sets the weather: X-Plane's own "variation across region" 0 and "evolution over time" static (put back when

@@ -645,6 +645,19 @@ int main() {
         mc.modelTops = false;
         al[0].cloudLevels = {{328, 0.0}, {2297, 0.9}, {4593, 0.8}, {9843, 0.1}, {13780, 0.0}};
         NEAR(buildXp(st, mc, now, &al).clouds[0].topM - 610, 1300, 1);   // model_tops = 0: the rule
+        // 5.1.5 (deck_shape): under a deep model cloud a few or scattered clouds are not made as deep as it; broken and overcast are
+        {
+            Config dc = cfg; dc.modelClouds = false;
+            al[0].cloudLevels = {{328, 0.0}, {2297, 0.9}, {9843, 0.95}, {19685, 0.9}, {26247, 0.1}};   // cloud from 700 m to about 7,000 m
+            auto depthOf = [&](const char* metar, const Config& c2) { Station q; q.elevM = 0; q.lat = 40.0; q.lon = -100.0; parseReport(metar, q.report); const XpWx w = buildXp(q, c2, now, &al); return w.clouds[0].topM - w.clouds[0].baseM; };
+            NEAR(depthOf("KTST 301553Z 18005KT 10SM FEW030 12/05 A3002", dc), 1200, 1);
+            NEAR(depthOf("KTST 301553Z 18005KT 10SM SCT030 12/05 A3002", dc), 1800, 1);
+            const float bkn = depthOf("KTST 301553Z 18005KT 10SM BKN030 12/05 A3002", dc), ovc = depthOf("KTST 301553Z 18005KT 10SM OVC030 12/05 A3002", dc);
+            CHECK(bkn > 4500 && ovc > 4500);                       // the model's depth (within what X-Plane allows for the type)
+            NEAR(bkn, ovc, 1);                                     // and the same for both: one deck with the station next door
+            dc.deckShape = false;
+            CHECK(depthOf("KTST 301553Z 18005KT 10SM SCT030 12/05 A3002", dc) > 4500);   // deck_shape = 0: as before
+        }
         // steady rain: the model raises a radar top that reads low; a storm keeps the radar's
         XpWx s; s.modelProfM = {{500, 0.9f}, {1500, 0.9f}, {4000, 0.9f}, {6000, 0.1f}};
         RadarCell c; c.dbz = 30; c.dbzFine = 30; c.rateMmH = 3; c.stratiform = true; c.topM = 2500; c.topKnown = true; c.lat = 40.0;
