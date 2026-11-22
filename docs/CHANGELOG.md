@@ -1,5 +1,12 @@
 # WXPlane changelog
 
+## 5.1.5
+- Clouds in rain and storms: no more square, slab-like clouds. Decks no longer end in vertical walls as high as the deck is deep, tops are no longer one flat level across the area, and the dry gaps between rain no longer open into square pits in solid cloud. A deck's top now comes down where it thins out, deep decks have uneven tops, and few or scattered clouds are no longer made as deep as the frontal cloud above them (deck_shape; 0 brings back 5.1.4's clouds)
+- Altimeter at airports above sea level: with the reported QNH set, the altimeter reads the field elevation on a cold or hot day too. WXPlane sent the QNH as X-Plane's sea-level pressure; X-Plane works pressure out through the real temperatures, so the altimeter was 30-50 ft out at fields around 650 ft and hundreds of feet at high fields in cold or hot air (qnh_temp_correct)
+- Tropopause: a front under a jet stream is no longer taken for the tropopause, and its height no longer steps by thousands of feet between neighbouring weather records across a jet stream; the temperature at the tropopause belongs to the height written (tropo_smooth)
+- X-Plane's own variation and evolution of its base weather are held off while WXPlane sets the weather (put back when WXPlane is switched off), and Log.txt says when X-Plane changes its base temperatures by itself (xp_base_steady)
+- European radar: steady rain and showers told apart from the reflectivity, as the US radar does, so steady rain is no longer built as convective cells; more, smaller squares for widespread rain (radar_natural_max 400)
+
 ## 5.1.4
 - XPTablet: with Alpine Aviation's XPTablet installed, the WXPlane window fills the tablet's WXPlane page, with all its tabs, touch and scrolling (no Pop out tab there). XPTablet asks for it through a plugin message (embed.h)
 - AviTab tab: only with AviTab itself, never on XPTablet's screen; its full-screen click window is there only while the mouse points at the tablet, so X-Plane's own pop-up messages can be dismissed again

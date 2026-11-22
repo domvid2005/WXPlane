@@ -1,6 +1,6 @@
-# WXPlane 5.1.4 – live real-world weather for X-Plane 12
+# WXPlane 5.1.5 – live real-world weather for X-Plane 12
 
-**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1.4 shows WXPlane on Alpine Aviation's XPTablet. Version 5.1.3 showed the weather worldwide on the map and put the map on AviTab. Version 5.1.2 added a blend ring and update notices. Version 5.1.1 refined the clouds: natural coverage within each METAR category, cloud tops from the global model, and reported cloud bases kept exactly. Version 5.1 added a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, night dimming, and updates through SkunkCrafts Updater.
+**WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1.5 brings natural cloud shapes in rain and storms and a correct altimeter at airports above sea level. Version 5.1.4 shows WXPlane on Alpine Aviation's XPTablet. Version 5.1.3 showed the weather worldwide on the map and put the map on AviTab. Version 5.1.2 added a blend ring and update notices. Version 5.1.1 refined the clouds: natural coverage within each METAR category, cloud tops from the global model, and reported cloud bases kept exactly. Version 5.1 added a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, night dimming, and updates through SkunkCrafts Updater.
 
 Free. No accounts and no API keys. Windows, macOS and Linux.
 
@@ -13,6 +13,13 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Realistic turbulence:** clear-air and storm turbulence at every altitude, from NOAA GTGN in the US, an ECMWF-based estimate elsewhere, and live pilot reports. A Max turbulence slider scales it to taste.
 - **Realistic windshear:** gust fronts and microburst outflow around real convective storms.
 - **Smooth:** downloads run in the background and every update fades in over 1–2 minutes. No freezes, no sudden jumps.
+
+## New in 5.1.5
+
+- **No more square clouds:** in rain and storms, decks no longer end in tall vertical walls or form flat slabs and square holes. Their tops roll, and they slope down where the cloud thins out.
+- **Altimeter at high airports:** with the reported QNH set, the altimeter reads the field elevation on cold and hot days too.
+- **Tropopause and temperatures aloft:** steadier across jet streams and fronts, and X-Plane no longer varies its own base weather underneath WXPlane's.
+- **European radar:** steady rain and showers told apart, as over the US.
 
 ## New in 5.1.4
 
