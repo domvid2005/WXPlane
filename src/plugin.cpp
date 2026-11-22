@@ -544,6 +544,10 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                         p.alt_top = std::max(p.alt_top, c.alt_top);
                         p.coverage = std::max(p.coverage, c.coverage);
                         p.cloud_type = std::max(p.cloud_type, c.cloud_type);
+                        // never deeper than X-Plane allows for the type: each layer was within it, the two together need not be (the
+                        // airport record of KSZL went out as cumulus 95 % 510-7,446 m, 6,936 m deep against 5,084 allowed; the sim
+                        // crashed a minute later, 2026-11-22; airport records skip the smoothing, which caps the others)
+                        p.alt_top = std::min(p.alt_top, p.alt_base + wx::xpMaxThicknessM(p.cloud_type));
                         continue;
                     }
                 }

@@ -1021,6 +1021,17 @@ static int runSquares() {
             std::printf("\n");
         }
     CHECK(rain > 40 && solid > 60 && pairs > 300);
+    {   // nothing handed to X-Plane deeper than it allows for the cloud type, airport records included (KSZL crash, 2026-11-22)
+        int tooDeep = 0;
+        for (const auto& c : g_calls)
+            for (const auto& L : c.info.cloud_layers)
+                if (L.coverage > 0 && L.alt_top - L.alt_base > wx::xpMaxThicknessM(L.cloud_type) + 1.0f) {
+                    if (tooDeep < 3) std::printf("  too deep for X-Plane: %s type %.1f %.0f-%.0f m\n", c.airport ? c.where.c_str() : "record", L.cloud_type, L.alt_base, L.alt_top);
+                    ++tooDeep;
+                }
+        std::printf("[squares] layers deeper than X-Plane allows for their type: %d\n", tooDeep);
+        CHECK(tooDeep == 0);
+    }
     if (off) {
         // the picture before 5.1.5 (measured the same in 5.1.4): the scenario must show what the screenshots show, or it proves nothing
         CHECK(walls2000 >= 5 && wallMax > 5000.0);          // pits and ends as high as the deepest deck X-Plane allows (5,084 m)
@@ -1599,6 +1610,16 @@ int main() {
             }
             std::printf("  records with a thin filler layer: %d, with a gap below a layer: %d\n", bad, gaps);
             CHECK(bad == 0);
+            // nothing deeper than X-Plane allows for the cloud type, airport records inside rain included (KSZL crash, 2026-11-22)
+            int tooDeep = 0;
+            for (size_t i = before; i < g_calls.size(); ++i)
+                for (const auto& L : g_calls[i].info.cloud_layers)
+                    if (L.coverage > 0 && L.alt_top - L.alt_base > wx::xpMaxThicknessM(L.cloud_type) + 1.0f) {
+                        if (tooDeep < 3) std::printf("    too deep for X-Plane: %s type %.1f %.0f-%.0f m\n", g_calls[i].airport ? "airport" : "record", L.cloud_type, L.alt_base, L.alt_top);
+                        ++tooDeep;
+                    }
+            std::printf("  layers deeper than X-Plane allows for their type: %d\n", tooDeep);
+            CHECK(tooDeep == 0);
             // a clear record next to a deck keeps the deck's height in that slot (a 0-0 m slot made the deck hang down in cones, KBOS 2026-11-12)
             int clearNear = 0, groundSlot = 0;
             for (size_t i = before; i < g_calls.size(); ++i) {
