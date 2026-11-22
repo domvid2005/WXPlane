@@ -20,6 +20,7 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Altimeter at high airports:** with the reported QNH set, the altimeter reads the field elevation on cold and hot days too.
 - **Tropopause and temperatures aloft:** steadier across jet streams and fronts, and X-Plane no longer varies its own base weather underneath WXPlane's.
 - **European radar:** steady rain and showers told apart, as over the US.
+- **Current METARs for your other add-ons:** WXPlane keeps X-Plane's METAR file up to date, so add-ons that read it (Little Navmap, Pilot2ATC and others) no longer show old weather.
 
 ## New in 5.1.4
 

@@ -32,6 +32,7 @@ bool loadConfig(const std::string& path, Config& c) {
         double d = std::atof(v.c_str());
         // newer settings, each on its own (MSVC limits how long one if / else-if chain may be)
         if (k == "world_metars") { c.worldMetars = toBool(v); continue; }
+        if (k == "xp_metar_file") { c.xpMetarFile = toBool(v); continue; }
         if (k == "detailed_log") { c.detailedLog = toBool(v); continue; }
         if (k == "avitab_tab") { c.avitabTab = toBool(v); continue; }
         if (k == "avitab_icon_x") { c.avitabIconX = d < 0 ? 0 : (d > 1 ? 1 : d); continue; }
@@ -214,6 +215,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "night_dim = " << (c.nightDim ? 1 : 0) << "\n"
       << "update_check = " << (c.updateCheck ? 1 : 0) << "\n"
       << "world_metars = " << (c.worldMetars ? 1 : 0) << "\n"
+      << "xp_metar_file = " << (c.xpMetarFile ? 1 : 0) << "\n"
       << "detailed_log = " << (c.detailedLog ? 1 : 0) << "\n"
       << "avitab_tab = " << (c.avitabTab ? 1 : 0) << "\n"
       << "avitab_icon_x = " << c.avitabIconX << "\n"

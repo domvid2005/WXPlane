@@ -356,6 +356,12 @@ SETTINGS
       xp_base_steady            (1)    hold X-Plane's own variation and
                                        evolution of its base weather off
                                        while WXPlane sets the weather
+      xp_metar_file             (1)    write the world's current METARs into
+                                       Output/real weather every 10 minutes,
+                                       as X-Plane's own METAR file, for
+                                       add-ons that read it (Little Navmap,
+                                       Pilot2ATC ...); never while X-Plane's
+                                       own real weather is on
       radar_natural_max         (400)  how many radar squares may be built
                                        (fewer = coarser rain areas)
       update_check              (1)    at start-up, check whether a newer

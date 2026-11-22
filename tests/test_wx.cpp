@@ -2,6 +2,10 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include "../src/geo.h"
@@ -55,6 +59,38 @@ int main() {
         }
         std::vector<wx::Station> none;
         CHECK(!wx::parseWorldMetarCsv("<html>error</html>", now, none) && none.empty());
+
+        // 5.1.5 (xp_metar_file): X-Plane's own METAR file for add-ons, as X-Plane 12 names and writes it
+        CHECK(wx::xpMetarFileName(now) == "METAR-2026-11-17-18.00-ZULU.txt");
+        CHECK(wx::xpMetarFileName(1767582600) == "METAR-2026-1-5-03.00-ZULU.txt");   // 2026-01-05 03:10Z: month and day unpadded
+        std::vector<wx::Station> v = w;
+        v.push_back(wx::Station{}); v.back().icao = "ZZZZ"; v.back().rawMetar = "ZZZZ 171800Z 00000KT\nBROKEN";   // a line break: left out
+        v.push_back(wx::Station{}); v.back().icao = "AAAA"; v.back().rawMetar = "AAAA 171815Z 09003KT CAVOK 05/01 Q1020";   // no time: now
+        const std::string txt = wx::formatXpMetarFile(v, now);
+        CHECK(txt == "2026/11/17 18:20\nAAAA 171815Z 09003KT CAVOK 05/01 Q1020\n\n"
+                     "2026/11/17 17:30\nLFPG 171730Z 22012KT 9999 FEW030 BKN045 09/05 Q1012 NOSIG\n\n"
+                     "2026/11/17 18:00\nRJTT 171800Z 36005KT 2000 BR OVC004 12/11 Q1020\n\n");
+        // written through a temporary file; the next hour's file replaces this session's earlier one, nothing else is touched
+        {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            const fs::path root = fs::temp_directory_path(ec) / ("wxmetar-" + std::to_string((long long)std::time(nullptr)) + "-" + std::to_string(std::rand()));
+            const fs::path dirP = root / "Output" / "real weather";   // created when missing
+            const std::string dir = dirP.u8string();
+            std::string err;
+            const std::string n1 = wx::writeXpMetarFile(dir, v, now, "", &err);
+            CHECK(n1 == "METAR-2026-11-17-18.00-ZULU.txt" && err.empty());
+            { std::ofstream o(dirP / "METAR-2026-10-31-15.00-ZULU.txt"); o << "old\n"; }   // X-Plane's own, older
+            const std::string n2 = wx::writeXpMetarFile(dir, v, now + 3600, n1, &err);
+            CHECK(n2 == "METAR-2026-11-17-19.00-ZULU.txt");
+            CHECK(fs::exists(dirP / n2) && !fs::exists(dirP / n1) && fs::exists(dirP / "METAR-2026-10-31-15.00-ZULU.txt") && !fs::exists(dirP / "WXPlane-METAR.tmp"));
+            std::ifstream in(dirP / n2, std::ios::binary);
+            const std::string back((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            in.close();
+            CHECK(back == wx::formatXpMetarFile(v, now + 3600));   // the report without a time takes the time of this write
+            CHECK(wx::writeXpMetarFile(dir, {}, now, "", &err).empty() && !err.empty());   // nothing to write: no file
+            fs::remove_all(root, ec);
+        }
     }
     Report r;
 

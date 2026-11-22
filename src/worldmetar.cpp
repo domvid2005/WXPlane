@@ -4,7 +4,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
+#include <system_error>
 
 #include "metar.h"
 
@@ -92,6 +95,71 @@ bool parseWorldMetarCsv(const std::string& csv, std::time_t now, std::vector<Sta
         out.push_back(std::move(st));
     }
     return header;
+}
+
+namespace {
+bool utcParts(std::time_t t, std::tm& out) {
+#ifdef _WIN32
+    return gmtime_s(&out, &t) == 0;
+#else
+    return gmtime_r(&t, &out) != nullptr;
+#endif
+}
+} // namespace
+
+std::string xpMetarFileName(std::time_t now) {
+    std::tm u{};
+    if (!utcParts(now, u)) return "";
+    char b[64];
+    std::snprintf(b, sizeof b, "METAR-%d-%d-%d-%02d.00-ZULU.txt", u.tm_year + 1900, u.tm_mon + 1, u.tm_mday, u.tm_hour);
+    return b;
+}
+
+std::string formatXpMetarFile(const std::vector<Station>& stations, std::time_t now) {
+    std::vector<const Station*> v;
+    v.reserve(stations.size());
+    for (const auto& s : stations) {
+        if (s.icao.size() < 3 || s.rawMetar.empty()) continue;
+        bool clean = true;
+        for (unsigned char c : s.rawMetar) if (c < 0x20 || c > 0x7e) { clean = false; break; }
+        if (clean) v.push_back(&s);
+    }
+    std::sort(v.begin(), v.end(), [](const Station* a, const Station* b) { return a->icao < b->icao; });
+    std::string out;
+    out.reserve(v.size() * 110);
+    char d[64];
+    for (const Station* s : v) {
+        std::tm u{};
+        if (!utcParts(s->obsTime > 0 ? (std::time_t)s->obsTime : now, u)) continue;
+        std::snprintf(d, sizeof d, "%04d/%02d/%02d %02d:%02d\n", u.tm_year + 1900, u.tm_mon + 1, u.tm_mday, u.tm_hour, u.tm_min);
+        out += d;
+        out += s->rawMetar;
+        out += "\n\n";
+    }
+    return out;
+}
+
+std::string writeXpMetarFile(const std::string& dir, const std::vector<Station>& stations, std::time_t now,
+                             const std::string& previous, std::string* err) {
+    namespace fs = std::filesystem;
+    const std::string name = xpMetarFileName(now);
+    const std::string text = formatXpMetarFile(stations, now);
+    if (name.empty() || text.empty()) { if (err) *err = "no reports to write"; return ""; }
+    std::error_code ec;
+    const fs::path d = fs::u8path(dir);
+    fs::create_directories(d, ec);
+    if (ec) { if (err) *err = "could not create the folder (" + ec.message() + ")"; return ""; }
+    const fs::path tmp = d / "WXPlane-METAR.tmp", dst = d / fs::u8path(name);
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) { if (err) *err = "could not open a file there"; return ""; }
+        f.write(text.data(), (std::streamsize)text.size());
+        if (!f) { if (err) *err = "could not write the file"; f.close(); fs::remove(tmp, ec); return ""; }
+    }
+    fs::rename(tmp, dst, ec);   // replaces a file of that name (an earlier write this hour, or X-Plane's own for this hour)
+    if (ec) { if (err) *err = "could not put the file in place (" + ec.message() + ")"; fs::remove(tmp, ec); return ""; }
+    if (!previous.empty() && previous != name) fs::remove(d / fs::u8path(previous), ec);
+    return name;
 }
 
 } // namespace wx

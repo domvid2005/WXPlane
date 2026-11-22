@@ -27,8 +27,14 @@ void WorldMetars::stop() {
     if (th_.joinable()) th_.join();
 }
 
-void WorldMetars::want(bool on) {
+void WorldMetars::want(bool on, const std::string& xpMetarDir) {
     std::lock_guard<std::mutex> lk(m_);
+    if (xpMetarDir != xpDir_) {
+        const bool newlyOn = xpDir_.empty() && !xpMetarDir.empty();
+        xpDir_ = xpMetarDir;
+        if (newlyOn && data_ && want_) next_ = std::chrono::steady_clock::now();   // write the file at once, not in 10 minutes
+        cv_.notify_all();
+    }
     if (on == want_) return;
     want_ = on;
     if (!on) data_.reset();
@@ -80,10 +86,27 @@ void WorldMetars::run() {
             if (ok && !parseWorldMetarCsv(csv, std::time(nullptr), st)) { ok = false; err = "no METAR table in the file"; }
         }
         const double s = std::chrono::duration<double>(Clock::now() - t0).count();
-        char b[256];
+        char b[512];
         if (ok) {
-            std::snprintf(b, sizeof b, "world METARs (map only, not sent to X-Plane): %zu stations, %.0f kB in %.1f s", st.size(), kb, s);
+            std::string dir;
+            { std::lock_guard<std::mutex> lk(m_); dir = xpDir_; }
+            std::snprintf(b, sizeof b, "world METARs (for the map%s; not sent to X-Plane's weather): %zu stations, %.0f kB in %.1f s",
+                          dir.empty() ? "" : " and X-Plane's METAR file", st.size(), kb, s);
             log(b);
+            if (!dir.empty()) {
+                std::string werr;
+                const std::string name = writeXpMetarFile(dir, st, std::time(nullptr), xpWritten_, &werr);
+                if (!name.empty()) {
+                    if (name != xpWritten_) {
+                        std::snprintf(b, sizeof b, "X-Plane's METAR file for add-ons: %s/%s (%zu reports, rewritten every 10 min)", dir.c_str(), name.c_str(), st.size());
+                        log(b);
+                    }
+                    xpWritten_ = name;
+                } else {
+                    std::snprintf(b, sizeof b, "X-Plane's METAR file for add-ons: not written to %s (%s)", dir.c_str(), werr.c_str());
+                    log(b);
+                }
+            }
             std::lock_guard<std::mutex> lk(m_);
             if (want_) data_ = std::make_shared<const std::vector<Station>>(std::move(st));
             next_ = Clock::now() + std::chrono::minutes(10);

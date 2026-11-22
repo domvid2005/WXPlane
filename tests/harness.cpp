@@ -359,6 +359,21 @@ CURLcode curl_easy_perform(CURL* c) {
         e->wf((char*)f.data() + a, 1, b - a + 1, e->wd);
         return 0;
     }
+    if (e->url.find("aviationweather.gov/data/cache/metars.cache.csv") != std::string::npos) {   // the world's METARs (map, xp_metar_file)
+        char t[32];
+        const std::time_t now = std::time(nullptr) - 600;
+        std::tm u{};
+        gmtime_r(&now, &u);
+        std::strftime(t, sizeof t, "%Y-%m-%dT%H:%M:00Z", &u);
+        char z[16];
+        std::strftime(z, sizeof z, "%d%H%MZ", &u);
+        const std::string csv = std::string("No errors\nNo warnings\n2 results\nraw_text,station_id,observation_time,latitude,longitude,elevation_m\n") +
+            "KICT " + z + " 18008KT 1/4SM FG OVC002 08/08 A3011," + "KICT," + t + ",37.6499,-97.4331,407\n" +
+            "EGLL " + z + " 24012KT 9999 SCT030 11/06 Q1018," + "EGLL," + t + ",51.4775,-0.4614,25\n";
+        e->status = 200;
+        e->wf((char*)csv.data(), 1, csv.size(), e->wd);
+        return 0;
+    }
     if (e->url.find("api.rainviewer.com") != std::string::npos) {
         static const char* idx = "{\"version\":\"2.0\",\"generated\":1,\"host\":\"https://tilecache.rainviewer.com\",\"radar\":{\"past\":[{\"time\":1,\"path\":\"/v2/radar/1\"},{\"time\":1761800000,\"path\":\"/v2/radar/2\"}]}}";
         e->status = 200;
@@ -640,6 +655,23 @@ static int runOneShot() {
         CHECK(g_logAll.find("X-Plane's own real-world weather is ON") != std::string::npos);
     }
     if (!realWx) CHECK(g_logAll.find("X-Plane weather source 0") != std::string::npos && g_logAll.find("real-world weather is ON") == std::string::npos);
+    // 5.1.5 (xp_metar_file): the world's METARs go into X-Plane's real-weather folder as X-Plane's own METAR file, for add-ons; with
+    // X-Plane's real weather on, X-Plane writes that file itself and WXPlane leaves the folder alone
+    for (int i = 0; i < 150 && g_logAll.find("X-Plane's METAR file for add-ons") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    {
+        const size_t at = g_logAll.find("X-Plane's METAR file for add-ons");
+        std::printf("oneshot: %s\n", at == std::string::npos ? "no METAR file written" : g_logAll.substr(at, g_logAll.find('\n', at) - at).c_str());
+        if (realWx) CHECK(at == std::string::npos);
+        else {
+            CHECK(at != std::string::npos && g_logAll.find("not written to", at) == std::string::npos);
+            std::string name;
+            if (at != std::string::npos) { const size_t a2 = g_logAll.find("/METAR-", at); if (a2 != std::string::npos) name = g_logAll.substr(a2 + 1, g_logAll.find(' ', a2) - a2 - 1); }
+            std::string body;
+            if (FILE* f = std::fopen((std::string(hpath("real weather")) + "/" + name).c_str(), "rb")) { char buf[4096]; size_t k; while ((k = std::fread(buf, 1, sizeof buf, f)) > 0) body.append(buf, k); std::fclose(f); }
+            std::printf("oneshot: %s holds %zu bytes\n", name.c_str(), body.size());
+            CHECK(name.compare(0, 6, "METAR-") == 0 && body.find("\nEGLL ") != std::string::npos && body.find("\nKICT ") != std::string::npos && body.find("/") == 4);
+        }
+    }
     XPluginDisable();
     CHECK(g_xpVariability == 0.35f && g_xpChangeMode == 5);   // the user's settings are back when WXPlane is switched off
     XPluginStop();

@@ -24,7 +24,8 @@ public:
     void start();
     void stop();
     // Called from the flight loop: whether the world METARs are wanted (setting on, plugin enabled). Off: no downloads, data dropped.
-    void want(bool on);
+    // xpMetarDir not empty: after each download they are also written there as X-Plane's METAR file (worldmetar.h, xp_metar_file).
+    void want(bool on, const std::string& xpMetarDir = "");
     std::shared_ptr<const std::vector<Station>> stations() const;
     std::vector<std::string> takeLog();   // lines for Log.txt, from the worker
 
@@ -39,6 +40,8 @@ private:
     std::chrono::steady_clock::time_point next_{};   // the next download (under m_)
     std::shared_ptr<const std::vector<Station>> data_;
     std::vector<std::string> log_;
+    std::string xpDir_;        // under m_
+    std::string xpWritten_;    // worker thread only: the file name written last
 };
 
 // The map beyond the weather loaded into X-Plane (display only, nothing here is sent to X-Plane): for the part of the map being looked

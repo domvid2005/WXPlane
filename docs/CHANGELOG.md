@@ -5,6 +5,7 @@
 - Altimeter at airports above sea level: with the reported QNH set, the altimeter reads the field elevation on a cold or hot day too. WXPlane sent the QNH as X-Plane's sea-level pressure; X-Plane works pressure out through the real temperatures, so the altimeter was 30-50 ft out at fields around 650 ft and hundreds of feet at high fields in cold or hot air (qnh_temp_correct)
 - Tropopause: a front under a jet stream is no longer taken for the tropopause, and its height no longer steps by thousands of feet between neighbouring weather records across a jet stream; the temperature at the tropopause belongs to the height written (tropo_smooth)
 - X-Plane's own variation and evolution of its base weather are held off while WXPlane sets the weather (put back when WXPlane is switched off), and Log.txt says when X-Plane changes its base temperatures by itself (xp_base_steady)
+- METARs for other add-ons: WXPlane writes the world's current METARs into X-Plane's real-weather folder (Output/real weather) every 10 minutes, as X-Plane's own METAR file. With X-Plane's real weather off, which WXPlane needs, X-Plane stopped writing that file, and add-ons that read it (Little Navmap, Pilot2ATC and others) showed METARs days or weeks old. Not while X-Plane's own real weather is on (xp_metar_file)
 - European radar: steady rain and showers told apart from the reflectivity, as the US radar does, so steady rain is no longer built as convective cells; more, smaller squares for widespread rain (radar_natural_max 400)
 
 ## 5.1.4

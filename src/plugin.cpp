@@ -176,6 +176,18 @@ void logf(const char* fmt, ...) {
     XPLMDebugString(line.c_str());
 }
 
+// X-Plane's real-weather folder (Output/real weather), where X-Plane keeps its METAR files: next to Output/preferences
+std::string xpRealWeatherDir() {
+    char prefs[1024] = {0};
+    XPLMGetPrefsPath(prefs);
+    XPLMExtractFileAndPath(prefs);   // .../Output/preferences
+    std::string d = prefs;
+    const std::string sep = XPLMGetDirectorySeparator();
+    const size_t cut = d.find_last_of("/\\");
+    if (cut != std::string::npos && d.compare(cut + 1, std::string::npos, "preferences") == 0) d.erase(cut);   // .../Output
+    return d + sep + "real weather";
+}
+
 std::string configPath() {
     char prefs[1024] = {0};
     XPLMGetPrefsPath(prefs);       // .../Output/preferences/X-Plane.prf
@@ -1172,7 +1184,11 @@ double steadyS();
 void turbulenceTick() {
     for (const auto& s : g_turbFetch.takeLog()) turbLog("%s", s.c_str());
     // after the first weather is in (nothing else is downloaded while X-Plane loads scenery, and the start-up load goes first)
-    g_worldMetars.want(g_cfg.enabled && g_cfg.worldMetars && g_firstApplyDone);
+    {   // the world's METARs: for the map, and as X-Plane's own METAR file for add-ons while X-Plane's real weather is off (5.1.5)
+        static const std::string xpDir = xpRealWeatherDir();
+        const bool writeFile = g_cfg.enabled && g_cfg.xpMetarFile && !g_xpRealWx && g_firstApplyDone;
+        g_worldMetars.want(g_cfg.enabled && g_firstApplyDone && (g_cfg.worldMetars || writeFile), writeFile ? xpDir : std::string());
+    }
     for (const auto& s : g_worldMetars.takeLog()) logf("%s", s.c_str());
     {   // the map's view, while it is being drawn: the far field fetches for it
         static double lastAt = -1, seenAt = -1e9;
@@ -4064,7 +4080,7 @@ void uiBuildAny(const wx::UiFonts& fonts, float w, float h, bool poppedOut, bool
     wx::UiData d;
     d.res = &g_lastRes; d.haveData = g_haveLast; d.cfg = &g_cfg; d.now = std::time(nullptr);
     d.extraServices = g_turbFetch.services(d.now);
-    d.worldStations = g_worldMetars.stations();
+    if (g_cfg.worldMetars) d.worldStations = g_worldMetars.stations();   // also downloaded for xp_metar_file alone: the map only with world_metars
     d.farView = g_farField.data();
     d.turbWorld = g_turbFetch.inputs().ecGlobal;
     if (g_drLat && g_drLon) { d.lat = XPLMGetDatad(g_drLat); d.lon = XPLMGetDatad(g_drLon); d.havePos = !(d.lat == 0 && d.lon == 0); }
