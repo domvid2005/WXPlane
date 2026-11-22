@@ -99,7 +99,9 @@ struct Config {
     bool deckShape = true;            // the shape of deep decks (5.1.5, "square clouds"): a deck is counted in whichever slot the records around carry it (it
                                       // was thinned to a fifth in the dry squares beside rain: pits with walls as high as the deck is deep), a few or
                                       // scattered clouds are not made as deep as the model's cloud, tops are uneven by up to a tenth of the depth, and a
-                                      // deck gets shallower where the cloud around it ends. Off: as 5.1.4
+                                      // deck gets shallower where the cloud around it ends; overlapping layers on one base are one layer (a rain
+                                      // record's deck in the same slot as next door), empty-slot placeholders keep the deck's base but not its
+                                      // top, and a deck's thin fringe is shallow. Off: as 5.1.4
     bool tropoSmooth = true;          // the tropopause height given to X-Plane is a smooth field over the records, each with its own temperature there (5.1.5);
                                       // off: every record its own tropopause, which X-Plane blended into one that was on neither profile across a jet stream
     bool xpBaseSteady = true;         // while WXPlane sets the weather: X-Plane's own "variation across region" 0 and "evolution over time" static (put back when

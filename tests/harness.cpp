@@ -891,6 +891,9 @@ static int runOpera() {
 //   faces  - the tallest stretch of a record's solid cloud where a touching record has no cloud (a wall only in part covered counts
 //            here too; the stricter measure of the two), and steps: a solid top more than 650 m per nm above the neighbour's cloud
 //   towers - a thin layer (10 to 60 %) 3,000 m deep or more in a record without rain (scattered cloud as deep as the front)
+//   ends   - X-Plane's own blend, slot by slot: between a record with a solid layer (60 %) in a slot and a touching record with under
+//            25 % in that slot (an empty slot, a placeholder or a thin layer), cover, base and top blended along the way; where the
+//            cover falls through 40 % the cloud ends, and its height there is the face X-Plane draws (the screenshot from KRCX, 2026-11-21)
 // HARNESS_SQUARES_OFF=1 runs it with deck_shape = 0 (the picture before 5.1.5, which the test must then find again), and
 // HARNESS_SQUARES_EDGE=1 with clear sky reported on both sides of the band.
 static int runSquares() {
@@ -940,6 +943,23 @@ static int runSquares() {
     }
     auto distNm = [](const R& a, const R& b) { return std::hypot((a.lat - b.lat) * 60.0, (a.lon - b.lon) * 60.0 * std::cos(a.lat * 3.14159265 / 180.0)); };
     int rain = 0, solid = 0, wallRecs = 0, walls2000 = 0, pairs = 0, level = 0, towers = 0, thin = 0, faces2000 = 0, faces3500 = 0, near2000 = 0, steep = 0;
+    int ends = 0, ends2000 = 0, ends3000 = 0;   // records where a deck ends in X-Plane's slot blend, and how many with a face of 2,000 / 3,000 m
+    for (size_t i = 0; i < v.size(); ++i) {
+        double worst = -1;
+        for (size_t j = 0; j < v.size(); ++j) {
+            if (i == j || distNm(v[i], v[j]) > (v[i].r + v[j].r) * 0.8) continue;
+            for (size_t k = 0; k < v[i].lay.size() && k < v[j].lay.size(); ++k) {
+                const Lay &a = v[i].lay[k], &b = v[j].lay[k];
+                if (a.cov < 0.6f || a.type < 0.5f || b.cov >= 0.25f) continue;
+                const double t = (a.cov - 0.4) / (a.cov - b.cov);
+                worst = std::max(worst, (a.top + (b.top - a.top) * t) - (a.base + (b.base - a.base) * t));
+            }
+        }
+        if (worst < 0) continue;
+        ++ends;
+        if (worst >= 2000.0) ++ends2000;
+        if (worst >= 3000.0) ++ends3000;
+    }
     double wallMax = 0, faceMax = 0;
     // the longest stretch of [lo, hi] that none of the (sorted, united) intervals covers
     auto openStretch = [](float lo, float hi, const std::vector<std::pair<float, float>>& cov) {
@@ -990,6 +1010,7 @@ static int runSquares() {
     std::printf("[squares] walls: %d records with solid cloud beside a record with none at its heights, %d of them 2,000 m high or more (highest %.0f m)\n", wallRecs, walls2000, wallMax);
     std::printf("[squares] faces: solid cloud with a stretch of 2,000 m or more open beside it: %d records (%d against a record within 12 nm), 3,500 m or more: %d (highest %.0f m); tops over 650 m per nm above the neighbour's: %d\n",
                 faces2000, near2000, faces3500, faceMax, steep);
+    std::printf("[squares] ends in X-Plane's blend: %d records where a deck ends in a slot, %d with a face of 2,000 m or more, %d of 3,000 m or more\n", ends, ends2000, ends3000);
     std::printf("[squares] lids: %d of %d touching pairs of solid cloud have exactly the same top (%.0f %%)\n", level, pairs, pairs ? 100.0 * level / pairs : 0.0);
     std::printf("[squares] towers: %d of %d thin layers (10-60 %%) in records without rain are 3,000 m deep or more\n", towers, thin);
     if (std::getenv("HARNESS_SQUARES_DUMP"))   // every record's layers, for a closer look
@@ -1004,6 +1025,7 @@ static int runSquares() {
         // the picture before 5.1.5 (measured the same in 5.1.4): the scenario must show what the screenshots show, or it proves nothing
         CHECK(walls2000 >= 5 && wallMax > 5000.0);          // pits and ends as high as the deepest deck X-Plane allows (5,084 m)
         CHECK(faces3500 >= 5 && near2000 >= 25 && steep >= 5);
+        CHECK(ends2000 >= 80 && ends3000 >= 25);
         CHECK(level * 2 > pairs);                           // more than half of all touching tops exactly level
         CHECK(towers >= 15);                                // scattered cloud 3 km deep and more
         CHECK(depMed > 5000.0);
@@ -1012,12 +1034,15 @@ static int runSquares() {
         // 8 nm), so some of that end stays; it must be less than it was (11 records, 21 towers)
         CHECK(walls2000 <= 6);
         CHECK(faces3500 <= 3 && near2000 <= 14 && steep <= 2);   // 11, 34 and 9 with deck_shape = 0
+        CHECK(ends2000 <= 45 && ends3000 <= 12);                 // 111 and 32
         CHECK(level * 10 < pairs);
         CHECK(towers <= 10);
     } else {
         CHECK(walls2000 == 0 && wallMax < 1000.0);          // no pit and no end of 2,000 m or more (7 of 5,084 m before)
         // the stricter measure: what is left stands where two fields report it (a low deck beside "few, then broken at 10,000 ft")
         CHECK(faces3500 <= 2 && near2000 <= 12 && steep <= 2);   // 7, 34 and 9 before
+        // where X-Plane's blend ends a deck: most of them were one deck in different slots (a rain record's deck a slot up), not an end
+        CHECK(ends2000 <= 35 && ends3000 <= 8);                  // 106 and 34 before
         CHECK(level * 10 < pairs);                          // under a tenth of the tops level (65 % before)
         CHECK(towers <= 20);                                // 44 before
         CHECK(depMed > 4000.0);                             // and the deck is still as deep as the model has it (not shaved off everywhere)

@@ -66,3 +66,36 @@ Tried and dropped: counting a neighbour by the distance to its edge instead of i
 - Far out with clear sky beside the band, the last overcast record is now 2,500 to 3,000 m deep instead of 4,800 m (one of 4,433 m is
   left, touching the clear record only at a corner). A record 20 to 40 nm wide cannot slope within itself.
 - Three cloud slots: where a record has three layers and its neighbour has other ones, X-Plane blends unlike layers; not changed.
+
+## Later on 2026-11-21: the KRCX screenshot (US radar, 5.1.4)
+
+A flight log and screenshot from Ladysmith, WI (KRCX) in steady rain (NOAA MRMS, 202 rain records, 35 dBZ at most): a deck about
+4-5 km deep ending in vertical faces with clear ground beside them, several faces stepped one behind the other. Every rain record
+carried the station's overcast, 97 % from 800 to 4,956 m (the model's top, cut at X-Plane's cumulus maximum), with the same top.
+
+The measures above count layer against layer and could not see what X-Plane does between records: it blends cover, base and top slot
+by slot. A new measure (`[squares] ends`) follows that blend from a record with a solid layer in a slot to a touching record with
+under 25 % in that slot, and takes the height of the cloud where its cover falls through 40 %.
+
+| Records where X-Plane's blend ends a deck with a face of 2,000 m+ / 3,000 m+ | `deck_shape = 0` | pushed build (f09d604) | now |
+|---|---|---|---|
+| Rain band, cloud all around (`SQUARES`) | 107 / 35 | 76 / 5 | 20 / 3 |
+| Clear sky beside the band (`SQUARES_EDGE`) | 112 / 33 | 83 / 10 | 33 / 4 |
+
+Three causes, all changed under `deck_shape`:
+
+1. **One deck in two slots.** A rain record carries the rain cloud and the station's deck as two layers on nearly the same base; the
+   deck went up a slot while the dry record beside it had it in the lowest. Nine in ten of the places where the blend ended a deck
+   beside a rain record were this. Overlapping layers of one height band are now merged into one before the slots are given out: the
+   denser one's base (the deck the neighbours share: with the rain cloud's lower base the dry records beside no longer took it for
+   their deck and thinned to a fifth), the highest top, the most cover, the most convective type. Ground fog and cirrus are never
+   merged; station layers never overlap.
+2. **Placeholders with the deck's full top.** A slot with no cloud gets an invisible 1 % layer at the height of the nearest deck, so
+   X-Plane keeps the base level (KBOS cones, 2026-11-12). It took the deck's top as well: towards clear sky the cover fell under a level
+   lid and the deck ended in a face as high as it is deep. The placeholder now keeps the base and has a low top (12 % of the depth,
+   at least 450 m; thinner ones once made X-Plane drop an update), so the top comes down as the cover falls. This is the KRCX picture
+   (an overcast running out into clear sky); the rig's band has few fully clear records beside it, so it shows little of this one.
+3. **Deep thin fringes.** A 5-25 % fringe of a deck kept most of the deck's depth. With solid cloud (60 %) of that deck near, a
+   fringe under half cover now gets a depth in proportion to its cover (a fifth at 10 %, at least 300 m).
+
+Not seen in the simulator. What is left in the rig is mostly a low deck ending under a mid-level deck that carries on above it.

@@ -525,6 +525,32 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
         std::vector<XPLMWeatherInfoClouds_t> mine;
         for (int k = 0; k < K; ++k) if (real(L[k])) mine.push_back(L[k]);
         std::sort(mine.begin(), mine.end(), [](const XPLMWeatherInfoClouds_t& a, const XPLMWeatherInfoClouds_t& b) { return a.alt_base < b.alt_base; });
+        // 5.1.5 (deck_shape): one cloud, one slot. A rain record carries the radar's rain cloud and the station's deck as two layers on
+        // nearly the same base, running through each other (validateXp lets storm records overlap); the deck then went up a slot, while
+        // the dry record beside it had the deck in the lowest slot. X-Plane blends slot by slot: the deck against nothing (its base
+        // and top drawn down to the ground as its cover fell) and the rain cloud against the deck. Measured 2026-11-21 on a rain band,
+        // nine in ten of all places where a deck seemed to end beside a rain record were this. Layers of one height band that overlap
+        // are one cloud: the denser one's base, the highest top, the most cover, the most convective type (a storm core keeps its 3). Ground
+        // fog and cirrus are never merged; station layers never overlap (validateXp), so this only ever joins a storm to a deck.
+        if (g_cfg.deckShape && mine.size() >= 2) {
+            const double elev = todo[i].rec.elev;
+            std::vector<XPLMWeatherInfoClouds_t> merged;
+            for (const auto& c : mine) {
+                if (!merged.empty()) {
+                    XPLMWeatherInfoClouds_t& p = merged.back();
+                    const bool fogOrCi = p.alt_base < elev + 250.0 || c.alt_base < elev + 250.0 || p.cloud_type < 0.5f || c.cloud_type < 0.5f;
+                    if (!fogOrCi && bandOf(c.alt_base) == bandOf(p.alt_base) && c.alt_base < p.alt_top - 100.0f) {
+                        if (c.coverage > p.coverage) p.alt_base = c.alt_base;   // the denser one's base: the deck the records around share
+                        p.alt_top = std::max(p.alt_top, c.alt_top);
+                        p.coverage = std::max(p.coverage, c.coverage);
+                        p.cloud_type = std::max(p.cloud_type, c.cloud_type);
+                        continue;
+                    }
+                }
+                merged.push_back(c);
+            }
+            mine.swap(merged);
+        }
         XPLMWeatherInfoClouds_t out[3] = {};
         std::array<bool, 3> used = {false, false, false};
         int next = 0;
@@ -679,6 +705,13 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
                     const double sup = a[k].sup / a[k].ws;
                     const double f = std::min(1.0, sup / std::max(a[k].supMax, sup));
                     if (f < 0.9) o.alt_top = o.alt_base + (float)((o.alt_top - o.alt_base) * (0.2 + 0.8 * (f / 0.9) * (f / 0.9)));
+                }
+                // ... and a deck's thin fringe is shallow: under half cover, with solid cloud (60 %) of that deck near, the depth falls with
+                // the cover (a fifth of it at 10 %, never under 300 m). X-Plane blends cover and top slot by slot: a 5 % fringe with most of
+                // the deck's depth held the top up while the cover fell, and the deck ended in a face 2-3 km high (2026-11-21).
+                if (g_cfg.deckShape && !rainRec && o.cloud_type >= 0.5f && o.cloud_type <= 2.0f && cov < 0.5 && a[k].supMax >= 0.6) {
+                    const double full = a[k].ct / a[k].wc - o.alt_base;
+                    o.alt_top = std::min(o.alt_top, o.alt_base + (float)std::max(300.0, full * std::max(0.1, cov / 0.5)));
                 }
                 if (o.alt_top < o.alt_base + 300.0f) o.alt_top = o.alt_base + 300.0f;   // never a thin sliver (X-Plane dropped an update full of them)
                 o.alt_top = std::min(o.alt_top, o.alt_base + wx::xpMaxThicknessM(o.cloud_type));   // and never thicker than X-Plane allows for the type
@@ -875,6 +908,13 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             // a filler is (almost) invisible; as stratus it brings none of the up- and downdrafts of a convective cloud (cirrus stays cirrus)
             if (L[k].cloud_type >= 0.5f) L[k].cloud_type = 1.0f;
             L[k].alt_top = std::min(L[k].alt_top, L[k].alt_base + wx::xpMaxThicknessM(L[k].cloud_type));
+            // 5.1.5 (deck_shape): the deck's base, but not its top. X-Plane blends base, top and coverage slot by slot, so towards a
+            // filler with the deck's full top the cloud thinned out under a level lid and ended in a face as high as the deck is deep:
+            // the walls of 4-5 km with clear ground beside them (screenshot and log 2026-11-21, KRCX steady rain: 97 % 800-4,956 m in
+            // every square, the slot sent empty beside it at the same height). With the top low the deck's top comes down as its cover
+            // falls, as a real deck does at its edge; the base stays level (the cones at KBOS, 2026-11-12, came from the base).
+            if (g_cfg.deckShape && L[k].cloud_type >= 0.5f)
+                L[k].alt_top = std::min(L[k].alt_top, L[k].alt_base + std::max(450.0f, 0.12f * (L[k].alt_top - L[k].alt_base)));   // (never under 400 m: thinner fillers made X-Plane drop an update)
         }
     }
     // the rough-top records: their deck's final layers, each top raised by its own rise again (within the same limits as when it was made)
