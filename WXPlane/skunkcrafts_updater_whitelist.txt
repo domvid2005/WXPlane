@@ -1,9 +1,9 @@
 lin_x64/LICENSES.txt|3713626166
-lin_x64/WXPlane.xpl|429559668
-lin_x64/WXPlane_Manual.txt|2589468897
+lin_x64/WXPlane.xpl|3578566609
+lin_x64/WXPlane_Manual.txt|2228821860
 mac_x64/LICENSES.txt|3713626166
-mac_x64/WXPlane.xpl|2742620402
-mac_x64/WXPlane_Manual.txt|2589468897
+mac_x64/WXPlane.xpl|4010247551
+mac_x64/WXPlane_Manual.txt|2228821860
 win_x64/LICENSES.txt|2321790390
-win_x64/WXPlane.xpl|553699766
-win_x64/WXPlane_Manual.txt|182970638
+win_x64/WXPlane.xpl|2420197339
+win_x64/WXPlane_Manual.txt|2923088318
