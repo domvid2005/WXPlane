@@ -1,5 +1,8 @@
 # WXPlane changelog
 
+## 5.1.7
+- No more flat-topped towers in light rain (Europe): squares of light rain stood up to 5 km above a low deck, each its own height, with straight sides. Europe's radar has no echo tops, and the estimate made for showers gave even the lightest rain a cloud at least 3 km tall; light steady rain now falls from the cloud the stations and the global model have there. A single speckled pixel no longer makes a whole radar square of light rain count as showers, and low cloud just above the field is no longer taken for ground fog (which kept it out of the cloud smoothing)
+
 ## 5.1.6
 - Mac: WXPlane's settings file and the METAR file for add-ons are now where they belong (Output/preferences/WXPlane.cfg, Output/real weather). X-Plane gives a plugin on a Mac old-style paths unless it asks for normal ones, and WXPlane did not ask: since the first Mac build its settings were a file in X-Plane's main folder with the whole path as its name, and 5.1.5's METAR folder the same. On the first start the settings are moved (nothing is lost; a WXPlane.cfg already in Output/preferences, which never took effect, is kept as WXPlane.cfg.bak) and the stray folder is removed. Windows and Linux are unchanged
 

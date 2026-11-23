@@ -526,7 +526,7 @@ bool Fetcher::fetchOpera(const FetchRequest& rq, std::time_t now, const std::vec
             std::snprintf(b, sizeof b, "precipitation type from the reflectivity (convective/stratiform): %d convective pixel(s), %d of steady rain capped at %.0f dBZ", nConv, capped, cfg.radarStratiformMaxDbz);
             typeNote = b;
         }
-        out = buildRadarCells(refl, nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr, stations);
+        out = buildRadarCells(refl, nullptr, rq.lat, rq.lon, cfg, &radarPrev_, conv.valid() ? &conv : nullptr, stations, cfg.deckShape ? 0.25 : 0.0);
         radarPrev_.clear();
         for (const auto& c : out.cells) radarPrev_.insert(c.key);
         out.source = store == 1 ? "EUMETNET OPERA (Europe, backup store)" : "EUMETNET OPERA (Europe)";

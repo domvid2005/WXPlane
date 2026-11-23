@@ -234,6 +234,7 @@ struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, siz
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
 static std::string g_pirepJson;
 static bool g_operaEdge = false;   // HARNESS_SQUARES_EDGE=1: clear sky on both sides of that storm's band (the deep cloud ends against nothing)
+static bool g_operaLight = false;  // HARNESS_TOWERS: light, patchy rain with speckle under a low deck, no deep cloud in the model (Zurich 2026-11-23)
 static bool g_operaStorm = false;  // HARNESS_SQUARES: a natural-looking European storm in the mock composite, and the model's cloud for it
 static bool g_jet = false;         // HARNESS_JET: open water under a jet stream, the tropopause low north of 42.5 N and high south of it
 static bool g_highField = false;   // HARNESS_HIGHFIELD: four fields around Denver, 1,500-1,800 m high, 15-20 C colder than standard
@@ -425,7 +426,7 @@ CURLcode curl_easy_perform(CURL* c) {
                 static const int lv[] = {1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150};
                 static const double gh[] = {110, 320, 540, 760, 990, 1460, 1950, 2470, 3010, 3590, 4210, 4870, 5570, 6340, 7190, 8120, 9160, 10360, 11780, 13600};
                 for (size_t i = 0; i < 20; ++i) {
-                    const int cover = !inBand ? (!g_operaEdge && lv[i] <= 850 && lv[i] >= 750 ? 45 : 5) : lv[i] > 900 ? 40 : lv[i] >= 450 ? 95 : lv[i] == 400 ? 60 : lv[i] == 350 ? 30 : 10;
+                    const int cover = g_operaLight ? (lv[i] <= 925 && lv[i] >= 850 ? 70 : 5) : !inBand ? (!g_operaEdge && lv[i] <= 850 && lv[i] >= 750 ? 45 : 5) : lv[i] > 900 ? 40 : lv[i] >= 450 ? 95 : lv[i] == 400 ? 60 : lv[i] == 350 ? 30 : 10;
                     char q[160];
                     std::snprintf(q, sizeof q, ",\"cloud_cover_%dhPa\":[%d],\"geopotential_height_%dhPa\":[%g]", lv[i], cover, lv[i], gh[i]);
                     one += q;
@@ -506,6 +507,14 @@ CURLcode curl_easy_perform(CURL* c) {
     if (g_operaStorm && e->url.find("aviationweather.gov/api/data/metar?") != std::string::npos) {
         // Madrid in the rain band, and a field on either side of the band with a different sky
         static std::string b;
+        if (g_operaLight) {
+            b = "[{\"icaoId\":\"LEMD\",\"lat\":40.4722,\"lon\":-3.5608,\"elev\":609,\"rawOb\":\"LEMD " + utcStamp(20) + " 24008KT 8000 -RA FEW006 BKN025 06/04 Q1021\"},"
+                "{\"icaoId\":\"LETO\",\"lat\":40.4967,\"lon\":-3.4458,\"elev\":617,\"rawOb\":\"LETO " + utcStamp(20) + " 23008KT 9000 -RA FEW006 SCT020 BKN030 06/04 Q1021\"},"
+                "{\"icaoId\":\"LEVS\",\"lat\":40.3707,\"lon\":-3.7851,\"elev\":692,\"rawOb\":\"LEVS " + utcStamp(20) + " 24008KT 9999 FEW007 BKN025 06/03 Q1021\"},"
+                "{\"icaoId\":\"LEZA\",\"lat\":39.4800,\"lon\":-2.8500,\"elev\":700,\"rawOb\":\"LEZA " + utcStamp(20) + " 25008KT 9999 SCT030 07/02 Q1022\"},"
+                "{\"icaoId\":\"LEZB\",\"lat\":41.6400,\"lon\":-4.3900,\"elev\":840,\"rawOb\":\"LEZB " + utcStamp(20) + " 27009KT 9999 FEW030 BKN040 05/02 Q1022\"}]";
+            e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+        }
         b = "[{\"icaoId\":\"LEMD\",\"lat\":40.4722,\"lon\":-3.5608,\"elev\":609,\"rawOb\":\"LEMD " + utcStamp(20) + " 24012KT 9999 -RA BKN020 OVC040 12/10 Q1008\"},"
             "{\"icaoId\":\"LETO\",\"lat\":40.4967,\"lon\":-3.4458,\"elev\":617,\"rawOb\":\"LETO " + utcStamp(20) + " 23010KT 9999 -RA BKN025 12/10 Q1008\"},"
             "{\"icaoId\":\"LEVS\",\"lat\":40.3707,\"lon\":-3.7851,\"elev\":692,\"rawOb\":\"LEVS " + utcStamp(20) + " 24010KT 9999 -RA OVC035 12/10 Q1008\"},"
@@ -858,7 +867,15 @@ static std::string operaTileFor(uint64_t off) {
         const int col = tc * h.tileW + p % h.tileW, row = tr * h.tileH + p / h.tileW;
         const int dc = col - lc, dr = row - lr;
         float v = NAN;
-        if (g_operaStorm) {
+        if (g_operaLight) {
+            // patches of light rain, 15-33 dBZ, with pixel-to-pixel speckle of a few dB, no cores
+            const double x = dc * 2.0, y = dr * 2.0;
+            const double q = 20.0 + 7.0 * std::sin(x / 21.0) * std::cos(y / 17.0) + 4.0 * std::sin((x - y) / 9.0) - std::hypot(x, y) / 25.0;
+            const unsigned hsh = (unsigned)(col * 73856093u) ^ (unsigned)(row * 19349663u);
+            const double speck = ((hsh % 1000u) / 1000.0 - 0.5) * 12.0;
+            if (q >= 14.0) v = (float)std::min(33.0, q + speck);
+        }
+        else if (g_operaStorm) {
             // a rain band 200 km wide running SW-NE through the airport with uneven rain in it, four storm cores, three showers ahead of it
             const double x = dc * 2.0, y = dr * 2.0;   // km east and south of the airport (2 km pixels)
             const double across = x * 0.6 + y * 0.8 + 30.0, along = x * 0.8 - y * 0.6;
@@ -936,7 +953,8 @@ static int runOpera() {
 //            25 % in that slot (an empty slot, a placeholder or a thin layer), cover, base and top blended along the way; where the
 //            cover falls through 40 % the cloud ends, and its height there is the face X-Plane draws (the screenshot from KRCX, 2026-11-21)
 // HARNESS_SQUARES_OFF=1 runs it with deck_shape = 0 (the picture before 5.1.5, which the test must then find again), and
-// HARNESS_SQUARES_EDGE=1 with clear sky reported on both sides of the band.
+// HARNESS_SQUARES_EDGE=1 with clear sky reported on both sides of the band. HARNESS_TOWERS=1: light, patchy rain with speckle under a
+// low deck, low cloud under the rain, no deep cloud in the model (Zurich, 2026-11-23: towers of light rain).
 static int runSquares() {
     const bool off = std::getenv("HARNESS_SQUARES_OFF") != nullptr;
     const char* kCfg = hpath("WXPlane.cfg");
@@ -946,6 +964,7 @@ static int runSquares() {
     g_operaHead = readFile("tests/data/opera_head.bin");
     g_operaStorm = true;
     g_operaEdge = std::getenv("HARNESS_SQUARES_EDGE") != nullptr;
+    g_operaLight = std::getenv("HARNESS_TOWERS") != nullptr;
     g_loadingFlag = 0;
     g_lat = 40.4722; g_lon = -3.5608; g_elev = 1500; g_agl = 900;
     char n[256], s[256], d[256];
@@ -1051,6 +1070,24 @@ static int runSquares() {
     std::printf("[squares] walls: %d records with solid cloud beside a record with none at its heights, %d of them 2,000 m high or more (highest %.0f m)\n", wallRecs, walls2000, wallMax);
     std::printf("[squares] faces: solid cloud with a stretch of 2,000 m or more open beside it: %d records (%d against a record within 12 nm), 3,500 m or more: %d (highest %.0f m); tops over 650 m per nm above the neighbour's: %d\n",
                 faces2000, near2000, faces3500, faceMax, steep);
+    // towers (HARNESS_TOWERS): a rain record whose highest cloud top stands 1,500 m or more above that of every touching record
+    // without rain (Zurich, 2026-11-23: light rain squares to 3.7-5.3 km beside a deck ending at 1.9 km)
+    int rainTowers = 0, rainBeside = 0;
+    double towerMax = 0;
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (v[i].rain <= 0.01) continue;
+        float topI = 0; for (const auto& L : v[i].lay) if (L.cov >= 0.25f) topI = std::max(topI, L.top);
+        float dryMax = -1;
+        for (size_t j = 0; j < v.size(); ++j) {
+            if (i == j || v[j].rain > 0.01 || distNm(v[i], v[j]) > (v[i].r + v[j].r) * 0.8) continue;
+            float t = 0; for (const auto& L : v[j].lay) if (L.cov >= 0.25f) t = std::max(t, L.top);
+            dryMax = std::max(dryMax, t);
+        }
+        if (dryMax < 0) continue;
+        ++rainBeside;
+        if (topI - dryMax >= 1500.0f) { ++rainTowers; towerMax = std::max(towerMax, (double)(topI - dryMax)); }
+    }
+    std::printf("[squares] rain towers: %d of %d rain records beside dry ones stand 1,500 m or more above all of them (most %.0f m)\n", rainTowers, rainBeside, towerMax);
     std::printf("[squares] ends in X-Plane's blend: %d records where a deck ends in a slot, %d with a face of 2,000 m or more, %d of 3,000 m or more\n", ends, ends2000, ends3000);
     std::printf("[squares] lids: %d of %d touching pairs of solid cloud have exactly the same top (%.0f %%)\n", level, pairs, pairs ? 100.0 * level / pairs : 0.0);
     std::printf("[squares] towers: %d of %d thin layers (10-60 %%) in records without rain are 3,000 m deep or more\n", towers, thin);
@@ -1061,7 +1098,7 @@ static int runSquares() {
             for (const auto& L : c.info.cloud_layers) std::printf(" [t%.1f %.0f%% %.0f-%.0f]", L.cloud_type, L.coverage * 100, L.alt_base, L.alt_top);
             std::printf("\n");
         }
-    CHECK(rain > 40 && solid > 60 && pairs > 300);
+    CHECK(rain > 40 && solid > 60 && (g_operaLight || pairs > 300));
     {   // nothing handed to X-Plane deeper than it allows for the cloud type, airport records included (KSZL crash, 2026-11-22)
         int tooDeep = 0;
         for (const auto& c : g_calls)
@@ -1073,7 +1110,12 @@ static int runSquares() {
         std::printf("[squares] layers deeper than X-Plane allows for their type: %d\n", tooDeep);
         CHECK(tooDeep == 0);
     }
-    if (off) {
+    if (g_operaLight) {
+        // light, patchy rain under a low deck (Zurich, 2026-11-23): no rain square stands up as a tower above its dry neighbours (6, up to
+        // 2,461 m, in 5.1.6), and the speckle does not make the light rain showers (96 of 111 squares in 5.1.6)
+        CHECK(rainTowers == 0 && near2000 == 0);
+        CHECK(g_logAll.find("0 convective at 40+ dBZ = cumulonimbus, 111 steady rain/snow") != std::string::npos);
+    } else if (off) {
         // the picture before 5.1.5 (measured the same in 5.1.4): the scenario must show what the screenshots show, or it proves nothing
         CHECK(walls2000 >= 5 && wallMax > 5000.0);          // pits and ends as high as the deepest deck X-Plane allows (5,084 m)
         CHECK(faces3500 >= 5 && near2000 >= 25 && steep >= 5);
@@ -1476,7 +1518,7 @@ int main() {
     if (std::getenv("HARNESS_HIGHFIELD")) return runHighField();
     if (std::getenv("HARNESS_JET")) return runJet();
     if (std::getenv("HARNESS_HFS") || std::getenv("HARNESS_HFS_BOTH")) return runHfs();
-    if (std::getenv("HARNESS_SQUARES") || std::getenv("HARNESS_SQUARES_OFF") || std::getenv("HARNESS_SQUARES_EDGE")) return runSquares();
+    if (std::getenv("HARNESS_SQUARES") || std::getenv("HARNESS_SQUARES_OFF") || std::getenv("HARNESS_SQUARES_EDGE") || std::getenv("HARNESS_TOWERS")) return runSquares();
     if (std::getenv("HARNESS_OPERA")) return runOpera();
     if (std::getenv("HARNESS_RAMP")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
     { FILE* f = std::fopen(hpath("WXPlane.cfg"), "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }

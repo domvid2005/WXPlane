@@ -588,7 +588,9 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
             for (const auto& c : mine) {
                 if (!merged.empty()) {
                     XPLMWeatherInfoClouds_t& p = merged.back();
-                    const bool fogOrCi = p.alt_base < elev + 250.0 || c.alt_base < elev + 250.0 || p.cloud_type < 0.5f || c.cloud_type < 0.5f;
+                    // ground fog starts at the ground (60 m; the 250 m used for fog elsewhere kept a rain cloud 205 m above Zurich apart from
+                    // its deck, 2026-11-23); its overlap rule below keeps fog out as well
+                    const bool fogOrCi = p.alt_base < elev + 60.0 || c.alt_base < elev + 60.0 || p.cloud_type < 0.5f || c.cloud_type < 0.5f;
                     if (!fogOrCi && bandOf(c.alt_base) == bandOf(p.alt_base) && c.alt_base < p.alt_top - 100.0f) {
                         if (c.coverage > p.coverage) p.alt_base = c.alt_base;   // the denser one's base: the deck the records around share
                         p.alt_top = std::max(p.alt_top, c.alt_top);
@@ -644,7 +646,10 @@ void matchEmptyLayers(std::vector<Todo>& todo) {
     if (g_cfg.cloudSmoothNm > 0.0) {
         // sigma grows with the record's own size, so the coarse 30 nm tiles further out are smoothed against their neighbours too
         auto sigOf = [&](size_t i) { return std::max(g_cfg.cloudSmoothNm, 0.7 * (double)todo[i].rec.info.radius_nm); };
-        auto isFog = [&](size_t i, int k) { const auto& c = todo[i].rec.info.cloud_layers[k]; return isReal[i][k] && c.alt_base < todo[i].rec.elev + 250.0; };
+        // ground fog: WXPlane's fog layers start at the field's elevation. 250 m (5.1.6 and before; deck_shape = 0) also took low cloud
+        // for fog, which then stayed out of all smoothing: a rain cloud 205 m above Zurich stood up as a tower (2026-11-23)
+        const double fogAgl = g_cfg.deckShape ? 60.0 : 250.0;
+        auto isFog = [&](size_t i, int k) { const auto& c = todo[i].rec.info.cloud_layers[k]; return isReal[i][k] && c.alt_base < todo[i].rec.elev + fogAgl; };
         struct Acc { double w = 0, wc = 0, cb = 0, ct = 0, cy = 0, ws = 0, sup = 0, supMax = 0; };
         std::vector<std::array<XPLMWeatherInfoClouds_t, 3>> out(n);
         std::vector<std::array<bool, 3>> outReal(n);

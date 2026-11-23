@@ -1061,23 +1061,39 @@ GribField classifyPrecipType(const GribField& refl) {
     return f;
 }
 
-void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm) {
+void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm, const GribField* refl, double minShare) {
     if (!conv.valid()) return;
+    const bool share = refl && minShare > 0 && refl->ni == conv.ni && refl->nj == conv.nj;
     for (auto& c : cells) {
         const double halfNm = std::max((double)c.sizeNm, cellNm) * 0.5;
         const double dLat = halfNm / 60.0, dLon = halfNm / (60.0 * std::max(0.2, std::cos(c.lat * kPi / 180.0)));
         const int j0 = std::max(0, (int)std::floor((conv.lat0 - (c.lat + dLat)) / conv.dLat)), j1 = std::min(conv.nj - 1, (int)std::ceil((conv.lat0 - (c.lat - dLat)) / conv.dLat));
         const int i0 = std::max(0, (int)std::floor((c.lon - dLon - conv.lon0) / conv.dLon)), i1 = std::min(conv.ni - 1, (int)std::ceil((c.lon + dLon - conv.lon0) / conv.dLon));
         bool any = false;
-        for (int j = j0; j <= j1 && !any; ++j)
-            for (int i = i0; i <= i1; ++i)
-                if (conv.v[(size_t)j * (size_t)conv.ni + (size_t)i] > 0.5f) { any = true; break; }
+        if (share) {
+            // 5.1.7: a square is showers when a quarter of its echo is convective, or a pixel of it is a core (40 dBZ). One pixel in a
+            // square up to 24 nm wide made it all showers: of 190 squares of light rain at Zurich 163 were, each a cumulus tower
+            // (2026-11-23). Steiner's test reads speckle in light rain as peaked; the US radar's own classes are not counted this way.
+            long echo = 0, cv = 0;
+            for (int j = j0; j <= j1 && !any; ++j)
+                for (int i = i0; i <= i1; ++i) {
+                    const size_t k = (size_t)j * (size_t)conv.ni + (size_t)i;
+                    const float r = refl->v[k];
+                    if (!(r >= 5.0f && r < 90.0f)) continue;
+                    ++echo;
+                    if (conv.v[k] > 0.5f) { ++cv; if (r >= 40.0f) { any = true; break; } }
+                }
+            if (!any && echo > 0 && (double)cv >= minShare * (double)echo) any = true;
+        } else
+            for (int j = j0; j <= j1 && !any; ++j)
+                for (int i = i0; i <= i1; ++i)
+                    if (conv.v[(size_t)j * (size_t)conv.ni + (size_t)i] > 0.5f) { any = true; break; }
         c.stratiform = !any;
     }
 }
 
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
-                            const std::set<std::string>* prev, const GribField* conv, const std::vector<Station>* stations) {
+                            const std::set<std::string>* prev, const GribField* conv, const std::vector<Station>* stations, double convMinShare) {
     RadarResult res;
     res.attempted = true;
     if (!refl.valid()) { res.note = "no reflectivity grid"; return res; }
@@ -1151,7 +1167,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
     res.echoBlocks = (int)all.size();
     if (cfg.radarNatural) {
         buildNaturalCells(refl, tops, lat, lon, cfg, res, stations);
-        if (conv) markStratiform(res.cells, *conv, cfg.radarCellNm);
+        if (conv) markStratiform(res.cells, *conv, cfg.radarCellNm, &refl, convMinShare);
         res.ok = true;
         res.topsFromRadar = tops != nullptr;
         return res;
@@ -1174,7 +1190,7 @@ RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double
                                                std::max(50.0, cfg.stormTopStepM), {30.0, 40.0, 50.0}, std::max(4, cfg.radarMaxCells));
     markStormEdges(all, cfg.radarCellNm);
     if (cfg.stormContour) for (auto& c : all) if (!c.synthetic) c.radiusScale = std::min(1.0f, c.contourScale);   // the outline decides how far a measured block reaches
-    if (conv) markStratiform(all, *conv, cfg.radarCellNm);
+    if (conv) markStratiform(all, *conv, cfg.radarCellNm, &refl, convMinShare);
     res.cells = std::move(all);
     res.ok = true;
     res.topsFromRadar = tops != nullptr;
@@ -1232,7 +1248,7 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
     // Steady rain (MRMS PrecipFlag): the radar sees the rain, not the small ice above it, so its echo top reads low for the cloud. Where
     // the global model has the cloud reaching higher from this base, the top goes up to the model's (within the depth X-Plane allows
     // for cumulus). It only ever raises a top: storms (40 dBZ and up, or convective) keep the radar's.
-    if (c.stratiform && dbz < 40.0f && !x.modelProfM.empty()) {
+    if (c.stratiform && dbz < 40.0f && !x.modelProfM.empty() && !(cfg.deckShape && !c.topKnown)) {   // (without echo tops: below)
         const float mt = modelCloudTopM(x.modelProfM, baseM);
         if (mt > topM) {
             // the model's top is one value per pressure level for a whole region: neighbouring records took exactly the same height (flat
@@ -1241,6 +1257,22 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
             const float v = (float)(fbm(X, Y, 8.0, 53) * 400.0);
             topM = std::max(topM, std::min({mt + v, baseM + xpMaxThicknessM(2.0f), kXpTopM}));
         }
+    }
+    // 5.1.7 (deck_shape): steady rain without a measured echo top (Europe's composite has none) took its top from the estimate for
+    // convection, 2.5 km + 0.22 km per dBZ and never under 3 km: light rain under a deck ending at 1,900 m stood up to 5.3 km, every
+    // radar square its own height, as flat-topped towers with straight sides (Zurich, 2026-11-23, a customer's screenshots). The rain
+    // falls from the cloud the station and the model have there: the top is the highest of the record's own layers on about this base,
+    // the model's top (varied as above) and 1,500 m above the base (rain needs that), and never higher than the estimate.
+    if (cfg.deckShape && c.stratiform && dbz < 40.0f && !c.topKnown) {
+        float t2 = baseM + 1500.0f;
+        for (const auto& k : x.clouds)
+            if (k.coverage > 0 && k.type >= 0.5f && std::fabs(k.baseM - baseM) < 400.0f) t2 = std::max(t2, k.topM);
+        const float mt = x.modelProfM.empty() ? -1.0f : modelCloudTopM(x.modelProfM, baseM);
+        if (mt > 0) {
+            const double X = c.lon * 60.0 * std::max(0.2, std::cos(c.lat * kPi / 180.0)), Y = c.lat * 60.0;
+            t2 = std::max(t2, std::min({mt + (float)(fbm(X, Y, 8.0, 53) * 400.0), baseM + xpMaxThicknessM(2.0f), kXpTopM}));
+        }
+        topM = std::min(topM, t2);
     }
     // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a
     // wall. After the model raise above (5.1.5): before, that raise put rim records of steady rain straight back to full height.

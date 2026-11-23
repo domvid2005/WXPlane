@@ -163,7 +163,8 @@ std::string mrmsUrl(const std::string& region, const std::string& product);
 // convective pixel in their footprint are marked stratiform.
 RadarResult buildRadarCells(const GribField& refl, const GribField* tops, double lat, double lon, const Config& cfg,
                             const std::set<std::string>* prev = nullptr, const GribField* conv = nullptr,
-                            const std::vector<Station>* stations = nullptr);   // airports: natural squares over them are split to 6 nm
+                            const std::vector<Station>* stations = nullptr,    // airports: natural squares over them are split to 6 nm
+                            double convMinShare = 0.0);   // > 0 (Europe, deck_shape): a square is showers only with that share of convective echo (markStratiform)
 // Convection reported at an airport (TS, SH, GR, GS, SQ in the weather; CB, TCU or LTG anywhere in the report). GFS points never count.
 bool convectionReported(const Station& st);
 // Caps steady rain/snow pixels of `refl` at capDbz and returns a mask on its grid (1 = convective). With `flag` (MRMS PrecipFlag),
@@ -174,7 +175,9 @@ GribField convectiveMask(GribField& refl, const GribField* flag, const std::vect
 // convectiveMask treats Europe the way it treats the US.
 GribField classifyPrecipType(const GribField& refl);
 // Marks every cell whose footprint holds no convective pixel of `conv` as stratiform.
-void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm);
+// refl and minShare > 0: a square is showers when that share of its echo pixels is convective or one of them is a core (40 dBZ);
+// otherwise any convective pixel in it makes it showers.
+void markStratiform(std::vector<RadarCell>& cells, const GribField& conv, double cellNm, const GribField* refl = nullptr, double minShare = 0.0);
 
 // Applies a storm cell on top of the weather built for the nearest station.
 // Top (MSL, metres) of the storm cloud applied for a cell, and the value the map label shows: the measured radar echo top when
