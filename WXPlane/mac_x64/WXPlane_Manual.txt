@@ -1,5 +1,5 @@
 ================================================================================
-  WXPlane 5.1.4 for X-Plane 12  -  User Manual
+  WXPlane 5.1.5 for X-Plane 12  -  User Manual
 ================================================================================
 
 WXPlane replaces X-Plane 12's weather with live, real-world data: airport
@@ -343,6 +343,27 @@ SETTINGS
                                        steady rain is never topped lower
                                        than the model's cloud (storms keep
                                        the radar's echo tops)
+      deck_shape                (1)    natural cloud shapes in rain and
+                                       storms: deep decks with uneven tops
+                                       that slope down where the cloud thins
+                                       out, instead of flat slabs with
+                                       vertical walls (0 = as in 5.1.4)
+      qnh_temp_correct          (1)    at airports above sea level, the
+                                       pressure is sent so that the reported
+                                       QNH sets the altimeter to the field
+                                       elevation whatever the temperature
+      tropo_smooth              (1)    a smooth tropopause between airports
+      xp_base_steady            (1)    hold X-Plane's own variation and
+                                       evolution of its base weather off
+                                       while WXPlane sets the weather
+      xp_metar_file             (1)    write the world's current METARs into
+                                       Output/real weather every 10 minutes,
+                                       as X-Plane's own METAR file, for
+                                       add-ons that read it (Little Navmap,
+                                       Pilot2ATC ...); never while X-Plane's
+                                       own real weather is on
+      radar_natural_max         (400)  how many radar squares may be built
+                                       (fewer = coarser rain areas)
       update_check              (1)    at start-up, check whether a newer
                                        WXPlane is out (0 = never check)
       detailed_log              (1)    WXPlane's detail lines in Log.txt (0 =
