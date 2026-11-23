@@ -19,6 +19,7 @@
 #include <thread>
 #include <set>
 #include <ctime>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -186,6 +187,43 @@ std::string xpRealWeatherDir() {
     const size_t cut = d.find_last_of("/\\");
     if (cut != std::string::npos && d.compare(cut + 1, std::string::npos, "preferences") == 0) d.erase(cut);   // .../Output
     return d + sep + "real weather";
+}
+
+// The files an HFS path left in the current folder (X-Plane's main folder; see XPluginStart): the settings go to their right place (the
+// stray file is the one WXPlane read and saved, with everything set in its window; a WXPlane.cfg already there, edited following the
+// manual, never took effect and is kept as WXPlane.cfg.bak) and the leftover is removed; the METAR folder
+// of 5.1.5 loses the files WXPlane wrote into it and then itself, if nothing else is in it. Returns what was done, for Log.txt.
+std::string moveHfsLeftovers(const std::string& hfsCfg, const std::string& cfg, const std::string& hfsRealWx) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::string note;
+    if (hfsCfg.find(':') == std::string::npos || hfsCfg[0] == '/') return note;   // not an HFS path
+    const fs::path old = fs::u8path(hfsCfg), dst = fs::u8path(cfg);
+    if (fs::is_regular_file(old, ec)) {
+        fs::create_directories(dst.parent_path(), ec);
+        const bool had = fs::exists(dst, ec);
+        if (had) { fs::path bak = dst; bak += ".bak"; fs::copy_file(dst, bak, fs::copy_options::overwrite_existing, ec); }
+        if (!ec) fs::copy_file(old, dst, fs::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            fs::remove(old, ec);
+            note += "settings moved from X-Plane's main folder to " + cfg;
+            if (had) note += " (the WXPlane.cfg that was there, which WXPlane never read on a Mac, kept as WXPlane.cfg.bak)";
+        } else note += "settings could not be moved from X-Plane's main folder (" + ec.message() + ")";
+    }
+    const fs::path rw = fs::u8path(hfsRealWx);
+    if (fs::is_directory(rw, ec)) {
+        int n = 0;
+        for (const auto& e : fs::directory_iterator(rw, ec)) {
+            const std::string f = e.path().filename().u8string();
+            const bool ours = f == "WXPlane-METAR.tmp" || (f.compare(0, 6, "METAR-") == 0 && f.size() > 13 && f.compare(f.size() - 9, 9, "-ZULU.txt") == 0);
+            if (ours) { std::error_code e2; fs::remove(e.path(), e2); ++n; }
+        }
+        const bool gone = fs::remove(rw, ec);   // only if empty
+        if (!note.empty()) note += "; ";
+        note += gone ? "a stray METAR folder in X-Plane's main folder removed" : "the METAR files in a stray folder in X-Plane's main folder removed (other files left there)";
+        (void)n;
+    }
+    return note;
 }
 
 std::string configPath() {
@@ -4265,8 +4303,18 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc) {
     std::strcpy(outSig, "com.wxplane.xp12.noaa");
     std::strcpy(outDesc, "WXPlane " WX_VERSION ": live METAR/ATIS weather, GFS winds and clouds aloft, NOAA MRMS and EUMETNET OPERA radar, turbulence and windshear.");
 
+    // 5.1.6: native paths ("/Users/.../X-Plane 12/Output/preferences" on a Mac). Without this X-Plane gives a plugin on a Mac HFS
+    // paths ("Macintosh HD:Users:...:Output:preferences"), which the C++ library takes for one file name in the current folder: since
+    // the first Mac build WXPlane.cfg was a file of that name in X-Plane's main folder (read back from there, so it went unnoticed,
+    // while the manual's Output/preferences/WXPlane.cfg did nothing), and 5.1.5 made its METAR folder the same way (a customer,
+    // 2026-11-23). Windows and Linux paths are native already. The paths before the switch, to move what is there:
+    const std::string hfsCfg = configPath(), hfsRealWx = xpRealWeatherDir();
+    XPLMEnableFeature("XPLM_USE_NATIVE_PATHS", 1);
     g_cfgPath = configPath();
+    std::string pathNote;
+    if (hfsCfg != g_cfgPath) pathNote = moveHfsLeftovers(hfsCfg, g_cfgPath, hfsRealWx);
     wx::loadConfig(g_cfgPath, g_cfg);
+    if (!pathNote.empty()) XPLMDebugString(("[WXPlane] " + pathNote + "\n").c_str());
     g_cfg.useAloft = true;   // the GFS winds/temps and clouds aloft are always on (their switch was removed from the window, 2026-11-12)
     wx::saveConfig(g_cfgPath, g_cfg); // writes defaults on first run so the file can be edited
 

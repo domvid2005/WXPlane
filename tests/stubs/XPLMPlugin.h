@@ -10,3 +10,6 @@ XPLMPluginID XPLMFindPluginBySignature(const char* inSignature);
 #ifndef XPLM_NO_PLUGIN_ID
 #define XPLM_NO_PLUGIN_ID (-1)
 #endif
+// features (XPLM200 and later): XPLM_USE_NATIVE_PATHS
+void XPLMEnableFeature(const char* inFeature, int inEnable);
+int XPLMIsFeatureEnabled(const char* inFeature);

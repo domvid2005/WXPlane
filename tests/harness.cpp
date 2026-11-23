@@ -10,7 +10,11 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
+#include <unistd.h>
 #include <cstdlib>
 
 #include "stubs/XPLMDataAccess.h"
@@ -119,8 +123,13 @@ static const char* hpath(const char* name) {   // a stable C string: the file in
 #ifndef WX_HARNESS_DATA
 #define WX_HARNESS_DATA "tests/data/harness"
 #endif
-void XPLMGetPrefsPath(char* o) { std::strcpy(o, hpath("X-Plane.prf")); }
-const char* XPLMGetDirectorySeparator(void) { return "/"; }
+// A Mac (HARNESS_HFS): X-Plane gives HFS paths ("Macintosh HD:tmp:wxharness.X:X-Plane.prf") until the plugin asks for native ones
+static bool g_hfs = false, g_nativePaths = false;
+void XPLMEnableFeature(const char* f, int on) { if (std::strcmp(f, "XPLM_USE_NATIVE_PATHS") == 0) g_nativePaths = on != 0; }
+int XPLMIsFeatureEnabled(const char* f) { return std::strcmp(f, "XPLM_USE_NATIVE_PATHS") == 0 && g_nativePaths ? 1 : 0; }
+static std::string hfsOf(const std::string& posix) { std::string h = "Macintosh HD" + posix; for (char& c : h) if (c == '/') c = ':'; return h; }
+void XPLMGetPrefsPath(char* o) { std::strcpy(o, g_hfs && !g_nativePaths ? hfsOf(hpath("X-Plane.prf")).c_str() : hpath("X-Plane.prf")); }
+const char* XPLMGetDirectorySeparator(void) { return g_hfs && !g_nativePaths ? ":" : "/"; }
 // FlyWithLua's Scripts folder, for the X-ProTurb check (a test fills it)
 std::vector<std::string> g_luaScripts;
 int XPLMGetDirectoryContents(const char* dir, int first, char* names, int bufSize, char** idx, int idxCount, int* total, int* got) {
@@ -138,7 +147,7 @@ int XPLMGetDirectoryContents(const char* dir, int first, char* names, int bufSiz
     if (got) *got = n;
     return first + n >= (int)files.size() ? 1 : 0;
 }
-char* XPLMExtractFileAndPath(char* p) { char* s = std::strrchr(p, '/'); if (s) *s = 0; return p; }
+char* XPLMExtractFileAndPath(char* p) { char* s = std::strrchr(p, g_hfs && !g_nativePaths ? ':' : '/'); if (s) *s = 0; return p; }
 static std::string g_navId;
 XPLMNavRef XPLMFindNavAid(const char*, const char* id, float*, float*, int*, XPLMNavType) {
     g_navId = id;
@@ -1095,6 +1104,46 @@ static int runSquares() {
     return g_fail ? 1 : 0;
 }
 
+// HARNESS_HFS=1 (5.1.6): a Mac. X-Plane gives HFS paths until a plugin asks for native ones; taken as a POSIX path, the HFS path of
+// WXPlane.cfg was one file name in X-Plane's main folder (the current folder), and 5.1.5's METAR folder the same. WXPlane now asks
+// for native paths, moves the settings to Output/preferences (here: the harness folder) and removes the stray METAR folder.
+// HARNESS_HFS_BOTH=1: a WXPlane.cfg is in its right place already (edited following the manual, never read): the stray one (the one in
+// use) replaces it, and it is kept as WXPlane.cfg.bak.
+static int runHfs() {
+    namespace fs = std::filesystem;
+    const bool both = std::getenv("HARNESS_HFS_BOTH") != nullptr;
+    g_hfs = true;   // (HARNESS_HFS_BOTH alone starts this too)
+    const std::string dir = harnessDir();
+    if (chdir(dir.c_str()) != 0) { std::printf("cannot chdir to %s\n", dir.c_str()); return 1; }
+    const std::string hfsCfg = hfsOf(dir) + ":WXPlane.cfg", hfsRw = hfsOf(dir) + ":real weather";
+    { std::ofstream f(hfsCfg); f << "config_version = 31\nsearch_nm = 77\n"; }
+    if (both) { std::ofstream f(dir + "/WXPlane.cfg"); f << "config_version = 31\nsearch_nm = 55\n"; }
+    fs::create_directories(hfsRw);
+    { std::ofstream f(hfsRw + "/METAR-2026-11-23-12.00-ZULU.txt"); f << "2026/11/23 12:00\nKICT 231200Z 00000KT CAVOK 05/01 A3000\n\n"; }
+    char n[256], sg[256], d[256];
+    CHECK(XPluginStart(n, sg, d) == 1);
+    std::string saved;
+    { std::ifstream f(dir + "/WXPlane.cfg"); saved.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
+    const size_t at = saved.find("search_nm = ");
+    const int searchNm = at == std::string::npos ? -1 : std::atoi(saved.c_str() + at + 12);
+    std::printf("hfs: native paths %s, search_nm %d in the settings saved\n", g_nativePaths ? "on" : "off", searchNm);
+    CHECK(g_nativePaths);
+    CHECK(fs::exists(dir + "/WXPlane.cfg"));
+    CHECK(!fs::exists(hfsCfg));
+    CHECK(!fs::exists(hfsRw));
+    CHECK(searchNm == 77);   // the settings in use came along
+    CHECK(g_logAll.find("settings moved from X-Plane's main folder to") != std::string::npos);
+    if (both) {
+        std::string bak;
+        { std::ifstream f(dir + "/WXPlane.cfg.bak"); bak.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
+        CHECK(bak.find("search_nm = 55") != std::string::npos);   // the hand-edited one kept
+    }
+    CHECK(g_logAll.find("a stray METAR folder in X-Plane's main folder removed") != std::string::npos);
+    XPluginStop();
+    std::printf(g_fail ? "HARNESS_HFS FAILED (%d)\n" : "HARNESS_HFS OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 // HARNESS_HIGHFIELD=1 (5.1.5): X-Plane works the pressure at a field out from the sea-level pressure through the real temperatures, so
 // what is sent for a QNH is the sea-level pressure that gives that field its QNH (wx::seaLevelHpaForQnh), on the temperatures the
 // record itself carries. Checked here the way X-Plane does it: from each record's sea-level pressure up through its own temperature
@@ -1426,6 +1475,7 @@ int main() {
     if (std::getenv("HARNESS_OCEAN")) return runOcean();
     if (std::getenv("HARNESS_HIGHFIELD")) return runHighField();
     if (std::getenv("HARNESS_JET")) return runJet();
+    if (std::getenv("HARNESS_HFS") || std::getenv("HARNESS_HFS_BOTH")) return runHfs();
     if (std::getenv("HARNESS_SQUARES") || std::getenv("HARNESS_SQUARES_OFF") || std::getenv("HARNESS_SQUARES_EDGE")) return runSquares();
     if (std::getenv("HARNESS_OPERA")) return runOpera();
     if (std::getenv("HARNESS_RAMP")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }

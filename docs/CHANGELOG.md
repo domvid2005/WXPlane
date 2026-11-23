@@ -1,5 +1,8 @@
 # WXPlane changelog
 
+## 5.1.6
+- Mac: WXPlane's settings file and the METAR file for add-ons are now where they belong (Output/preferences/WXPlane.cfg, Output/real weather). X-Plane gives a plugin on a Mac old-style paths unless it asks for normal ones, and WXPlane did not ask: since the first Mac build its settings were a file in X-Plane's main folder with the whole path as its name, and 5.1.5's METAR folder the same. On the first start the settings are moved (nothing is lost; a WXPlane.cfg already in Output/preferences, which never took effect, is kept as WXPlane.cfg.bak) and the stray folder is removed. Windows and Linux are unchanged
+
 ## 5.1.5
 - Clouds in rain and storms: no more square, slab-like clouds. Decks no longer end in vertical walls as high as the deck is deep, tops are no longer one flat level across the area, and the dry gaps between rain no longer open into square pits in solid cloud. A deck's top now comes down where it thins out, deep decks have uneven tops, and few or scattered clouds are no longer made as deep as the frontal cloud above them (deck_shape; 0 brings back 5.1.4's clouds)
 - Altimeter at airports above sea level: with the reported QNH set, the altimeter reads the field elevation on a cold or hot day too. WXPlane sent the QNH as X-Plane's sea-level pressure; X-Plane works pressure out through the real temperatures, so the altimeter was 30-50 ft out at fields around 650 ft and hundreds of feet at high fields in cold or hot air (qnh_temp_correct)
