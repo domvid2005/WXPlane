@@ -80,6 +80,7 @@ private:
     std::time_t cloudTime_ = 0;
     double cloudLat_ = 999, cloudLon_ = 999;
     std::vector<ModelPoint> fetchModelClouds(const FetchRequest& r, std::time_t now, std::string& note);
+    void supportStorms(RadarResult& r, const std::vector<Station>& stations, const Config& cfg);
     std::time_t upTime_ = 0;
     double upLat_ = 0, upLon_ = 0;
     // the shared 3x3 GFS lattice (winds and clouds use the same 9 nodes)
@@ -100,6 +101,7 @@ private:
     std::time_t lastFlagAt_ = 0;
     double lastFlagLat_ = 0, lastFlagLon_ = 0;   // where the aircraft was: the grid only covers the radar range around that spot
     std::vector<Station> radarStations_; // the last full update's reports (worker thread only)
+    std::vector<ModelPoint> modelPts_;   // the last global-model points (weather codes for confirmConvection), worker thread only
     std::set<std::string> radarPrev_; // storm blocks applied last time (hysteresis), worker thread only
     // European radar (EUMETNET OPERA): the composite's header and the tiles already downloaded, for the slot they belong to
     std::time_t operaSlot_ = 0;

@@ -144,6 +144,12 @@ bool lookupStation(const std::string& icaoIn, Station& out, std::string& err) {
     return true;
 }
 
+// 5.1.8 (storm_support): radar convection checked against the reports and the model (confirmConvection), noted in the radar line
+void Fetcher::supportStorms(RadarResult& r, const std::vector<Station>& stations, const Config& cfg) {
+    const std::string n = confirmConvection(r.cells, stations, modelPts_, cfg);
+    if (!n.empty()) r.note += (r.note.empty() ? "" : "; ") + n;
+}
+
 FetchResult Fetcher::fetch(const FetchRequest& rq) {
     FetchResult res;
     res.centerLat = rq.lat;
@@ -154,6 +160,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     const Config& cfg = rq.cfg;
     if (rq.radarOnly) {
         if (cfg.radar) res.radar = fetchRadar(rq, res.fetchedAt, radarStations_.empty() ? nullptr : &radarStations_);
+        if (res.radar.ok) supportStorms(res.radar, radarStations_, cfg);
         res.ok = res.radar.ok;
         if (!res.ok) res.error = res.radar.note.empty() ? std::string("radar refresh failed") : res.radar.note;
         copySvc(res);
@@ -252,6 +259,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
     if (cfg.useAloft && (cfg.modelClouds || cfg.modelTops || cfg.oceanModelWeather)) {
         std::string cNote;
         std::vector<ModelPoint> mp = fetchModelClouds(rq, now, cNote);
+        if (!mp.empty()) modelPts_ = mp;
         if (mp.empty()) setSvc(kSvcClouds, SvcState::Down, cNote.empty() ? std::string("no data") : cNote, now);
         else if (cNote.find("using the earlier download") != std::string::npos) { setSvc(kSvcClouds, SvcState::Degraded, cNote, now); svc_[kSvcClouds].lastOk = cloudTime_; }
         else { setSvc(kSvcClouds, SvcState::Ok, std::to_string(mp.size()) + " model point(s), downloaded " + hhmm(cloudTime_), now); svc_[kSvcClouds].lastOk = cloudTime_; }
@@ -283,7 +291,7 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
 
     // 4) Radar storm cells.
     radarStations_ = keep;   // radar-only refreshes check convection against these
-    if (cfg.radar) res.radar = fetchRadar(rq, now, &keep);
+    if (cfg.radar) { res.radar = fetchRadar(rq, now, &keep); if (res.radar.ok) supportStorms(res.radar, keep, cfg); }
     else { setSvc(kSvcMrms, SvcState::Off, "radar is off", now); setSvc(kSvcOpera, SvcState::Off, "radar is off", now); }
 
     res.noaaFixes = 0;

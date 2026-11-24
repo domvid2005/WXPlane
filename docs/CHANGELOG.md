@@ -1,5 +1,8 @@
 # WXPlane changelog
 
+## 5.1.8
+- No more false thunderstorms and lightning in heavy rain: a thunderstorm from the radar now needs something besides the radar's strength to agree - thunder, CB or lightning reported by an airport within 60 nm, a thunderstorm in the global model, or (over the US) a radar echo top of 7 km or more. Without that it is built as showers (when showers are reported or in the model, with no cumulonimbus and no lightning) or as steady rain. In a winter front over Dublin that reported light rain and drizzle, 42 radar squares had become thunderstorms with lightning everywhere: melting snow a kilometre or two up shows far stronger on radar than the rain that falls (storm_support; 0 brings back 5.1.7)
+
 ## 5.1.7
 - No more flat-topped towers in light rain (Europe): squares of light rain stood up to 5 km above a low deck, each its own height, with straight sides. Europe's radar has no echo tops, and the estimate made for showers gave even the lightest rain a cloud at least 3 km tall; light steady rain now falls from the cloud the stations and the global model have there. A single speckled pixel no longer makes a whole radar square of light rain count as showers, and low cloud just above the field is no longer taken for ground fog (which kept it out of the cloud smoothing)
 

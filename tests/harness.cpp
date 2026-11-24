@@ -234,6 +234,7 @@ struct Easy { long status = 200; std::string url, range; size_t (*wf)(char*, siz
 static int g_netRequests = 0, g_fdRequests = 0, g_rangeRequests = 0;
 static std::string g_pirepJson;
 static bool g_operaEdge = false;   // HARNESS_SQUARES_EDGE=1: clear sky on both sides of that storm's band (the deep cloud ends against nothing)
+static bool g_operaFront = false;  // HARNESS_FRONT: the storm band's echo (cores to 55 dBZ) but a winter front: rain in the model, no thunder reported (Dublin 2026-11-23)
 static bool g_operaLight = false;  // HARNESS_TOWERS: light, patchy rain with speckle under a low deck, no deep cloud in the model (Zurich 2026-11-23)
 static bool g_operaStorm = false;  // HARNESS_SQUARES: a natural-looking European storm in the mock composite, and the model's cloud for it
 static bool g_jet = false;         // HARNESS_JET: open water under a jet stream, the tropopause low north of 42.5 N and high south of it
@@ -432,7 +433,7 @@ CURLcode curl_easy_perform(CURL* c) {
                     one += q;
                 }
                 one += ",\"temperature_2m\":[12],\"dew_point_2m\":[10],\"pressure_msl\":[1008],\"wind_speed_10m\":[12],\"wind_direction_10m\":[240],\"wind_gusts_10m\":[20],"
-                       "\"visibility\":[9000],\"precipitation\":[1.2],\"snowfall\":[0],\"weather_code\":[61]";
+                       "\"visibility\":[9000],\"precipitation\":[1.2],\"snowfall\":[0],\"weather_code\":[" + std::string(g_operaStorm && !g_operaFront && !g_operaLight && inBand ? "95" : "61") + "]";
             } else {
                 static const int lv[] = {925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70};
                 static const double gh[] = {760, 1460, 3010, 5570, 7190, 9160, 10360, 11780, 13600, 16180, 18440}, tc[] = {9, 5, -4, -21, -32, -47, -55, -58, -58, -60, -58};
@@ -965,6 +966,7 @@ static int runSquares() {
     g_operaStorm = true;
     g_operaEdge = std::getenv("HARNESS_SQUARES_EDGE") != nullptr;
     g_operaLight = std::getenv("HARNESS_TOWERS") != nullptr;
+    g_operaFront = std::getenv("HARNESS_FRONT") != nullptr;
     g_loadingFlag = 0;
     g_lat = 40.4722; g_lon = -3.5608; g_elev = 1500; g_agl = 900;
     char n[256], s[256], d[256];
@@ -1088,6 +1090,9 @@ static int runSquares() {
         if (topI - dryMax >= 1500.0f) { ++rainTowers; towerMax = std::max(towerMax, (double)(topI - dryMax)); }
     }
     std::printf("[squares] rain towers: %d of %d rain records beside dry ones stand 1,500 m or more above all of them (most %.0f m)\n", rainTowers, rainBeside, towerMax);
+    int cbRecs = 0;
+    for (const auto& q : v) for (const auto& L : q.lay) if (L.cov > 0 && L.type >= 2.5f) { ++cbRecs; break; }
+    std::printf("[squares] cumulonimbus (lightning in X-Plane): %d records\n", cbRecs);
     std::printf("[squares] ends in X-Plane's blend: %d records where a deck ends in a slot, %d with a face of 2,000 m or more, %d of 3,000 m or more\n", ends, ends2000, ends3000);
     std::printf("[squares] lids: %d of %d touching pairs of solid cloud have exactly the same top (%.0f %%)\n", level, pairs, pairs ? 100.0 * level / pairs : 0.0);
     std::printf("[squares] towers: %d of %d thin layers (10-60 %%) in records without rain are 3,000 m deep or more\n", towers, thin);
@@ -1110,7 +1115,12 @@ static int runSquares() {
         std::printf("[squares] layers deeper than X-Plane allows for their type: %d\n", tooDeep);
         CHECK(tooDeep == 0);
     }
-    if (g_operaLight) {
+    if (g_operaFront) {
+        // a winter front with the storm band's echo: nothing reports thunder and the model has rain, so no cumulonimbus anywhere (5.1.7: the
+        // band's cores were all cumulonimbus with lightning) and no rain tower; the log says what was built as rain
+        CHECK(cbRecs == 0 && rainTowers <= 4);   // (the band's model cloud reaches 7 km: its few rain towers are the storm case's too)
+        CHECK(g_logAll.find("storm support:") != std::string::npos && g_logAll.find("built as") != std::string::npos);
+    } else if (g_operaLight) {
         // light, patchy rain under a low deck (Zurich, 2026-11-23): no rain square stands up as a tower above its dry neighbours (6, up to
         // 2,461 m, in 5.1.6), and the speckle does not make the light rain showers (96 of 111 squares in 5.1.6)
         CHECK(rainTowers == 0 && near2000 == 0);
@@ -1133,6 +1143,7 @@ static int runSquares() {
         CHECK(towers <= 10);
     } else {
         CHECK(walls2000 == 0 && wallMax < 1000.0);          // no pit and no end of 2,000 m or more (7 of 5,084 m before)
+        CHECK(cbRecs >= 10);                                // a thunderstorm in the model: the cores stay cumulonimbus
         // the stricter measure: what is left stands where two fields report it (a low deck beside "few, then broken at 10,000 ft")
         CHECK(faces3500 <= 2 && near2000 <= 12 && steep <= 2);   // 7, 34 and 9 before
         // where X-Plane's blend ends a deck: most of them were one deck in different slots (a rain record's deck a slot up), not an end
@@ -1518,7 +1529,7 @@ int main() {
     if (std::getenv("HARNESS_HIGHFIELD")) return runHighField();
     if (std::getenv("HARNESS_JET")) return runJet();
     if (std::getenv("HARNESS_HFS") || std::getenv("HARNESS_HFS_BOTH")) return runHfs();
-    if (std::getenv("HARNESS_SQUARES") || std::getenv("HARNESS_SQUARES_OFF") || std::getenv("HARNESS_SQUARES_EDGE") || std::getenv("HARNESS_TOWERS")) return runSquares();
+    if (std::getenv("HARNESS_SQUARES") || std::getenv("HARNESS_SQUARES_OFF") || std::getenv("HARNESS_SQUARES_EDGE") || std::getenv("HARNESS_TOWERS") || std::getenv("HARNESS_FRONT")) return runSquares();
     if (std::getenv("HARNESS_OPERA")) return runOpera();
     if (std::getenv("HARNESS_RAMP")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runRamp(); }
     { FILE* f = std::fopen(hpath("WXPlane.cfg"), "w"); std::fputs("config_version = 22\nmanual_refresh_gap_s = 0\ntop_bumps = 0\nvis_scale = 1\nvis_autocal = 1\nvis_check_s = 1\nmax_age_hours = 40\nradar = 0\nstartup_delay_s = 0\nfill_gaps = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nstartup_wait_scenery = 1\nstorm_level_delay_s = 1\ntransition_s = 0\nupdate_transition_s = 0\napply_per_tick = 4\nrealistic_turbulence = 0\n", f); if (std::getenv("WX_SMOOTH0")) std::fputs("cloud_smooth_nm = 0\n", f); std::fclose(f); }

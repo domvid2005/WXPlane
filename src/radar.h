@@ -31,6 +31,7 @@ struct RadarCell {
     bool natural = false;      // a record of the natural picture (buildNaturalCells): its size is sizeNm, not the block size
     float sizeNm = 0;          // side of the square the record stands for (natural records)
     bool stratiform = false;   // steady (stratiform) rain or snow, not convection (MRMS PrecipFlag): no cumulonimbus, no storm turbulence or windshear
+    bool showersOnly = false;  // storm_support: convection without support for a thunderstorm (confirmConvection): cumulus, top at most to -20 C
 };
 
 // Echo tops: a block much taller than its neighbours (or with no neighbours) renders as a thin spike. Limit each measured top to
@@ -95,6 +96,23 @@ struct RadarMosaic {
         return (float)((A(i, j) * (1 - fu) + A(i + 1, j) * fu) * (1 - fw) + (A(i, j + 1) * (1 - fu) + A(i + 1, j + 1) * fu) * fw);
     }
 };
+
+// 5.1.8 (storm_support): a radar echo that looks convective becomes a thunderstorm (cumulonimbus, lightning) only with support from
+// something besides its strength. Radar strength alone made thunderstorms, with lightning everywhere, in a winter front at Dublin
+// that reported light rain and drizzle (2026-11-23: 42 squares at 40-55 dBZ, nearly all the echo classed convective; snow melting a
+// km or two up shows far stronger on radar than the rain below, the "bright band"). For each cell that is not steady rain:
+//   thunderstorm: an airport within 60 nm reports a thunderstorm, CB, lightning or hail; or a global-model point within 90 nm has a
+//                 thunderstorm weather code (95-99); or the radar measured an echo top of 7 km or more (the US radar)
+//   showers:      an airport reports showers, squalls or towering cumulus, or the model a shower code (80-86): no cumulonimbus
+//                 (reflectivity held under 40 dBZ for the cloud) and, without a measured top, a top at most at the -20 C level
+//   neither:      built as steady rain (stratiform, reflectivity capped at radar_stratiform_max_dbz): rain cloud with the model's top
+//   no airport within 60 nm and no model point within 90 nm: left as it is (nothing to check against).
+// Returns a line for Log.txt ("" when nothing changed).
+struct ModelPoint;
+std::string confirmConvection(std::vector<struct RadarCell>& cells, const std::vector<Station>& stations, const std::vector<ModelPoint>& model,
+                              const Config& cfg);
+// The strict part of convectionReported: thunder, CB, lightning or hail (not showers or towering cumulus).
+bool thunderReported(const Station& st);
 
 struct RadarResult {
     bool attempted = false;

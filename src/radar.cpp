@@ -1228,6 +1228,76 @@ float stormBaseFor(const XpWx& x, const RadarCell& c, double fieldElevM) {
     return baseM;
 }
 
+bool thunderReported(const Station& st) {
+    if (st.icao.compare(0, 3, "GFS") == 0) return false;
+    const Report& r = st.report;
+    if (r.thunder) return true;
+    for (const char* k : {"TS", "GR", "GS"}) if (r.wxText.find(k) != std::string::npos) return true;
+    std::string tok;
+    std::istringstream in(st.rawMetar);
+    int n = 0;
+    while (in >> tok) {
+        ++n;
+        if (tok == "METAR" || tok == "SPECI" || (n <= 2 && tok.size() == 4)) continue;
+        if (tok == "TSNO") continue;
+        if (tok.compare(0, 3, "RMK") == 0) continue;
+        auto ends = [&](const char* e) { const size_t k = std::strlen(e); return tok.size() >= k && tok.compare(tok.size() - k, k, e) == 0; };
+        if (tok == "CB" || ends("CB") || tok.compare(0, 3, "LTG") == 0) return true;
+        const size_t ts = tok.find("TS");
+        if (ts != std::string::npos && (ts == 0 || tok[ts - 1] == '+' || tok[ts - 1] == '-' || (ts >= 2 && tok.compare(ts - 2, 2, "VC") == 0))) return true;
+    }
+    return false;
+}
+
+std::string confirmConvection(std::vector<RadarCell>& cells, const std::vector<Station>& stations, const std::vector<ModelPoint>& model,
+                              const Config& cfg) {
+    if (!cfg.stormSupport) return "";
+    // the stations' verdicts once each (a few dozen), then each cell looks at those near it
+    struct S { double lat, lon; bool thunder, conv; };
+    std::vector<S> st;
+    for (const auto& s : stations) {
+        if (s.icao.compare(0, 3, "GFS") == 0) continue;
+        st.push_back({s.lat, s.lon, thunderReported(s), convectionReported(s)});
+    }
+    const float cap = (float)cfg.radarStratiformMaxDbz;
+    int asRain = 0, asShowers = 0;
+    for (auto& c : cells) {
+        if (c.stratiform) continue;
+        bool near = false, thunder = c.topKnown && c.topM >= 7000.0f, conv = false;
+        for (const auto& s : st) {
+            if (distNm(c.lat, c.lon, s.lat, s.lon) > 60.0) continue;
+            near = true;
+            thunder = thunder || s.thunder;
+            conv = conv || s.conv;
+        }
+        for (const auto& m : model) {
+            if (m.weatherCode < 0 || distNm(c.lat, c.lon, m.lat, m.lon) > 90.0) continue;
+            near = true;
+            thunder = thunder || (m.weatherCode >= 95 && m.weatherCode <= 99);
+            conv = conv || (m.weatherCode >= 80 && m.weatherCode <= 86);
+        }
+        if (thunder || !near) continue;
+        if (conv) {
+            c.showersOnly = true;
+            if (c.dbz >= 40.0f) { c.dbz = 39.5f; c.dbzFine = std::min(c.dbzFine, 39.5f); c.rateMmH = rateFromDbz(c.dbzFine); }
+            ++asShowers;
+        } else {
+            c.stratiform = true;
+            c.dbz = std::min(c.dbz, cap);
+            c.dbzFine = std::min(c.dbzFine, cap);
+            c.rateMmH = rateFromDbz(c.dbzFine);
+            ++asRain;
+        }
+    }
+    if (asRain + asShowers == 0) return "";
+    char b[300];
+    std::snprintf(b, sizeof b, "storm support: %d square(s) without a thunderstorm, CB or lightning reported within 60 nm, none in the model "
+                  "and no high echo top built as %s%s%s (storm_support = 0: radar strength alone)", asRain + asShowers,
+                  asRain ? (std::to_string(asRain) + " steady rain").c_str() : "", asRain && asShowers ? ", " : "",
+                  asShowers ? (std::to_string(asShowers) + " showers (reported or in the model) without cumulonimbus").c_str() : "");
+    return b;
+}
+
 void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElevM, double /*lat*/, float baseOverrideM) {
     const float dbz = c.dbz;
     // Precipitation: X-Plane takes 0..1.
@@ -1273,6 +1343,16 @@ void applyStorm(XpWx& x, const RadarCell& c, const Config& cfg, double fieldElev
             t2 = std::max(t2, std::min({mt + (float)(fbm(X, Y, 8.0, 53) * 400.0), baseM + xpMaxThicknessM(2.0f), kXpTopM}));
         }
         topM = std::min(topM, t2);
+    }
+    // 5.1.8 (storm_support): showers without support for a thunderstorm stop at the -20 C level (where lightning would start), never
+    // under 1,500 m above the base and never above the estimate
+    if (c.showersOnly && !c.topKnown && x.tempProfile.size() >= 2) {
+        float m20 = -1;
+        for (size_t i = 1; i < x.tempProfile.size(); ++i) {
+            const auto &a0 = x.tempProfile[i - 1], &a1 = x.tempProfile[i];
+            if (a0.second > -20.0f && a1.second <= -20.0f) { m20 = a0.first + (a1.first - a0.first) * (a0.second + 20.0f) / (a0.second - a1.second); break; }
+        }
+        if (m20 > 0) topM = std::min(topM, std::max(baseM + 1500.0f, m20));
     }
     // Rim of a cluster: up to 45% less height above the base (never below the 1500 m minimum) so the system slopes off instead of ending in a
     // wall. After the model raise above (5.1.5): before, that raise put rim records of steady rain straight back to full height.

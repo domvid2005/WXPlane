@@ -1148,6 +1148,47 @@ int main() {
             GribField rf4 = rf; rf4.v = {45, 45, 45, 45, 25, 45};
             convectiveMask(rf4, nullptr, &sts, 33.0f, capped);
             CHECK(capped == 0 && rf4.v[0] == 45);
+            // 5.1.8 (storm_support): a thunderstorm needs a report, the model or a high echo top (Dublin, 2026-11-23)
+            {
+                Config sc; sc.stormSupport = true; sc.radarStratiformMaxDbz = 33;
+                auto cellAt = [](double la, double lo, float dbz) { RadarCell c; c.lat = la; c.lon = lo; c.dbz = c.dbzFine = dbz; c.rateMmH = rateFromDbz(dbz); return c; };
+                Station dub; dub.icao = "EIDW"; dub.lat = 53.42; dub.lon = -6.27; dub.rawMetar = "METAR EIDW 232100Z 15015G25KT 6000 -RADZ FEW004 BKN006 10/09 Q1013 NOSIG";
+                parseReport(dub.rawMetar, dub.report);
+                CHECK(!thunderReported(dub) && !convectionReported(dub));
+                ModelPoint rain; rain.lat = 53.5; rain.lon = -6.0; rain.weatherCode = 61;
+                std::vector<RadarCell> v = {cellAt(53.40, -6.20, 55.0f), cellAt(53.40, -6.20, 36.0f)};
+                v[1].stratiform = true;                                     // steady rain already: untouched
+                const std::string note = confirmConvection(v, {dub}, {rain}, sc);
+                CHECK(v[0].stratiform && v[0].dbz == 33.0f && v[0].rateMmH == rateFromDbz(33.0f) && !note.empty());   // a front: rain, no thunderstorm
+                CHECK(v[1].stratiform && v[1].dbz == 36.0f);
+                // the same echo with a thunderstorm reported 30 nm away, in the model, or with a measured top of 9 km: a thunderstorm
+                Station tsr = dub; tsr.icao = "EGAC"; tsr.lat = 53.80; tsr.lon = -6.10; tsr.rawMetar = "METAR EGAC 232050Z 18020KT 4000 +TSRA BKN010CB 10/09 Q1012";
+                parseReport(tsr.rawMetar, tsr.report);
+                CHECK(thunderReported(tsr));
+                std::vector<RadarCell> a1 = {cellAt(53.40, -6.20, 55.0f)};
+                confirmConvection(a1, {dub, tsr}, {rain}, sc);
+                CHECK(!a1[0].stratiform && !a1[0].showersOnly && a1[0].dbz == 55.0f);
+                ModelPoint tsm = rain; tsm.weatherCode = 95;
+                std::vector<RadarCell> a2 = {cellAt(53.40, -6.20, 55.0f)};
+                confirmConvection(a2, {dub}, {tsm}, sc);
+                CHECK(!a2[0].stratiform && a2[0].dbz == 55.0f);
+                std::vector<RadarCell> a3 = {cellAt(53.40, -6.20, 55.0f)}; a3[0].topKnown = true; a3[0].topM = 9000.0f;
+                confirmConvection(a3, {dub}, {rain}, sc);
+                CHECK(!a3[0].stratiform && a3[0].dbz == 55.0f);
+                // showers reported: convective, but no cumulonimbus
+                Station shr = dub; shr.icao = "EIME"; shr.lat = 53.30; shr.lon = -6.45; shr.rawMetar = "METAR EIME 232100Z 16015KT 9999 SHRA FEW015TCU 10/08 Q1013";
+                parseReport(shr.rawMetar, shr.report);
+                CHECK(!thunderReported(shr) && convectionReported(shr));
+                std::vector<RadarCell> a4 = {cellAt(53.40, -6.20, 50.0f)};
+                confirmConvection(a4, {dub, shr}, {rain}, sc);
+                CHECK(!a4[0].stratiform && a4[0].showersOnly && a4[0].dbz < 40.0f);
+                // nothing to check against (no airport within 60 nm, no model point within 90 nm): left as it is; storm_support = 0: as before
+                std::vector<RadarCell> a5 = {cellAt(40.0, -30.0, 55.0f)};
+                CHECK(confirmConvection(a5, {dub}, {rain}, sc).empty() && !a5[0].stratiform && a5[0].dbz == 55.0f);
+                Config off = sc; off.stormSupport = false;
+                std::vector<RadarCell> a6 = {cellAt(53.40, -6.20, 55.0f)};
+                CHECK(confirmConvection(a6, {dub}, {rain}, off).empty() && !a6[0].stratiform && a6[0].dbz == 55.0f);
+            }
             {   // an older PrecipFlag from elsewhere that does not cover these pixels (2026-11-14 review): the airports decide there, the
                 // pixels are not taken as steady rain (a storm line in a newly entered area would have been capped at 33 dBZ)
                 GribField far = rf; far.lat0 = 30.0; far.lon0 = -100.0; far.ni = far.nj = 2; far.v = {1, 1, 1, 1};
