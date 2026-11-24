@@ -356,6 +356,12 @@ SETTINGS
       xp_base_steady            (1)    hold X-Plane's own variation and
                                        evolution of its base weather off
                                        while WXPlane sets the weather
+      xp_base_clear             (1)    clear X-Plane's own base clouds and
+                                       rain and raise its base visibility to
+                                       10 sm while WXPlane sets the weather,
+                                       so a manual preset's clouds (IFR, say)
+                                       do not show where reports are clear.
+                                       Put back when WXPlane is switched off
       storm_support             (1)    a thunderstorm (cumulonimbus, lightning)
                                        from the radar needs support: thunder,
                                        CB or lightning reported within 60 nm,

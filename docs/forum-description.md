@@ -17,6 +17,8 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 ## New in 5.1.8
 
 - **No false thunderstorms:** heavy rain no longer turns into thunderstorms with lightning unless an airport reports thunder or CB, the global model has a thunderstorm, or the radar shows a real storm top.
+- **No preset clouds showing through:** X-Plane's own manual weather preset (IFR, say) no longer leaves its clouds under clear reports. They are cleared while WXPlane runs and put back when it is switched off.
+- **Windows fix:** 5.1.6 and 5.1.7 removed the METAR files in Output/real weather and wrote a WXPlane.cfg.bak on every start. Settings were never affected.
 
 ## New in 5.1.7
 

@@ -88,15 +88,18 @@ void XPLMGetPluginInfo(XPLMPluginID id, char* n, char* p, char* s, char* d) {
     if (d) d[0] = 0;
 }
 int XPLMIsPluginEnabled(XPLMPluginID) { return 1; }
-XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/change_mode")) return (void*)81; if (std::strstr(n, "region/variability_pct")) return (void*)82; if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
+// X-Plane's base (manual preset) clouds, rain and visibility: 83 cloud_coverage_percent[3], 84 rain_percent, 85 visibility_reported_sm
+static float g_baseCov[3] = {0, 0, 0}, g_baseRain = 0, g_baseVis = 20;
+XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/cloud_coverage_percent")) return (void*)83; if (std::strstr(n, "region/rain_percent")) return (void*)84; if (std::strstr(n, "region/visibility_reported_sm")) return (void*)85; if (std::strstr(n, "region/change_mode")) return (void*)81; if (std::strstr(n, "region/variability_pct")) return (void*)82; if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
 int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
     if (r == (void*)79) { if (!out) return 13; for (int i = 0; i < n && off + i < 13; ++i) out[i] = g_turbArr[off + i]; return n; }
+    if (r == (void*)83) { if (!out) return 3; int k = 0; for (; k < n && off + k < 3; ++k) out[k] = g_baseCov[off + k]; return k; }
     static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};
     if (!out) return 13;
     for (int i = 0; i < n && off + i < 13; ++i) out[i] = lv[off + i];
     return n;
 }
-float XPLMGetDataf(XPLMDataRef r) { return r == (void*)82 ? g_xpVariability : r == (void*)14 ? 0.01f : g_agl; }
+float XPLMGetDataf(XPLMDataRef r) { return r == (void*)84 ? g_baseRain : r == (void*)85 ? g_baseVis : r == (void*)82 ? g_xpVariability : r == (void*)14 ? 0.01f : g_agl; }
 static double g_elev = 0;
 double XPLMGetDatad(XPLMDataRef r) { return r == (void*)10 ? g_lat : r == (void*)78 ? g_elev : g_lon; }
 static std::string g_logAll;
@@ -209,7 +212,7 @@ static int g_xpWxSource = 0;   // sim/weather/region/weather_source (1 = X-Plane
 int XPLMGetDatai(XPLMDataRef r) { return r == (void*)81 ? g_xpChangeMode : r == (void*)80 ? g_xpWxSource : r == (void*)77 ? g_realWx : g_loadingFlag; }
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) { return r == (void*)77 ? xplmType_Int : xplmType_Int | xplmType_Float | xplmType_Double; }
 int XPLMCanWriteDataRef(XPLMDataRef) { return 1; }
-void XPLMSetDataf(XPLMDataRef r, float v) { if (r == (void*)82) g_xpVariability = v; }
+void XPLMSetDataf(XPLMDataRef r, float v) { if (r == (void*)82) g_xpVariability = v; if (r == (void*)84) g_baseRain = v; if (r == (void*)85) g_baseVis = v; }
 void XPLMSetDatad(XPLMDataRef, double) {}
 int XPLMGetDatavi(XPLMDataRef, int* v, int, int n) { for (int i = 0; i < n; ++i) v[i] = 0; return n; }
 int XPLMCountDataRefs(void) { return 2; }
@@ -219,7 +222,7 @@ float g_stubMagVar = -7.0f;   // west variation, X-Plane-style sign assumed
 float XPLMGetMagneticVariation(double, double) { return g_stubMagVar; }
 float XPLMDegTrueToDegMagnetic(float h) { return std::fmod(h - g_stubMagVar + 360.0f, 360.0f); }
 float XPLMDegMagneticToDegTrue(float h) { return std::fmod(h + g_stubMagVar + 360.0f, 360.0f); }
-void XPLMSetDatavf(XPLMDataRef r, float* v, int off, int n) { if (r == (void*)79) { for (int i = 0; i < n && off + i < 13; ++i) g_turbArr[off + i] = v[i]; ++g_turbWrites; } }
+void XPLMSetDatavf(XPLMDataRef r, float* v, int off, int n) { if (r == (void*)83) { for (int i = 0; i < n && off + i < 3; ++i) g_baseCov[off + i] = v[i]; } if (r == (void*)79) { for (int i = 0; i < n && off + i < 13; ++i) g_turbArr[off + i] = v[i]; ++g_turbWrites; } }
 void XPLMSetDatai(XPLMDataRef r, int v) { if (r == (void*)81) g_xpChangeMode = v; if (r == (void*)77) { g_realWx = v; ++g_realWxSets; } }
 XPLMMapLayerID XPLMCreateMapLayer(XPLMCreateMapLayer_t* p) { g_mapLabelCb = p->labelCallback; return (void*)77; }
 int XPLMDestroyMapLayer(XPLMMapLayerID) { g_mapDestroyed = true; return 1; }
@@ -652,6 +655,7 @@ static int runOneShot() {
     const bool realWx = std::getenv("HARNESS_REALWX") != nullptr;   // X-Plane's own real weather left on
     if (realWx) g_xpWxSource = 1;
     g_xpVariability = 0.35f; g_xpChangeMode = 5;   // the user's own X-Plane weather settings: 35 % variation across the region, "deteriorating"
+    g_baseCov[0] = 0.8f; g_baseCov[1] = 0.6f; g_baseCov[2] = 0.0f; g_baseRain = 0.3f; g_baseVis = 2.0f;   // and the IFR preset's clouds, rain and visibility
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -662,6 +666,10 @@ static int runOneShot() {
     std::printf("oneshot: X-Plane's variation across region %.2f, evolution mode %d while WXPlane runs\n", g_xpVariability, g_xpChangeMode);
     if (!realWx) CHECK(g_xpVariability == 0.0f && g_xpChangeMode == 3 && g_logAll.find("\"variation across region\" was 0.35") != std::string::npos);
     else CHECK(g_xpVariability == 0.35f && g_xpChangeMode == 5);
+    // 5.1.8 (xp_base_clear): the preset's clouds and rain are cleared and its visibility raised, so they do not show where reports are clear
+    std::printf("oneshot: X-Plane's base clouds %.2f %.2f %.2f, rain %.2f, visibility %.1f sm while WXPlane runs\n", g_baseCov[0], g_baseCov[1], g_baseCov[2], g_baseRain, g_baseVis);
+    if (!realWx) CHECK(g_baseCov[0] == 0.0f && g_baseCov[1] == 0.0f && g_baseRain == 0.0f && g_baseVis == 10.0f && g_logAll.find("base clouds (its manual weather preset: 0.80, 0.60") != std::string::npos);
+    else CHECK(g_baseCov[0] == 0.8f && g_baseRain == 0.3f && g_baseVis == 2.0f);
     std::printf("oneshot: %zu records in %d weather update(s), largest %zu\n", g_calls.size(), g_end, g_maxBatch);
     CHECK(g_calls.size() >= 3);
     CHECK(g_end == 1 && g_begin == 1);               // one Begin/End pair for the whole first load
@@ -693,6 +701,7 @@ static int runOneShot() {
     }
     XPluginDisable();
     CHECK(g_xpVariability == 0.35f && g_xpChangeMode == 5);   // the user's settings are back when WXPlane is switched off
+    CHECK(g_baseCov[0] == 0.8f && g_baseCov[1] == 0.6f && g_baseCov[2] == 0.0f && g_baseRain == 0.3f && g_baseVis == 2.0f);   // and the preset's weather
     XPluginStop();
     std::printf("%s (%d failures)\n", g_fail ? "ONESHOT FAILED" : "ONESHOT OK", g_fail);
     return g_fail ? 1 : 0;

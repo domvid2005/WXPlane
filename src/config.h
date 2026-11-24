@@ -12,6 +12,7 @@ struct Config {
     bool avitabTab = true;        // a WXPlane icon on AviTab's home screen (3D cockpit AviTab): the map on the tablet
     double avitabIconX = 0.357, avitabIconY = 0.568;   // the icon's centre on AviTab's home screen, 0..1 from the left / the bottom
     bool detailedLog = true;      // Log.txt gets WXPlane's detail lines (record dumps, weather watch, blend, frame and visibility checks...); off: only the main events and problems
+    bool xpBaseClear = true;      // 5.1.8: X-Plane's own base clouds and rain cleared (its manual preset's) while WXPlane sets the weather (baseSteady)
     bool stormSupport = true;     // 5.1.8: a thunderstorm from the radar needs a report, the model or a high echo top to agree (confirmConvection)
     bool xpMetarFile = true;      // 5.1.5: the world's METARs written as X-Plane's own METAR file (Output/real weather), for add-ons that read it
     bool worldMetars = true;      // the map shows every current METAR in the world (aviationweather.gov, every 10 min): display only, never sent to X-Plane

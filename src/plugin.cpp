@@ -54,6 +54,7 @@
 #include "version.h"
 #include "wxmodel.h"
 #include "loadclock.h"
+#include "paths.h"
 
 namespace {
 
@@ -197,8 +198,10 @@ std::string moveHfsLeftovers(const std::string& hfsCfg, const std::string& cfg, 
     namespace fs = std::filesystem;
     std::error_code ec;
     std::string note;
-    if (hfsCfg.find(':') == std::string::npos || hfsCfg[0] == '/') return note;   // not an HFS path
+    if (!wx::isHfsPath(hfsCfg)) return note;   // not an HFS path (a Windows path has a ':' too: 5.1.6 and 5.1.7 took it for one)
     const fs::path old = fs::u8path(hfsCfg), dst = fs::u8path(cfg);
+    if (fs::equivalent(old, dst, ec)) return note;   // the same file, only written another way: nothing to move
+    ec.clear();
     if (fs::is_regular_file(old, ec)) {
         fs::create_directories(dst.parent_path(), ec);
         const bool had = fs::exists(dst, ec);
@@ -3083,6 +3086,9 @@ struct RegionSaved {
     bool var = false, mode = false;   // X-Plane's own variation and evolution settings (baseSteady)
     float variability = 0;
     int changeMode = 3;
+    bool clouds = false, rain = false, vis = false;   // X-Plane's base clouds, rain and visibility (the manual preset's; baseSteady, xp_base_clear)
+    float cloudCov[3] = {0, 0, 0}, rainVal = 0, visSm = 0;
+    int cloudN = 0;
 };
 RegionSaved g_regionSaved;
 bool g_rwHaveW = false, g_rwHaveT = false, g_rwHaveTro = false;
@@ -3100,6 +3106,13 @@ void regionRestore(const char* why) {
         if (dr && XPLMGetDatai(dr) != 7) XPLMSetDatai(dr, g_regionSaved.changeMode);
         logf("%s: X-Plane's \"evolution over time\" put back to mode %d", why, g_regionSaved.changeMode);
     }
+    if (g_regionSaved.clouds) {
+        XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/cloud_coverage_percent");
+        if (dr) XPLMSetDatavf(dr, g_regionSaved.cloudCov, 0, g_regionSaved.cloudN);
+        logf("%s: X-Plane's own base clouds put back (%.2f, %.2f, %.2f)", why, g_regionSaved.cloudCov[0], g_regionSaved.cloudCov[1], g_regionSaved.cloudCov[2]);
+    }
+    if (g_regionSaved.rain) { XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/rain_percent"); if (dr) XPLMSetDataf(dr, g_regionSaved.rainVal); }
+    if (g_regionSaved.vis) { XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/visibility_reported_sm"); if (dr) XPLMSetDataf(dr, g_regionSaved.visSm); }
     if (g_regionSaved.w) {
         XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
                     drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
@@ -3132,10 +3145,10 @@ void regionRestore(const char* why) {
 // pushRegionWinds will say so in the next log). While WXPlane sets the weather and X-Plane's real weather is off, both are held at
 // none / static; what the user had is put back when WXPlane is switched off (regionRestore). xp_base_steady = 0 leaves them alone.
 void baseSteady() {
-    if (!g_cfg.xpBaseSteady || !g_cfg.enabled || !g_pluginEnabled || g_xpRealWx) return;
+    if (!g_cfg.enabled || !g_pluginEnabled || g_xpRealWx) return;
     static XPLMDataRef drVar = XPLMFindDataRef("sim/weather/region/variability_pct"), drMode = XPLMFindDataRef("sim/weather/region/change_mode");
     static int varTries = 0, modeTries = 0;   // a value X-Plane will not take is tried three times, then left
-    if (drVar && XPLMCanWriteDataRef(drVar) && varTries < 3) {
+    if (g_cfg.xpBaseSteady && drVar && XPLMCanWriteDataRef(drVar) && varTries < 3) {
         const float v = XPLMGetDataf(drVar);
         if (std::isfinite(v) && v > 0.005f && v <= 100.0f) {
             if (!g_regionSaved.var) { g_regionSaved.var = true; g_regionSaved.variability = v; }
@@ -3145,7 +3158,7 @@ void baseSteady() {
                  "weather by itself, which can move the temperatures, pressure and winds aloft away from WXPlane's (put back when WXPlane is switched off; xp_base_steady = 0 leaves it)", v);
         } else varTries = 0;
     }
-    if (drMode && XPLMCanWriteDataRef(drMode) && modeTries < 3) {
+    if (g_cfg.xpBaseSteady && drMode && XPLMCanWriteDataRef(drMode) && modeTries < 3) {
         const int m = XPLMGetDatai(drMode);
         if (m >= 0 && m <= 6 && m != 3) {
             if (!g_regionSaved.mode) { g_regionSaved.mode = true; g_regionSaved.changeMode = m; }
@@ -3154,6 +3167,57 @@ void baseSteady() {
             logf("X-Plane's own \"evolution over time\" was mode %d (3 = static): set to static while WXPlane sets the weather - with it X-Plane lets "
                  "its base weather drift by itself (put back when WXPlane is switched off; xp_base_steady = 0 leaves it)", m);
         } else modeTries = 0;
+    }
+    // 5.1.8 (xp_base_clear): X-Plane's base clouds, rain and visibility, the manual weather preset's. X-Plane draws WXPlane's records on
+    // its base weather; where a report is clear the records have no cloud to put there, and the preset's clouds showed through: with
+    // the IFR preset an IFR overcast stayed under CAVOK for 20 minutes (a customer, 2026-11-24). While WXPlane sets the weather the
+    // base has no cloud and no rain and at least 10 sm visibility; the preset's values are put back when WXPlane is switched off.
+    if (!g_cfg.xpBaseClear) return;
+    static XPLMDataRef drCov = XPLMFindDataRef("sim/weather/region/cloud_coverage_percent"), drRain = XPLMFindDataRef("sim/weather/region/rain_percent"),
+                       drVis = XPLMFindDataRef("sim/weather/region/visibility_reported_sm");
+    // Each is cleared at most 6 times a session (a preset chosen again mid-flight is cleared again); if X-Plane keeps putting a value back
+    // it is left after that, rather than fought every 20 s
+    static int covTries = 0, rainTries = 0, visTries = 0;
+    const int kMaxClears = 6;
+    static bool noted = false;
+    if (!noted) {
+        noted = true;
+        if (!drCov || !XPLMCanWriteDataRef(drCov))
+            logf("X-Plane's base clouds: this X-Plane has no writable sim/weather/region/cloud_coverage_percent - where reports are clear, its manual "
+                 "weather preset's clouds show (choose the Clear preset)");
+    }
+    if (drCov && XPLMCanWriteDataRef(drCov) && covTries < kMaxClears) {
+        float c[3] = {0, 0, 0};
+        const int n = std::min(3, XPLMGetDatavf(drCov, c, 0, 3));
+        bool any = false;
+        for (int i = 0; i < n; ++i) if (std::isfinite(c[i]) && c[i] > 0.001f) any = true;
+        if (any) {
+            if (!g_regionSaved.clouds) { g_regionSaved.clouds = true; g_regionSaved.cloudN = n; for (int i = 0; i < n; ++i) g_regionSaved.cloudCov[i] = c[i]; }
+            float z[3] = {0, 0, 0};
+            XPLMSetDatavf(drCov, z, 0, n);
+            ++covTries;
+            logf("X-Plane's own base clouds (its manual weather preset: %.2f, %.2f, %.2f) cleared while WXPlane sets the weather - they showed "
+                 "wherever the reports are clear (put back when WXPlane is switched off; xp_base_clear = 0 leaves them)", c[0], c[1], c[2]);
+            if (covTries == kMaxClears) logf("X-Plane's base clouds: cleared %d times this session and back each time - left as they are now", kMaxClears);
+        }
+    }
+    if (drRain && XPLMCanWriteDataRef(drRain) && rainTries < kMaxClears) {
+        const float r = XPLMGetDataf(drRain);
+        if (std::isfinite(r) && r > 0.001f) {
+            if (!g_regionSaved.rain) { g_regionSaved.rain = true; g_regionSaved.rainVal = r; }
+            XPLMSetDataf(drRain, 0.0f);
+            ++rainTries;
+            logf("X-Plane's own base rain (%.2f) set to none while WXPlane sets the weather (put back when it is switched off)", r);
+        }
+    }
+    if (drVis && XPLMCanWriteDataRef(drVis) && visTries < kMaxClears) {
+        const float v = XPLMGetDataf(drVis);
+        if (std::isfinite(v) && v >= 0.0f && v < 10.0f) {
+            if (!g_regionSaved.vis) { g_regionSaved.vis = true; g_regionSaved.visSm = v; }
+            XPLMSetDataf(drVis, 10.0f);
+            ++visTries;
+            logf("X-Plane's own base visibility (%.1f sm) raised to 10 sm while WXPlane sets the weather (put back when it is switched off)", v);
+        }
     }
 }
 

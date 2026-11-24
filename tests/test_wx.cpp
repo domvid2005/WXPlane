@@ -11,6 +11,7 @@
 #include "../src/geo.h"
 #include "../src/json_mini.h"
 #include "../src/metar.h"
+#include "../src/paths.h"
 #include "../src/radar.h"
 #include "../src/sources.h"
 #include "../src/suntime.h"
@@ -62,6 +63,16 @@ int main() {
 
         // 5.1.5 (xp_metar_file): X-Plane's own METAR file for add-ons, as X-Plane 12 names and writes it
         CHECK(wx::xpMetarFileName(now) == "METAR-2026-11-17-18.00-ZULU.txt");
+        // 5.1.8: only an old Mac path is an HFS one; a Windows path has a ':' too (5.1.6 and 5.1.7 took it for one, and on every Windows
+        // start removed X-Plane's METAR files in Output/real weather and wrote WXPlane.cfg.bak)
+        CHECK(wx::isHfsPath("Macintosh HD:Users:pilot:X-Plane 12:Output:preferences:WXPlane.cfg"));
+        CHECK(wx::isHfsPath("T7:X-Plane 12:Output:real weather"));
+        CHECK(!wx::isHfsPath("D:\\X-Plane 12\\Output\\preferences\\WXPlane.cfg"));
+        CHECK(!wx::isHfsPath("D:\\X-Plane 12/Output/preferences/WXPlane.cfg"));
+        CHECK(!wx::isHfsPath("C:/X-Plane 12/Output/real weather"));
+        CHECK(!wx::isHfsPath("/Volumes/T7/X-Plane 12/Output/preferences/WXPlane.cfg"));
+        CHECK(!wx::isHfsPath("/home/pilot/X-Plane 12/Output/preferences/WXPlane.cfg"));
+        CHECK(!wx::isHfsPath(""));
         CHECK(wx::xpMetarFileName(1767582600) == "METAR-2026-1-5-03.00-ZULU.txt");   // 2026-01-05 03:10Z: month and day unpadded
         std::vector<wx::Station> v = w;
         v.push_back(wx::Station{}); v.back().icao = "ZZZZ"; v.back().rawMetar = "ZZZZ 171800Z 00000KT\nBROKEN";   // a line break: left out

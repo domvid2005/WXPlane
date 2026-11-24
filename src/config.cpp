@@ -34,6 +34,7 @@ bool loadConfig(const std::string& path, Config& c) {
         if (k == "world_metars") { c.worldMetars = toBool(v); continue; }
         if (k == "xp_metar_file") { c.xpMetarFile = toBool(v); continue; }
         if (k == "storm_support") { c.stormSupport = toBool(v); continue; }
+        if (k == "xp_base_clear") { c.xpBaseClear = toBool(v); continue; }
         if (k == "detailed_log") { c.detailedLog = toBool(v); continue; }
         if (k == "avitab_tab") { c.avitabTab = toBool(v); continue; }
         if (k == "avitab_icon_x") { c.avitabIconX = d < 0 ? 0 : (d > 1 ? 1 : d); continue; }
@@ -218,6 +219,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "world_metars = " << (c.worldMetars ? 1 : 0) << "\n"
       << "xp_metar_file = " << (c.xpMetarFile ? 1 : 0) << "\n"
       << "storm_support = " << (c.stormSupport ? 1 : 0) << "\n"
+      << "xp_base_clear = " << (c.xpBaseClear ? 1 : 0) << "\n"
       << "detailed_log = " << (c.detailedLog ? 1 : 0) << "\n"
       << "avitab_tab = " << (c.avitabTab ? 1 : 0) << "\n"
       << "avitab_icon_x = " << c.avitabIconX << "\n"
