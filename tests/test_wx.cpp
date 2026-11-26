@@ -114,6 +114,15 @@ int main() {
         close.q.push_back({40.0 + 10.0 / 60.0, -100.0, 1016.0, 0});
         close.finish();
         for (const auto& e : close.q) CHECK(std::fabs(e.r) <= 1.61);
+        // edge cases: fewer than 2 stations is no field (the caller then leaves the pressure to each record); anchorNm 0 is the mean alone;
+        // anchorNm 200 still the airport's own at the airport and finite everywhere; two stations on the same spot do not divide by zero
+        wx::PField one; one.anchorNm = 30; one.q.push_back({62.46, -114.44, 1015.7, 0}); one.finish();
+        double x; CHECK(!one.at(62.46, -114.44, x));
+        wx::PField none; none.anchorNm = 30; none.finish(); CHECK(!none.at(0, 0, x));
+        const wx::PField wide = mk(200.0);
+        double w0, wFar; CHECK(wide.at(62.46, -114.44, w0) && std::fabs(w0 - 1015.7) < 0.3 && wide.at(40.0, -80.0, wFar) && std::isfinite(wFar));
+        wx::PField dup; dup.anchorNm = 30; dup.q.push_back({50, 10, 1010, 0}); dup.q.push_back({50, 10, 1014, 0}); dup.q.push_back({51, 10, 1012, 0}); dup.finish();
+        double dv; CHECK(dup.at(50, 10, dv) && std::isfinite(dv) && dv > 1009 && dv < 1015);
         }
         CHECK(wx::xpMetarFileName(1767582600) == "METAR-2026-1-5-03.00-ZULU.txt");   // 2026-01-05 03:10Z: month and day unpadded
         std::vector<wx::Station> v = w;
@@ -358,6 +367,15 @@ int main() {
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 6\nlow_cloud_type = 2\nstation_radius_factor = 0.65\nfill_radius_factor = 0.95\nradar_minutes = 30\nsearch_nm = 80\n", f); std::fclose(f); }
         Config v6; loadConfig(fn, v6);
         { Config r25; FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 25\nregion_winds = 0\n", f); std::fclose(f); loadConfig(fn, r25); CHECK(r25.regionWinds); }
+        {   // 5.1.9's keys: defaults on, kept within bounds, written back by saveConfig
+            Config d0; CHECK(d0.pressureAnchorNm == 30 && d0.pressureModelCheck && d0.xpBasePressure);
+            Config big; FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 31\npressure_anchor_nm = 500\npressure_model_check = 0\nxp_base_pressure = 0\n", f); std::fclose(f);
+            loadConfig(fn, big); CHECK(big.pressureAnchorNm == 200 && !big.pressureModelCheck && !big.xpBasePressure);
+            Config neg; f = std::fopen(fn, "w"); std::fputs("config_version = 31\npressure_anchor_nm = -5\n", f); std::fclose(f);
+            loadConfig(fn, neg); CHECK(neg.pressureAnchorNm == 0);
+            Config w; w.pressureAnchorNm = 45; w.pressureModelCheck = false; w.xpBasePressure = false; saveConfig(fn, w);
+            Config back; loadConfig(fn, back); CHECK(back.pressureAnchorNm == 45 && !back.pressureModelCheck && !back.xpBasePressure);
+        }
         { Config r26; FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 26\nregion_winds = 0\n", f); std::fclose(f); loadConfig(fn, r26); CHECK(!r26.regionWinds); }
         CHECK(v6.lowCloudType == 2.0 && v6.stationRadiusFactor == 0.49 && v6.fillRadiusFactor == 1.0 && v6.radarMinutes == 5 && v6.searchNm == 80);   // stale cloud settings from earlier builds reset once
         { FILE* f = std::fopen(fn, "w"); std::fputs("config_version = 18\ntop_bumps = 1\nbump_count = 30\nupdate_minutes = 10\nsearch_nm = 77\n", f); std::fclose(f); }

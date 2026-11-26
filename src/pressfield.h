@@ -9,7 +9,7 @@
 namespace wx {
 
 // A field over the stations: the smooth Gaussian-weighted mean (sigma 50 nm), plus each station's own difference from it, carried
-// around the station and faded out with distance. At a station the field is the station's own value; it goes back to the smooth mean
+// around the station and faded out with distance. At a station the field is (nearly) the station's own value; it goes back to the smooth mean
 // over about anchorNm (half of the difference is left at anchorNm, nothing beyond 3 x anchorNm). anchorNm = 0 is the smooth mean alone.
 // 2026-11-26, Yellowknife (CYZF, the other airports 74-110 nm away): the smooth mean alone gave the stations 100 nm off a large share of
 // the weight, and the gap-fill tiles around CYZF carried that mean while CYZF's own record carried CYZF's pressure. On the approach
@@ -49,10 +49,10 @@ struct PField {
         if (!smooth(lat, lon, out)) return false;
         if (anchorNm <= 0) return true;
         double sw = 1.0 / (anchorNm * anchorNm), sv = 0;   // the smooth mean's own share: at anchorNm from one station half of its difference is left
-        // softened by a fifth of anchorNm (6 nm): with weights of 1/d^2 alone the field stays flat around each station and then changes
-        // steeply halfway to the next one; softened, it slopes evenly. At the station itself about 96 % of its difference is there (its own
-        // record carries all of it).
-        const double soft2 = 0.04 * anchorNm * anchorNm;
+        // softened by a fifth of anchorNm, at most 6 nm: with weights of 1/d^2 alone the field stays flat around each station and then
+        // changes steeply halfway to the next one; softened, it slopes evenly. At the station itself about 96 % of its difference is there
+        // (its own record carries all of it).
+        const double soft = std::min(0.2 * anchorNm, 6.0), soft2 = soft * soft;
         for (const auto& e : q) {
             const double d = distNm(lat, lon, e.lat, e.lon);
             if (d >= 3.0 * anchorNm || e.r == 0) continue;

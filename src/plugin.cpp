@@ -391,14 +391,15 @@ void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& sta
     }
     std::map<std::string, const Todo*> stRec;   // each station's own record: its elevation and the temperatures it carries
     for (const auto& t : todo) if (!t.rec.icao.empty() && t.key == t.rec.icao) stRec[t.key] = &t;
-    struct Q { double lat, lon, hpa, sl; std::string id; };
+    struct Q { double lat, lon, hpa, sl; std::string id; double elev; };
     std::vector<Q> qs;
     for (const auto& s : stations) {
         if (!(s.report.hasAltim && s.report.altimHpa > 850 && s.report.altimHpa < 1090)) continue;
         double sl = s.report.altimHpa;
         auto it = stRec.find(s.icao);
+        const double elev = it != stRec.end() ? it->second->rec.elev : 0.0;
         if (g_cfg.qnhTempCorrect && it != stRec.end()) sl = wx::seaLevelHpaForQnh(s.report.altimHpa, it->second->rec.elev, recColumn(it->second->rec.info, it->second->rec.elev));
-        qs.push_back({s.lat, s.lon, s.report.altimHpa, sl, s.icao});
+        qs.push_back({s.lat, s.lon, s.report.altimHpa, sl, s.icao, elev});
     }
     if (qs.size() < 2) {
         for (auto& t : todo) t.rec.info.pressure_sl = ownSeaLevelPa(t.rec);
@@ -432,8 +433,10 @@ void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& sta
             int nNear = 0;
             for (const auto& o : qs) if (wx::distNm(qs[i].lat, qs[i].lon, o.lat, o.lon) <= 100.0) ++nNear;
             if (nNear >= 3) continue;   // the neighbours decided
+            // a high station's sea-level pressure depends on how it is brought down to sea level, and the model's way differs from ours
+            // (cold air over high ground: several hPa): 3 hPa more allowed per 1000 m up
             const double dev = qs[i].sl - mAt[i] - bias;
-            if (std::fabs(dev) <= lim) continue;
+            if (std::fabs(dev) <= lim + 0.003 * std::max(0.0, qs[i].elev)) continue;
             keep[i] = keepSl[i] = 0;
             char b[200];
             std::snprintf(b, sizeof b, "%s%s %.1f hPa (sea level) where the global model has %.1f", g_pressureNote.empty() ? "" : ", ", qs[i].id.c_str(), qs[i].sl, mAt[i] + bias);
