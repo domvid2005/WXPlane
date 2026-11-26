@@ -1,5 +1,5 @@
 ================================================================================
-  WXPlane 5.1.8 for X-Plane 12  -  User Manual
+  WXPlane 5.1.9 for X-Plane 12  -  User Manual
 ================================================================================
 
 WXPlane replaces X-Plane 12's weather with live, real-world data: airport
@@ -352,6 +352,18 @@ SETTINGS
                                        pressure is sent so that the reported
                                        QNH sets the altimeter to the field
                                        elevation whatever the temperature
+      pressure_anchor_nm        (30)   around each airport the pressure is
+                                       the airport's own, blending into the
+                                       smooth average between airports over
+                                       about this distance (0 = as in 5.1.8)
+      pressure_model_check      (1)    where fewer than 3 airports lie within
+                                       100 nm, leave out a station whose
+                                       pressure is far from the global model
+      xp_base_pressure          (1)    set X-Plane's own base sea-level
+                                       pressure to WXPlane's at the aircraft
+                                       while WXPlane sets the weather (no dip
+                                       after each update). Put back when
+                                       WXPlane is switched off
       tropo_smooth              (1)    a smooth tropopause between airports
       xp_base_steady            (1)    hold X-Plane's own variation and
                                        evolution of its base weather off
