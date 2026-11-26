@@ -25,10 +25,14 @@ struct FetchRequest {
     double gsKt = 0, trackDeg = 0; // ground speed and true track: the GFS lattice is centred ahead of a fast aircraft
 };
 
+// The global model's sea-level pressure at one lattice node (5.1.9: the station pressures are checked against it where neighbours are few)
+struct MslPoint { double lat = 0, lon = 0, hpa = 0; };
+
 struct FetchResult {
     bool ok = false;
     std::string error;
     std::vector<Station> stations; // nearest first
+    std::vector<MslPoint> modelMsl; // the global model's sea-level pressure around the aircraft (the last good download)
     int metarCount = 0;
     int atisCount = 0;
     int noaaFixes = 0;       // reports where NOAA's decoded fields corrected or completed the text parse

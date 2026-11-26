@@ -89,8 +89,8 @@ void XPLMGetPluginInfo(XPLMPluginID id, char* n, char* p, char* s, char* d) {
 }
 int XPLMIsPluginEnabled(XPLMPluginID) { return 1; }
 // X-Plane's base (manual preset) clouds, rain and visibility: 83 cloud_coverage_percent[3], 84 rain_percent, 85 visibility_reported_sm
-static float g_baseCov[3] = {0, 0, 0}, g_baseRain = 0, g_baseVis = 20;
-XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/cloud_coverage_percent")) return (void*)83; if (std::strstr(n, "region/rain_percent")) return (void*)84; if (std::strstr(n, "region/visibility_reported_sm")) return (void*)85; if (std::strstr(n, "region/change_mode")) return (void*)81; if (std::strstr(n, "region/variability_pct")) return (void*)82; if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
+static float g_baseCov[3] = {0, 0, 0}, g_baseRain = 0, g_baseVis = 20, g_baseSlp = 101325.0f;   // 86 sealevel_pressure_pas
+XPLMDataRef XPLMFindDataRef(const char* n) { if (std::strstr(n, "region/sealevel_pressure_pas")) return (void*)86; if (std::strstr(n, "region/cloud_coverage_percent")) return (void*)83; if (std::strstr(n, "region/rain_percent")) return (void*)84; if (std::strstr(n, "region/visibility_reported_sm")) return (void*)85; if (std::strstr(n, "region/change_mode")) return (void*)81; if (std::strstr(n, "region/variability_pct")) return (void*)82; if (std::strstr(n, "region/turbulence")) return (void*)79; if (std::strstr(n, "region/weather_source")) return (void*)80; return std::strstr(n, "use_real_weather") ? (void*)77 : std::strstr(n, "position/elevation") ? (void*)78 : std::strstr(n, "frame_rate_period") ? (void*)14 : std::strstr(n, "latitude") ? (void*)10 : std::strstr(n, "longitude") ? (void*)11 : std::strstr(n, "y_agl") ? (void*)13 : (void*)12; }
 int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
     if (r == (void*)79) { if (!out) return 13; for (int i = 0; i < n && off + i < 13; ++i) out[i] = g_turbArr[off + i]; return n; }
     if (r == (void*)83) { if (!out) return 3; int k = 0; for (; k < n && off + k < 3; ++k) out[k] = g_baseCov[off + k]; return k; }
@@ -99,7 +99,7 @@ int XPLMGetDatavf(XPLMDataRef r, float* out, int off, int n) {
     for (int i = 0; i < n && off + i < 13; ++i) out[i] = lv[off + i];
     return n;
 }
-float XPLMGetDataf(XPLMDataRef r) { return r == (void*)84 ? g_baseRain : r == (void*)85 ? g_baseVis : r == (void*)82 ? g_xpVariability : r == (void*)14 ? 0.01f : g_agl; }
+float XPLMGetDataf(XPLMDataRef r) { return r == (void*)86 ? g_baseSlp : r == (void*)84 ? g_baseRain : r == (void*)85 ? g_baseVis : r == (void*)82 ? g_xpVariability : r == (void*)14 ? 0.01f : g_agl; }
 static double g_elev = 0;
 double XPLMGetDatad(XPLMDataRef r) { return r == (void*)10 ? g_lat : r == (void*)78 ? g_elev : g_lon; }
 static std::string g_logAll;
@@ -212,7 +212,7 @@ static int g_xpWxSource = 0;   // sim/weather/region/weather_source (1 = X-Plane
 int XPLMGetDatai(XPLMDataRef r) { return r == (void*)81 ? g_xpChangeMode : r == (void*)80 ? g_xpWxSource : r == (void*)77 ? g_realWx : g_loadingFlag; }
 XPLMDataTypeID XPLMGetDataRefTypes(XPLMDataRef r) { return r == (void*)77 ? xplmType_Int : xplmType_Int | xplmType_Float | xplmType_Double; }
 int XPLMCanWriteDataRef(XPLMDataRef) { return 1; }
-void XPLMSetDataf(XPLMDataRef r, float v) { if (r == (void*)82) g_xpVariability = v; if (r == (void*)84) g_baseRain = v; if (r == (void*)85) g_baseVis = v; }
+void XPLMSetDataf(XPLMDataRef r, float v) { if (r == (void*)82) g_xpVariability = v; if (r == (void*)84) g_baseRain = v; if (r == (void*)85) g_baseVis = v; if (r == (void*)86) g_baseSlp = v; }
 void XPLMSetDatad(XPLMDataRef, double) {}
 int XPLMGetDatavi(XPLMDataRef, int* v, int, int n) { for (int i = 0; i < n; ++i) v[i] = 0; return n; }
 int XPLMCountDataRefs(void) { return 2; }
@@ -241,6 +241,7 @@ static bool g_operaFront = false;  // HARNESS_FRONT: the storm band's echo (core
 static bool g_operaLight = false;  // HARNESS_TOWERS: light, patchy rain with speckle under a low deck, no deep cloud in the model (Zurich 2026-11-23)
 static bool g_operaStorm = false;  // HARNESS_SQUARES: a natural-looking European storm in the mock composite, and the model's cloud for it
 static bool g_jet = false;         // HARNESS_JET: open water under a jet stream, the tropopause low north of 42.5 N and high south of it
+static bool g_sparse = false;   // HARNESS_SPARSE: Yellowknife, the other airports 74-110 nm away, one of them with a wrong altimeter setting
 static bool g_highField = false;   // HARNESS_HIGHFIELD: four fields around Denver, 1,500-1,800 m high, 15-20 C colder than standard
 static bool g_ocean = false, g_oceanModel = false; static int g_oceanMetar = 0;   // HARNESS_OCEAN: METAR searches answer HTTP 204 (open water)   // HARNESS_TURB: pilot reports served for /api/data/pirep
 static std::string g_gtgnFile, g_gtgnName, g_gtgnHour, g_ecFile, g_ecIndex;   // synthetic turbulence data (HARNESS_TURB)
@@ -481,6 +482,29 @@ CURLcode curl_easy_perform(CURL* c) {
         b += "]";
         e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
     }
+    if (g_sparse && e->url.find("api.open-meteo.com") != std::string::npos && e->url.find("cloud_cover_1000hPa") != std::string::npos) {
+        // the global model around Yellowknife: sea level 1015.5 hPa everywhere (CYZF's own SLP157), cold
+        const long t = (long)std::time(nullptr);
+        std::string one = "{\"latitude\":62.5,\"longitude\":-114.4,\"elevation\":200.0,\"hourly\":{\"time\":[" + std::to_string(t) + "],"
+                          "\"cloud_cover_925hPa\":[90],\"geopotential_height_925hPa\":[650],\"cloud_cover_500hPa\":[0],\"geopotential_height_500hPa\":[5200],"
+                          "\"temperature_2m\":[-13],\"dew_point_2m\":[-13],\"pressure_msl\":[1015.5],\"wind_speed_10m\":[9],\"wind_direction_10m\":[60],"
+                          "\"wind_gusts_10m\":[12],\"visibility\":[24140],\"precipitation\":[0],\"snowfall\":[0],\"weather_code\":[71]}}";
+        std::string b = "[";
+        for (int k = 0; k < 9; ++k) b += (k ? "," : "") + one;
+        b += "]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
+    if (g_sparse && e->url.find("aviationweather.gov/api/data/metar?bbox") != std::string::npos) {
+        // CYZF as reported on 2026-11-26 at 11Z; CWID's altimeter setting is wrong by about 15 hPa (the check against the model must catch it:
+        // no airport has 3 others within 100 nm here)
+        static std::string b;
+        b = "[{\"icaoId\":\"CYZF\",\"lat\":62.4628,\"lon\":-114.4403,\"elev\":206,\"rawOb\":\"CYZF " + utcStamp(20) + " 06009KT 15SM -SN OVC009 M13/M13 A2992 RMK ST8 SLP157\"},"
+            "{\"icaoId\":\"CWMT\",\"lat\":63.1300,\"lon\":-116.9600,\"elev\":270,\"rawOb\":\"CWMT " + utcStamp(20) + " AUTO 09002KT M14/M15 A2996\"},"
+            "{\"icaoId\":\"CYWE\",\"lat\":64.1908,\"lon\":-114.0770,\"elev\":368,\"rawOb\":\"CYWE " + utcStamp(20) + " 06010KT 9SM -SN BKN130 M15/M17 A2994\"},"
+            "{\"icaoId\":\"CWID\",\"lat\":61.2000,\"lon\":-112.0000,\"elev\":250,\"rawOb\":\"CWID " + utcStamp(20) + " AUTO 03001KT M12/M13 A3036\"},"
+            "{\"icaoId\":\"CYHY\",\"lat\":60.8397,\"lon\":-115.7830,\"elev\":165,\"rawOb\":\"CYHY " + utcStamp(20) + " 18003KT 3SM -SN OVC009 M12/M13 A2990\"}]";
+        e->status = 200; e->wf((char*)b.data(), 1, b.size(), e->wd); return 0;
+    }
     if (g_oceanModel && e->url.find("api.open-meteo.com") != std::string::npos && e->url.find("cloud_cover_1000hPa") != std::string::npos) {
         // HARNESS_OCEAN, second part: the model's clouds and surface weather at 9 nodes (a low overcast deck at 925 hPa, drizzle)
         const long t = (long)std::time(nullptr);
@@ -656,6 +680,7 @@ static int runOneShot() {
     if (realWx) g_xpWxSource = 1;
     g_xpVariability = 0.35f; g_xpChangeMode = 5;   // the user's own X-Plane weather settings: 35 % variation across the region, "deteriorating"
     g_baseCov[0] = 0.8f; g_baseCov[1] = 0.6f; g_baseCov[2] = 0.0f; g_baseRain = 0.3f; g_baseVis = 2.0f;   // and the IFR preset's clouds, rain and visibility
+    g_baseSlp = 99000.0f;   // and its sea-level pressure (990 hPa)
     char n[256], s[256], d[256];
     XPluginStart(n, s, d);
     XPluginEnable();
@@ -670,6 +695,10 @@ static int runOneShot() {
     std::printf("oneshot: X-Plane's base clouds %.2f %.2f %.2f, rain %.2f, visibility %.1f sm while WXPlane runs\n", g_baseCov[0], g_baseCov[1], g_baseCov[2], g_baseRain, g_baseVis);
     if (!realWx) CHECK(g_baseCov[0] == 0.0f && g_baseCov[1] == 0.0f && g_baseRain == 0.0f && g_baseVis == 10.0f && g_logAll.find("base clouds (its manual weather preset: 0.80, 0.60") != std::string::npos);
     else CHECK(g_baseCov[0] == 0.8f && g_baseRain == 0.3f && g_baseVis == 2.0f);
+    // 5.1.9 (xp_base_pressure): the base sea-level pressure is WXPlane's at the aircraft, not the preset's 990 hPa
+    std::printf("oneshot: X-Plane's base sea-level pressure %.1f hPa while WXPlane runs\n", g_baseSlp / 100.0);
+    if (!realWx) CHECK(g_baseSlp > 100000.0f && g_baseSlp < 104500.0f && g_logAll.find("base sea-level pressure 990.0 hPa set to WXPlane's") != std::string::npos);
+    else CHECK(g_baseSlp == 99000.0f);
     std::printf("oneshot: %zu records in %d weather update(s), largest %zu\n", g_calls.size(), g_end, g_maxBatch);
     CHECK(g_calls.size() >= 3);
     CHECK(g_end == 1 && g_begin == 1);               // one Begin/End pair for the whole first load
@@ -702,6 +731,7 @@ static int runOneShot() {
     XPluginDisable();
     CHECK(g_xpVariability == 0.35f && g_xpChangeMode == 5);   // the user's settings are back when WXPlane is switched off
     CHECK(g_baseCov[0] == 0.8f && g_baseCov[1] == 0.6f && g_baseCov[2] == 0.0f && g_baseRain == 0.3f && g_baseVis == 2.0f);   // and the preset's weather
+    CHECK(g_baseSlp == 99000.0f);
     XPluginStop();
     std::printf("%s (%d failures)\n", g_fail ? "ONESHOT FAILED" : "ONESHOT OK", g_fail);
     return g_fail ? 1 : 0;
@@ -1210,6 +1240,49 @@ static int runHfs() {
 // what is sent for a QNH is the sea-level pressure that gives that field its QNH (wx::seaLevelHpaForQnh), on the temperatures the
 // record itself carries. Checked here the way X-Plane does it: from each record's sea-level pressure up through its own temperature
 // levels to the field must come out at the station pressure the QNH stands for.
+// 5.1.9, Yellowknife (2026-11-26): X-Plane's altimeter setting read 30.14 inHg 17 nm out on the approach and came down to the METAR's 29.92
+// inside 12 nm. The gap-fill tiles around CYZF carried the smooth mean of stations 74-110 nm away, not CYZF's own pressure; one wrong
+// altimeter setting there moved it further, and with fewer than 3 airports within 100 nm nothing left it out.
+static int runSparse() {
+    const char* kCfg = hpath("WXPlane.cfg");
+    { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 31\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\nuse_atis = 0\n", f); if (std::getenv("HARNESS_SPARSE_OLD")) std::fputs("pressure_anchor_nm = 0\npressure_model_check = 0\n", f); std::fclose(f); }
+    const bool old518 = std::getenv("HARNESS_SPARSE_OLD") != nullptr;   // 5.1.8's field, for comparison only (prints, no checks)
+    g_sparse = true;
+    g_loadingFlag = 0;
+    g_lat = 62.4628; g_lon = -114.4403 + 17.0 / 60.0 / std::cos(62.4628 * 3.14159265358979 / 180.0);   // 17 nm east of CYZF
+    g_elev = 900; g_agl = 700;
+    char n[256], s[256], d[256];
+    CHECK(XPluginStart(n, s, d) == 1);
+    CHECK(XPluginEnable() == 1);
+    for (int i = 0; i < 900 && g_logAll.find("all weather records handed to X-Plane") == std::string::npos; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    for (int i = 0; i < 200; ++i) { g_cb(1, 1, i, nullptr); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    if (!old518) CHECK(g_logAll.find("left out of the pressure field") != std::string::npos && g_logAll.find("CWID") != std::string::npos);
+    const Call* zf = nullptr;   // CYZF's own record (a location record: the mock does not know the airport)
+    for (const auto& c : g_calls) if (c.where == "CYZF" || (!c.airport && wx::distNm(c.lat, c.lon, 62.4628, -114.4403) < 0.3)) zf = &c;
+    CHECK(zf != nullptr);
+    if (zf) {
+        // every record within 45 nm of CYZF (the tiles that reach in to its circle, and the ones the approach passes) carries close to CYZF's own pressure
+        double worst = 0, near17 = 0, nearD = 1e9;
+        int n45 = 0;
+        for (const auto& c : g_calls) {
+            if (&c == zf || !(c.info.pressure_sl > 0)) continue;
+            const double dz = wx::distNm(c.lat, c.lon, zf->lat, zf->lon);
+            if (dz > 45.0) continue;
+            ++n45;
+            worst = std::max(worst, std::fabs(c.info.pressure_sl - zf->info.pressure_sl) / 100.0);
+            const double da = wx::distNm(c.lat, c.lon, g_lat, g_lon);
+            if (da < nearD) { nearD = da; near17 = c.info.pressure_sl / 100.0; }
+        }
+        std::printf("[sparse] CYZF sends %.1f hPa sea level; %d records within 45 nm, the furthest off by %.1f hPa; the one nearest the aircraft (%.0f nm away) %.1f hPa\n",
+                    zf->info.pressure_sl / 100.0, n45, worst, nearD, near17);
+        if (!old518) CHECK(n45 >= 4 && worst < 2.0);
+        if (!old518) CHECK(std::fabs(zf->info.pressure_sl / 100.0 - 1015.6) < 1.5);   // CYZF's own: its SLP157 remark says 1015.7
+    }
+    XPluginDisable(); XPluginStop();
+    std::printf(g_fail ? "HARNESS_SPARSE FAILED (%d)\n" : "HARNESS_SPARSE OK (%d failures)\n", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 static int runHighField() {
     const char* kCfg = hpath("WXPlane.cfg");
     { FILE* f = std::fopen(kCfg, "w"); std::fputs("config_version = 31\nmanual_refresh_gap_s = 0\nradar = 0\nstartup_delay_s = 0\nstartup_wait_fps = 0\nstartup_staged = 0\nmax_age_hours = 40\nrealistic_turbulence = 0\nuse_atis = 0\n", f); std::fclose(f); }
@@ -1535,6 +1608,7 @@ int main() {
     if (std::getenv("HARNESS_STAGED")) { std::string base = WX_HARNESS_DATA "/"; g_mrmsRefl = readFile((base + "mrms_refl.grib2.gz").c_str()); g_mrmsTop = readFile((base + "mrms_top.grib2.gz").c_str()); g_tilePng = readFile((base + "tile.png").c_str()); return runStaged(); }
     if (std::getenv("HARNESS_TURB")) return runTurb();
     if (std::getenv("HARNESS_OCEAN")) return runOcean();
+    if (std::getenv("HARNESS_SPARSE") || std::getenv("HARNESS_SPARSE_OLD")) return runSparse();
     if (std::getenv("HARNESS_HIGHFIELD")) return runHighField();
     if (std::getenv("HARNESS_JET")) return runJet();
     if (std::getenv("HARNESS_HFS") || std::getenv("HARNESS_HFS_BOTH")) return runHfs();
@@ -1583,7 +1657,21 @@ int main() {
         std::printf("  KICT sea-level pressure sent: %.1f hPa (QNH 1019.6 at 407 m, 8 C at the field)\n", i.pressure_sl / 100.0);
         // ATIS altimeter 30.11 (1019.6 hPa) overrides METAR 30.10. 5.1.5: what goes in is the sea-level pressure X-Plane needs for that QNH
         // at the field's height in this air (4 C colder than standard at the surface): about half a hPa more than the QNH.
-        CHECK(i.pressure_alt == 0 && i.pressure_sl > 101980 && i.pressure_sl < 102080);
+        CHECK(i.pressure_alt == 0 && i.pressure_sl > 101980 && i.pressure_sl < 102180);
+        {   // 5.1.9: KICT's own record carries its own sea-level pressure (5.1.5-5.1.8 held it within 2 hPa of the smooth mean of the stations around),
+            // so the ATIS altimeter setting reads the field elevation on the ground there
+            static const float lv[13] = {0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000};   // the mock's temperature levels
+            auto T = [&](double z) {
+                for (int k = 1; k < 13; ++k) if (z <= lv[k]) { const double f = (z - lv[k - 1]) / (lv[k] - lv[k - 1]); return i.temp_layers[k - 1] + f * (i.temp_layers[k] - i.temp_layers[k - 1]) + 273.15; }
+                return i.temp_layers[12] + 273.15;
+            };
+            double sum = 0; const int nn = 400; const double h = 407.0;
+            for (int k = 0; k < nn; ++k) sum += (h / nn) / T((k + 0.5) * h / nn);
+            const double atField = i.pressure_sl / 100.0 * std::exp(-9.80665 / 287.053 * sum);
+            const double need = atField / std::pow(1.0 - 0.0065 * h / 288.15, 9.80665 / (287.053 * 0.0065));
+            std::printf("  KICT: altimeter setting that reads the field elevation on the ground %.1f hPa (ATIS 1019.6)\n", need);
+            CHECK(std::fabs(need - 1019.6) < 0.4);
+        }
         CHECK(i.max_altitude_msl_ft == 60000 && i.radius_nm >= 0.5 && i.radius_nm <= 30); // carries aloft data, so it reaches cruise levels
         CHECK(i.wind_layers[0].speed == 0 && i.wind_layers[1].speed > 0);
         CHECK(i.temp_layers[0] == 8);
@@ -1838,7 +1926,10 @@ int main() {
             for (size_t i = before; i < g_calls.size(); ++i) (g_calls[i].info.temp_layers[6] > -273.0f ? with : without)++;
             std::printf("  records with temperatures aloft: %d, without: %d\n", with, without);
             CHECK(without == 0);
-            double worst = 0;   // the pressure field is smooth: no QNH step between nearby records (altitude hunting)
+            // the pressure field is smooth: no QNH step between nearby records (altitude hunting). 5.1.9: around each airport the field is the
+            // airport's own, so between airports that report 4-5 hPa apart 30 nm away (KICT and KFAKE here) it slopes; what must not
+            // happen is a step: no more than 0.25 hPa per nm (7 ft per nm) between records, however close
+            double worst = 0, worstSlope = 0;
             for (size_t i = before; i < g_calls.size(); ++i)
                 for (size_t j = i + 1; j < g_calls.size(); ++j) {
                     const Call& a = g_calls[i]; const Call& b = g_calls[j];
@@ -1847,13 +1938,16 @@ int main() {
                     if (a.airport || b.airport || a.lat == 0 || b.lat == 0 || isOld(a) || isOld(b)) continue;
                     const double dn = std::hypot((a.lat - b.lat) * 60.0, (a.lon - b.lon) * 60.0 * std::cos(a.lat * 3.14159265 / 180.0));
                     // (the pressure goes out in pressure_sl; this compared pressure_alt, which is 0 in what is sent, until 5.1.5)
-                    if (dn < 15.0 && std::fabs(a.info.pressure_sl - b.info.pressure_sl) / 100.0 > worst) {
-                        worst = std::fabs(a.info.pressure_sl - b.info.pressure_sl) / 100.0;
-                        if (worst > 1.0) std::printf("    %.3f,%.3f %.1f  vs  %.3f,%.3f %.1f\n", a.lat, a.lon, a.info.pressure_sl / 100, b.lat, b.lon, b.info.pressure_sl / 100);
+                    if (dn >= 15.0) continue;
+                    const double dp = std::fabs(a.info.pressure_sl - b.info.pressure_sl) / 100.0;
+                    worst = std::max(worst, dp);
+                    if (dp / std::max(dn, 3.0) > worstSlope) {
+                        worstSlope = dp / std::max(dn, 3.0);
+                        if (worstSlope > 0.25) std::printf("    %.3f,%.3f %.1f  vs  %.3f,%.3f %.1f (%.1f nm)\n", a.lat, a.lon, a.info.pressure_sl / 100, b.lat, b.lon, b.info.pressure_sl / 100, dn);
                     }
                 }
-            std::printf("  largest sea-level pressure difference between records within 15 nm: %.2f hPa\n", worst);
-            CHECK(worst < 1.0);
+            std::printf("  largest sea-level pressure difference between records within 15 nm: %.2f hPa, steepest %.2f hPa per nm\n", worst, worstSlope);
+            CHECK(worstSlope < 0.25);
             int noSl = 0;
             for (size_t i = before; i < g_calls.size(); ++i) if (!(g_calls[i].info.pressure_sl > 87000.0f) || g_calls[i].info.pressure_alt != 0) ++noSl;
             CHECK(noSl == 0);   // every record carries a sea-level pressure, none a pressure "at the station"

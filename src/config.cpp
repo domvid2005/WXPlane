@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -35,6 +36,9 @@ bool loadConfig(const std::string& path, Config& c) {
         if (k == "xp_metar_file") { c.xpMetarFile = toBool(v); continue; }
         if (k == "storm_support") { c.stormSupport = toBool(v); continue; }
         if (k == "xp_base_clear") { c.xpBaseClear = toBool(v); continue; }
+        if (k == "xp_base_pressure") { c.xpBasePressure = toBool(v); continue; }
+        if (k == "pressure_anchor_nm") { c.pressureAnchorNm = std::max(0.0, std::min(200.0, std::atof(v.c_str()))); continue; }
+        if (k == "pressure_model_check") { c.pressureModelCheck = toBool(v); continue; }
         if (k == "detailed_log") { c.detailedLog = toBool(v); continue; }
         if (k == "avitab_tab") { c.avitabTab = toBool(v); continue; }
         if (k == "avitab_icon_x") { c.avitabIconX = d < 0 ? 0 : (d > 1 ? 1 : d); continue; }
@@ -220,6 +224,7 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "xp_metar_file = " << (c.xpMetarFile ? 1 : 0) << "\n"
       << "storm_support = " << (c.stormSupport ? 1 : 0) << "\n"
       << "xp_base_clear = " << (c.xpBaseClear ? 1 : 0) << "\n"
+      << "xp_base_pressure = " << (c.xpBasePressure ? 1 : 0) << "\n"
       << "detailed_log = " << (c.detailedLog ? 1 : 0) << "\n"
       << "avitab_tab = " << (c.avitabTab ? 1 : 0) << "\n"
       << "avitab_icon_x = " << c.avitabIconX << "\n"
@@ -277,6 +282,8 @@ bool saveConfig(const std::string& path, const Config& c) {
       << "storm_level_contours = " << (c.stormLevelContours ? 1 : 0) << "\n"
       << "radar_natural = " << (c.radarNatural ? 1 : 0) << "\n"
       << "smooth_pressure = " << (c.smoothPressure ? 1 : 0) << "\n"
+      << "pressure_anchor_nm = " << c.pressureAnchorNm << "\n"
+      << "pressure_model_check = " << (c.pressureModelCheck ? 1 : 0) << "\n"
       << "region_winds = " << (c.regionWinds ? 1 : 0) << "\n"
       << "dry_runway_min = " << c.dryRunwayMin << "\n"
       << "windshear = " << (c.windshear ? 1 : 0) << "\n"

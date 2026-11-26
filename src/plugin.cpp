@@ -55,6 +55,7 @@
 #include "wxmodel.h"
 #include "loadclock.h"
 #include "paths.h"
+#include "pressfield.h"
 
 namespace {
 
@@ -375,22 +376,15 @@ float ownSeaLevelPa(const Rec& r) {   // from the record's own QNH, field elevat
     const double tempAlt = (!r.airport && r.icao.empty() && g_cfg.fillQnhAtSeaLevel) ? 0.0 : r.elev;   // as sendRec sets it
     return (float)(std::round(wx::seaLevelHpaForQnh(r.info.pressure_alt / 100.0, r.elev, recColumn(r.info, tempAlt)) * 10.0) * 10.0);
 }
-// The smooth sea-level pressure field of the last update (Gaussian-weighted mean, sigma 50 nm), for records made outside applyResult
-struct SlField { struct Q { double lat, lon, hpa; }; std::vector<Q> q; } g_slField;
-bool slFieldAt(double lat, double lon, double& out) {
-    double sw = 0, sv = 0;
-    const double sig = 50.0;
-    for (const auto& q : g_slField.q) {
-        const double d = wx::distNm(lat, lon, q.lat, q.lon);
-        const double w = std::exp(-d * d / (2.0 * sig * sig)) + 1e-9 / (1.0 + d);   // far from all stations: the nearest still counts a little
-        sw += w; sv += w * q.hpa;
-    }
-    if (g_slField.q.size() < 2 || sw <= 0) return false;
-    out = sv / sw;
-    return true;
-}
-void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& stations) {
+// 5.1.9: the field is each station's own pressure around it, back to the smooth mean over pressure_anchor_nm (wx::PField, pressfield.h)
+// The sea-level pressure field of the last update, for records made outside applyResult
+wx::PField g_slField;
+bool slFieldAt(double lat, double lon, double& out) { return g_slField.at(lat, lon, out); }
+std::string g_pressureNote;   // stations left out of the pressure field this update (logged when it changes)
+void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& stations, const std::vector<wx::MslPoint>& model) {
     g_slField.q.clear();
+    g_slField.anchorNm = g_cfg.smoothPressure ? std::max(0.0, g_cfg.pressureAnchorNm) : 0.0;
+    g_pressureNote.clear();
     if (!g_cfg.smoothPressure) {
         for (auto& t : todo) t.rec.info.pressure_sl = ownSeaLevelPa(t.rec);
         return;
@@ -420,19 +414,41 @@ void smoothPressure(std::vector<Todo>& todo, const std::vector<wx::Station>& sta
         if (around.size() >= 3 && std::fabs(qs[i].hpa - around[around.size() / 2]) > 4.0) keep[i] = 0;
         if (aroundSl.size() >= 3 && std::fabs(qs[i].sl - aroundSl[aroundSl.size() / 2]) > 4.0) keepSl[i] = 0;
     }
-    const double sig = 50.0;
-    auto field = [&](double lat, double lon, double& out) {
-        double sw = 0, sv = 0;
+    // 5.1.9: where fewer than 3 airports lie within 100 nm (northern Canada, Alaska, islands) the check above cannot work, and one airport
+    // with a wrong altimeter setting moved the whole field. There each station is checked against the global model's sea-level pressure
+    // instead (inverse-distance from its 3x3 lattice), less the model's usual difference from the stations around (the median of all of them).
+    if (g_cfg.pressureModelCheck && model.size() >= 2) {
+        auto modelAt = [&](double lat, double lon) {
+            double sw = 0, sv = 0;
+            for (const auto& m : model) { const double d = wx::distNm(lat, lon, m.lat, m.lon); const double w = 1.0 / (d * d + 1.0); sw += w; sv += w * m.hpa; }
+            return sv / sw;
+        };
+        std::vector<double> mAt(qs.size()), diffs;
+        for (size_t i = 0; i < qs.size(); ++i) { mAt[i] = modelAt(qs[i].lat, qs[i].lon); diffs.push_back(qs[i].sl - mAt[i]); }
+        std::sort(diffs.begin(), diffs.end());
+        const bool useBias = diffs.size() >= 3;
+        const double bias = useBias ? diffs[diffs.size() / 2] : 0.0, lim = useBias ? 5.0 : 6.0;
         for (size_t i = 0; i < qs.size(); ++i) {
-            if (!keep[i]) continue;
-            const double d = wx::distNm(lat, lon, qs[i].lat, qs[i].lon);
-            const double w = std::exp(-d * d / (2.0 * sig * sig)) + 1e-9 / (1.0 + d);   // far from all stations: the nearest still counts a little
-            sw += w; sv += w * qs[i].hpa;
+            int nNear = 0;
+            for (const auto& o : qs) if (wx::distNm(qs[i].lat, qs[i].lon, o.lat, o.lon) <= 100.0) ++nNear;
+            if (nNear >= 3) continue;   // the neighbours decided
+            const double dev = qs[i].sl - mAt[i] - bias;
+            if (std::fabs(dev) <= lim) continue;
+            keep[i] = keepSl[i] = 0;
+            char b[200];
+            std::snprintf(b, sizeof b, "%s%s %.1f hPa (sea level) where the global model has %.1f", g_pressureNote.empty() ? "" : ", ", qs[i].id.c_str(), qs[i].sl, mAt[i] + bias);
+            g_pressureNote += b;
         }
-        if (sw <= 0) return false;
-        out = sv / sw; return true;
-    };
-    for (size_t i = 0; i < qs.size(); ++i) if (keepSl[i]) g_slField.q.push_back({qs[i].lat, qs[i].lon, qs[i].sl});
+    }
+    wx::PField qnhField;
+    qnhField.anchorNm = g_slField.anchorNm;
+    for (size_t i = 0; i < qs.size(); ++i) {
+        if (keepSl[i]) g_slField.q.push_back({qs[i].lat, qs[i].lon, qs[i].sl, 0.0});
+        if (keep[i]) qnhField.q.push_back({qs[i].lat, qs[i].lon, qs[i].hpa, 0.0});
+    }
+    g_slField.finish();
+    qnhField.finish();
+    auto field = [&](double lat, double lon, double& out) { return qnhField.at(lat, lon, out); };
     for (auto& t : todo) {
         XPLMWeatherInfo_t& in = t.rec.info;
         if (!(in.pressure_alt > 0)) continue;
@@ -2819,7 +2835,15 @@ void applyResult(const wx::FetchResult& res, bool fromFetch) {
     // An empty slot now carries the base, top and type of the same slot in the nearest record that has a cloud there, with (almost) no
     // coverage, so towards the clear side the deck only thins out, at its own height.
     matchEmptyLayers(todo);
-    smoothPressure(todo, res.stations);
+    smoothPressure(todo, res.stations, res.modelMsl);
+    {
+        static std::string lastNote;
+        if (g_pressureNote != lastNote) {
+            if (!g_pressureNote.empty()) logf("pressure: left out of the pressure field (fewer than 3 airports within 100 nm to compare with, and far from the global model): %s", g_pressureNote.c_str());
+            else if (!lastNote.empty()) logf("pressure: every airport in the pressure field again");
+            lastNote = g_pressureNote;
+        }
+    }
     smoothTropopause(todo);
     // An airport record that is no longer wanted (the aircraft moved and the station list changed): X-Plane crashed twice right as
     // WXPlane began removing records after a move (logs 2026-11-03 22:41 and 23:03, both with airport records to remove, both gone with
@@ -3089,6 +3113,8 @@ struct RegionSaved {
     bool clouds = false, rain = false, vis = false;   // X-Plane's base clouds, rain and visibility (the manual preset's; baseSteady, xp_base_clear)
     float cloudCov[3] = {0, 0, 0}, rainVal = 0, visSm = 0;
     int cloudN = 0;
+    bool slp = false;   // X-Plane's base sea-level pressure (baseSteady, xp_base_pressure)
+    float slpPa = 0;
 };
 RegionSaved g_regionSaved;
 bool g_rwHaveW = false, g_rwHaveT = false, g_rwHaveTro = false;
@@ -3113,6 +3139,11 @@ void regionRestore(const char* why) {
     }
     if (g_regionSaved.rain) { XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/rain_percent"); if (dr) XPLMSetDataf(dr, g_regionSaved.rainVal); }
     if (g_regionSaved.vis) { XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/visibility_reported_sm"); if (dr) XPLMSetDataf(dr, g_regionSaved.visSm); }
+    if (g_regionSaved.slp) {
+        XPLMDataRef dr = XPLMFindDataRef("sim/weather/region/sealevel_pressure_pas");
+        if (dr) XPLMSetDataf(dr, g_regionSaved.slpPa);
+        logf("%s: X-Plane's own base sea-level pressure put back to %.1f hPa", why, g_regionSaved.slpPa / 100.0);
+    }
     if (g_regionSaved.w) {
         XPLMDataRef drA = XPLMFindDataRef("sim/weather/region/wind_altitude_msl_m"), drS = XPLMFindDataRef("sim/weather/region/wind_speed_msc"),
                     drD = XPLMFindDataRef("sim/weather/region/wind_direction_degt");
@@ -3167,6 +3198,36 @@ void baseSteady() {
             logf("X-Plane's own \"evolution over time\" was mode %d (3 = static): set to static while WXPlane sets the weather - with it X-Plane lets "
                  "its base weather drift by itself (put back when WXPlane is switched off; xp_base_steady = 0 leaves it)", m);
         } else modeTries = 0;
+    }
+    // 5.1.9 (xp_base_pressure): X-Plane's base sea-level pressure follows WXPlane's field at the aircraft. X-Plane blends its base weather
+    // in while it fades new records in: after every in-flight update the pressure at the aircraft dipped toward the base (Zurich, a
+    // customer: 1022.6 -> 1019.9 -> 1022.1 hPa within 2 minutes) and at every start it climbed from the standard 1013.25 hPa for 2-3
+    // minutes. With the base at WXPlane's own value there is nothing different to blend in. Put back when WXPlane is switched off.
+    if (g_cfg.xpBasePressure) {
+        static XPLMDataRef drSlp = XPLMFindDataRef("sim/weather/region/sealevel_pressure_pas");
+        static int slpFights = 0;          // X-Plane changed it back after a write: after 6 times it is left
+        static float wrote = 0.0f;
+        static bool reported = false;
+        double fs;
+        const double lat = g_drLat ? XPLMGetDatad(g_drLat) : 0, lon = g_drLon ? XPLMGetDatad(g_drLon) : 0;
+        if (!drSlp || !XPLMCanWriteDataRef(drSlp)) {
+            if (!reported) { reported = true; logf("X-Plane's base sea-level pressure (sim/weather/region/sealevel_pressure_pas) is not writable here: left as it is"); }
+        } else if (slpFights < 6 && slFieldAt(lat, lon, fs)) {
+            const float cur = XPLMGetDataf(drSlp), want = (float)(std::round(fs * 10.0) * 10.0);
+            if (std::isfinite(cur) && cur > 85000.0f && cur < 110000.0f && std::fabs(cur - want) > 50.0f) {
+                if (!g_regionSaved.slp) {
+                    g_regionSaved.slp = true; g_regionSaved.slpPa = cur;
+                    logf("X-Plane's own base sea-level pressure %.1f hPa set to WXPlane's at the aircraft, %.1f hPa, while WXPlane sets the weather - X-Plane "
+                         "blends the base in while it fades new weather in (put back when WXPlane is switched off; xp_base_pressure = 0 leaves it)", cur / 100.0, want / 100.0);
+                } else if (wrote > 0.0f && std::fabs(cur - wrote) > 50.0f) {
+                    ++slpFights;
+                    logf("X-Plane's own base sea-level pressure was changed to %.1f hPa after WXPlane set it: set to %.1f hPa again%s", cur / 100.0, want / 100.0,
+                         slpFights >= 6 ? " (6 times this session: left after this)" : "");
+                }
+                XPLMSetDataf(drSlp, want);
+                wrote = want;
+            }
+        }
     }
     // 5.1.8 (xp_base_clear): X-Plane's base clouds, rain and visibility, the manual weather preset's. X-Plane draws WXPlane's records on
     // its base weather; where a report is clear the records have no cloud to put there, and the preset's clouds showed through: with

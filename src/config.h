@@ -13,6 +13,7 @@ struct Config {
     double avitabIconX = 0.357, avitabIconY = 0.568;   // the icon's centre on AviTab's home screen, 0..1 from the left / the bottom
     bool detailedLog = true;      // Log.txt gets WXPlane's detail lines (record dumps, weather watch, blend, frame and visibility checks...); off: only the main events and problems
     bool xpBaseClear = true;      // 5.1.8: X-Plane's own base clouds and rain cleared (its manual preset's) while WXPlane sets the weather (baseSteady)
+    bool xpBasePressure = true;   // 5.1.9: X-Plane's own base sea-level pressure set to WXPlane's at the aircraft (it shows through while X-Plane fades records in)
     bool stormSupport = true;     // 5.1.8: a thunderstorm from the radar needs a report, the model or a high echo top to agree (confirmConvection)
     bool xpMetarFile = true;      // 5.1.5: the world's METARs written as X-Plane's own METAR file (Output/real weather), for add-ons that read it
     bool worldMetars = true;      // the map shows every current METAR in the world (aviationweather.gov, every 10 min): display only, never sent to X-Plane
@@ -89,6 +90,8 @@ struct Config {
     // updates) and covered with records that are small where the picture changes (edges, intensity steps) and large where it does not.
     bool radarNatural = true;
     bool smoothPressure = true;
+    double pressureAnchorNm = 30;     // 5.1.9: the pressure field is each airport's own around it, back to the smooth mean over about this distance (0 = 5.1.8's smooth mean)
+    bool pressureModelCheck = true;   // 5.1.9: where fewer than 3 airports lie within 100 nm, a station far from the global model's sea-level pressure is left out of the field
     double dryRunwayMin = 45;         // minutes without precipitation before the runway is dried
     bool windshear = true;            // realistic windshear (menu: Enable Realistic Windshear), on by default since config v29
     int windshearSeed = 1;            // fixed seed: the same weather gives the same windshear fields

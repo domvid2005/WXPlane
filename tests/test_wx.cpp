@@ -12,6 +12,7 @@
 #include "../src/json_mini.h"
 #include "../src/metar.h"
 #include "../src/paths.h"
+#include "../src/pressfield.h"
 #include "../src/radar.h"
 #include "../src/sources.h"
 #include "../src/suntime.h"
@@ -73,6 +74,47 @@ int main() {
         CHECK(!wx::isHfsPath("/Volumes/T7/X-Plane 12/Output/preferences/WXPlane.cfg"));
         CHECK(!wx::isHfsPath("/home/pilot/X-Plane 12/Output/preferences/WXPlane.cfg"));
         CHECK(!wx::isHfsPath(""));
+        {
+        // 5.1.9 pressure field (Yellowknife, 2026-11-26): an airport with its neighbours 74-110 nm away. The smooth mean alone is far off
+        // the airport's own value 15-20 nm out; anchored, the field is the airport's own at the field and close to it out there, and still
+        // goes back to the smooth mean far away. CYZF 1015.7 hPa (sea level), the others higher.
+        auto mk = [](double anchor) {
+            wx::PField f;
+            f.anchorNm = anchor;
+            f.q.push_back({62.46, -114.44, 1015.7, 0});   // CYZF
+            f.q.push_back({63.13, -117.25, 1024.0, 0});   // about 90 nm WNW
+            f.q.push_back({64.19, -114.08, 1023.0, 0});   // about 105 nm N
+            f.q.push_back({60.84, -115.78, 1025.0, 0});   // about 105 nm SW
+            f.finish();
+            return f;
+        };
+        const wx::PField sm = mk(0.0), an = mk(30.0);
+        double a0, a17, a60, s17, far0, farA;
+        CHECK(an.at(62.46, -114.44, a0) && std::fabs(a0 - 1015.7) < 0.3);   // (nearly) the airport's own value at the airport (its own record carries all of it)
+        const double lat17 = 62.46, lon17 = -114.44 + 17.0 / 60.0 / std::cos(62.46 * 3.14159265358979 / 180.0);   // 17 nm east
+        CHECK(sm.at(lat17, lon17, s17) && an.at(lat17, lon17, a17));
+        std::printf("pressure field 17 nm from CYZF: smooth mean %.1f hPa, anchored %.1f hPa (CYZF 1015.7)\n", s17, a17);
+        CHECK(s17 - 1015.7 > 1.5);                 // the smooth mean was a couple of hPa off there
+        CHECK(std::fabs(a17 - 1015.7) < 1.5);      // anchored: close to the airport's own
+        const double lon60 = -114.44 + 60.0 / 60.0 / std::cos(62.46 * 3.14159265358979 / 180.0);
+        CHECK(an.at(62.46, lon60, a60) && a60 > a17);   // and moves back toward the mean further out
+        CHECK(sm.at(56.0, -100.0, far0) && an.at(56.0, -100.0, farA) && std::fabs(farA - far0) < 0.01);   // far from all: the mean
+        // no step: along a line from the airport out to 120 nm the field never moves more than 0.35 hPa per nm
+        double prev = a0; bool smoothOk = true;
+        for (int k = 1; k <= 120; ++k) {
+            double v; an.at(62.46, -114.44 + k / 60.0 / std::cos(62.46 * 3.14159265358979 / 180.0), v);
+            if (std::fabs(v - prev) > 0.35) smoothOk = false;
+            prev = v;
+        }
+        CHECK(smoothOk);
+        // two airports 10 nm apart 6 hPa apart: the difference each one keeps is capped (1 + 0.06/nm: 1.6 hPa), so the slope between them stays gentle
+        wx::PField close;
+        close.anchorNm = 30.0;
+        close.q.push_back({40.0, -100.0, 1010.0, 0});
+        close.q.push_back({40.0 + 10.0 / 60.0, -100.0, 1016.0, 0});
+        close.finish();
+        for (const auto& e : close.q) CHECK(std::fabs(e.r) <= 1.61);
+        }
         CHECK(wx::xpMetarFileName(1767582600) == "METAR-2026-1-5-03.00-ZULU.txt");   // 2026-01-05 03:10Z: month and day unpadded
         std::vector<wx::Station> v = w;
         v.push_back(wx::Station{}); v.back().icao = "ZZZZ"; v.back().rawMetar = "ZZZZ 171800Z 00000KT\nBROKEN";   // a line break: left out

@@ -260,6 +260,8 @@ FetchResult Fetcher::fetch(const FetchRequest& rq) {
         std::string cNote;
         std::vector<ModelPoint> mp = fetchModelClouds(rq, now, cNote);
         if (!mp.empty()) modelPts_ = mp;
+        for (const auto& p : modelPts_)   // an earlier download may be from further back along the route: only the nodes still near count
+            if (p.sfc && p.mslHpa > 850 && p.mslHpa < 1100 && distNm(rq.lat, rq.lon, p.lat, p.lon) < 250.0) res.modelMsl.push_back({p.lat, p.lon, p.mslHpa});
         if (mp.empty()) setSvc(kSvcClouds, SvcState::Down, cNote.empty() ? std::string("no data") : cNote, now);
         else if (cNote.find("using the earlier download") != std::string::npos) { setSvc(kSvcClouds, SvcState::Degraded, cNote, now); svc_[kSvcClouds].lastOk = cloudTime_; }
         else { setSvc(kSvcClouds, SvcState::Ok, std::to_string(mp.size()) + " model point(s), downloaded " + hhmm(cloudTime_), now); svc_[kSvcClouds].lastOk = cloudTime_; }

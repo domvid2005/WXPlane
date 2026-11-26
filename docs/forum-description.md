@@ -1,4 +1,4 @@
-# WXPlane 5.1.8 – live real-world weather for X-Plane 12
+# WXPlane 5.1.9 – live real-world weather for X-Plane 12
 
 **WXPlane replaces X-Plane 12's weather with live, real-world data.** It reads airport reports, winds aloft, radar, turbulence and pilot reports, and keeps the weather around you current every 5 minutes, all the way along your route. Version 5.1.5 brings natural cloud shapes in rain and storms and a correct altimeter at airports above sea level. Version 5.1.4 shows WXPlane on Alpine Aviation's XPTablet. Version 5.1.3 showed the weather worldwide on the map and put the map on AviTab. Version 5.1.2 added a blend ring and update notices. Version 5.1.1 refined the clouds: natural coverage within each METAR category, cloud tops from the global model, and reported cloud bases kept exactly. Version 5.1 added a live g meter, a windshear odds slider, °T/°M throughout the window, storm and pilot report lists on the map, night dimming, and updates through SkunkCrafts Updater.
 
@@ -13,6 +13,12 @@ Free. No accounts and no API keys. Windows, macOS and Linux.
 - **Realistic turbulence:** clear-air and storm turbulence at every altitude, from NOAA GTGN in the US, an ECMWF-based estimate elsewhere, and live pilot reports. A Max turbulence slider scales it to taste.
 - **Realistic windshear:** gust fronts and microburst outflow around real convective storms.
 - **Smooth:** downloads run in the background and every update fades in over 1–2 minutes. No freezes, no sudden jumps.
+
+## New in 5.1.9
+
+- **Steady altimeter on approach:** near an airport with no close neighbours (northern Canada, Alaska, islands) the pressure no longer runs several hPa off the airport's own and moves up and down between updates. Around each airport it is now the airport's own.
+- **Wrong altimeter settings caught where airports are few:** a station far off is checked against the global model.
+- **No pressure dip after each update:** X-Plane's own base pressure follows WXPlane's while it runs, and goes back when WXPlane is switched off.
 
 ## New in 5.1.8
 
