@@ -698,7 +698,9 @@ bool hostIsAviTab() {
     const XPLMPluginID av = XPLMFindPluginBySignature("org.solhost.folko.avitab");
     const XPLMPluginID xpt = XPLMFindPluginBySignature("com.alpineaviation.xptablet");
     const bool avOn = av != XPLM_NO_PLUGIN_ID && XPLMIsPluginEnabled(av);
-    const bool xptOn = xpt != XPLM_NO_PLUGIN_ID && XPLMIsPluginEnabled(xpt);
+    // (XPTablet, with AviTab not installed, runs under AviTab's signature for aircraft that look for it, 2026-11-26: its
+    // xptablet/ datarefs tell it apart)
+    const bool xptOn = (xpt != XPLM_NO_PLUGIN_ID && XPLMIsPluginEnabled(xpt)) || XPLMFindDataRef("xptablet/owns_avitab") != nullptr;
     const bool now = avOn && !xptOn;
     static int told = -1;
     const int state = !avOn ? 0 : xptOn ? 1 : 2;
